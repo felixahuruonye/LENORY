@@ -40,6 +40,31 @@ export default function AuthCallback() {
         }
 
         if (session) {
+          // Save device session for future auto-login
+          try {
+            const resp = await fetch("/api/auth/save-device", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({
+                deviceInfo: {
+                  userAgent: navigator.userAgent,
+                  platform: navigator.platform,
+                  language: navigator.language,
+                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                  timestamp: new Date().toISOString(),
+                }
+              }),
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              localStorage.setItem("lernory_device_token", data.deviceToken);
+              if (data.lernoryId) localStorage.setItem("lernory_user_id", data.lernoryId);
+            }
+          } catch {}
+          
           setStatus('success');
           setTimeout(() => {
             setLocation('/dashboard');

@@ -9,7 +9,7 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { storage } from "./storage";
-import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest } from "./supabaseAuth";
+import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLernoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
   chatWithAI,
   chatWithAISmartFallback,
@@ -58,6 +58,186 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
     }
+  });
+
+  // ─── Lernory Auth Routes ────────────────────────────────────────────────────
+
+  // Helper: get Supabase admin client
+  async function getSupabaseAdmin() {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    if (!supabaseUrl || !supabaseServiceKey) return null;
+    return createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+  }
+
+  // Save device session + generate Lernory ID if missing (auth required)
+  app.post('/api/auth/save-device', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const userEmail = req.userEmail;
+      const { deviceInfo } = req.body;
+
+      const admin = await getSupabaseAdmin();
+      if (!admin) return res.status(500).json({ message: 'Auth not configured' });
+
+      // Get existing user metadata
+      const { data: userData, error: userErr } = await admin.auth.admin.getUserById(userId);
+      if (userErr || !userData?.user) return res.status(404).json({ message: 'User not found' });
+
+      let lernoryId = userData.user.user_metadata?.lernory_id;
+      let firstName = userData.user.user_metadata?.full_name?.split(' ')[0] ||
+                      userData.user.user_metadata?.name?.split(' ')[0] ||
+                      userData.user.user_metadata?.firstName || '';
+
+      // Generate Lernory ID if not set
+      if (!lernoryId) {
+        lernoryId = generateLernoryId();
+        await admin.auth.admin.updateUserById(userId, {
+          user_metadata: { ...userData.user.user_metadata, lernory_id: lernoryId },
+        });
+      }
+
+      // Create signed device token (no DB needed)
+      const deviceToken = createDeviceToken({ userId, lernoryId, email: userEmail });
+
+      res.json({ deviceToken, lernoryId, firstName });
+    } catch (error) {
+      console.error('Save device error:', error);
+      res.status(500).json({ message: 'Failed to save device session' });
+    }
+  });
+
+  // Verify device token (HMAC-signed JWT, no DB lookup needed)
+  app.post('/api/auth/verify-device', async (req: Request, res: Response) => {
+    try {
+      const { deviceToken } = req.body;
+      if (!deviceToken) return res.json({ valid: false });
+
+      const payload = verifyDeviceToken(deviceToken);
+      if (!payload) return res.json({ valid: false });
+
+      // Get user details from Supabase to verify account still exists + get fresh name
+      const admin = await getSupabaseAdmin();
+      if (!admin) return res.json({ valid: false });
+
+      const { data: userData, error } = await admin.auth.admin.getUserById(payload.userId);
+      if (error || !userData?.user) return res.json({ valid: false });
+
+      const user = userData.user;
+      const lernoryId = user.user_metadata?.lernory_id || payload.lernoryId;
+      const firstName = user.user_metadata?.full_name?.split(' ')[0] ||
+                        user.user_metadata?.name?.split(' ')[0] ||
+                        user.user_metadata?.firstName || '';
+
+      res.json({
+        valid: true,
+        userId: payload.userId,
+        email: user.email,
+        lernoryId,
+        firstName,
+      });
+    } catch (error) {
+      res.json({ valid: false });
+    }
+  });
+
+  // Lernory ID lookup - returns masked email (Supabase admin search)
+  app.get('/api/auth/lernory-lookup/:lernoryId', async (req: Request, res: Response) => {
+    try {
+      const { lernoryId } = req.params;
+      const admin = await getSupabaseAdmin();
+      if (!admin) return res.status(500).json({ found: false });
+
+      // Search users by metadata lernory_id - paginate through users
+      let page = 1;
+      const perPage = 1000;
+      let found = false;
+      let maskedEmail = '';
+      let firstName = '';
+
+      while (true) {
+        const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+        if (error || !data?.users?.length) break;
+        
+        const match = data.users.find(u => u.user_metadata?.lernory_id === lernoryId.toUpperCase());
+        if (match) {
+          const email = match.email || '';
+          const [localPart, domain] = email.split('@');
+          maskedEmail = localPart && localPart.length > 2
+            ? `${localPart.substring(0, 2)}${'*'.repeat(localPart.length - 2)}@${domain}`
+            : email.replace(/./g, '*');
+          firstName = match.user_metadata?.full_name?.split(' ')[0] ||
+                      match.user_metadata?.name?.split(' ')[0] ||
+                      match.user_metadata?.firstName || '';
+          found = true;
+          break;
+        }
+        
+        if (data.users.length < perPage) break;
+        page++;
+      }
+
+      if (!found) return res.status(404).json({ found: false });
+      res.json({ found: true, maskedEmail, firstName, lernoryId: lernoryId.toUpperCase() });
+    } catch (error) {
+      res.status(500).json({ found: false, error: 'Lookup failed' });
+    }
+  });
+
+  // Lernory ID server-side login (keeps email private, uses Supabase admin search)
+  app.post('/api/auth/lernory-login', async (req: Request, res: Response) => {
+    try {
+      const { lernoryId, password } = req.body;
+      if (!lernoryId || !password) return res.status(400).json({ message: 'Lernory ID and password required' });
+
+      const admin = await getSupabaseAdmin();
+      if (!admin) return res.status(500).json({ message: 'Auth not configured' });
+
+      // Find user by lernory_id in metadata
+      let foundEmail: string | null = null;
+      let foundFirstName = '';
+      let page = 1;
+      while (true) {
+        const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error || !data?.users?.length) break;
+        const match = data.users.find(u => u.user_metadata?.lernory_id === lernoryId.toUpperCase());
+        if (match) {
+          foundEmail = match.email || null;
+          foundFirstName = match.user_metadata?.full_name?.split(' ')[0] ||
+                           match.user_metadata?.name?.split(' ')[0] || '';
+          break;
+        }
+        if (data.users.length < 1000) break;
+        page++;
+      }
+
+      if (!foundEmail) return res.status(404).json({ message: 'No account found with this Lernory ID' });
+
+      // Authenticate via Supabase with anon key
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseAnonKey) return res.status(500).json({ message: 'Auth not configured' });
+
+      const anonClient = createClient(supabaseUrl, supabaseAnonKey);
+      const { data, error } = await anonClient.auth.signInWithPassword({ email: foundEmail, password });
+      if (error) return res.status(401).json({ message: 'Incorrect password' });
+
+      res.json({
+        accessToken: data.session?.access_token,
+        refreshToken: data.session?.refresh_token,
+        firstName: foundFirstName,
+      });
+    } catch (error) {
+      console.error('Lernory login error:', error);
+      res.status(500).json({ message: 'Login failed' });
+    }
+  });
+
+  // Remove device session (clear from client - token is self-contained)
+  app.delete('/api/auth/device', supabaseAuth, async (req: any, res: Response) => {
+    res.json({ success: true });
   });
 
   // Vapi public key endpoint

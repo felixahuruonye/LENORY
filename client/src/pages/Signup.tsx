@@ -7,9 +7,24 @@ import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
 import { signInWithGoogle, signUpWithEmailPassword } from "@/lib/supabase";
-import { Loader2, Zap, UserPlus, ArrowLeft, CheckCircle, Eye, EyeOff } from "lucide-react";
+import { Loader2, Zap, UserPlus, CheckCircle, Eye, EyeOff } from "lucide-react";
 import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
+
+const DEVICE_TOKEN_KEY = "lernory_device_token";
+const LERNORY_ID_KEY = "lernory_user_id";
+
+function getDeviceInfo() {
+  return {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    screenWidth: window.screen.width,
+    screenHeight: window.screen.height,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timestamp: new Date().toISOString(),
+  };
+}
 
 export default function Signup() {
   const [, setLocation] = useLocation();
@@ -104,8 +119,26 @@ export default function Signup() {
       if (data?.session || data?.user) {
         toast({
           title: "Account Created!",
-          description: "Welcome to LERNORY! Redirecting to dashboard...",
+          description: "Welcome to LERNORY! Setting up your account...",
         });
+        // Save device session after signup
+        if (data.session?.access_token) {
+          try {
+            const resp = await fetch("/api/auth/save-device", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${data.session.access_token}`,
+              },
+              body: JSON.stringify({ deviceInfo: getDeviceInfo() }),
+            });
+            if (resp.ok) {
+              const deviceData = await resp.json();
+              localStorage.setItem(DEVICE_TOKEN_KEY, deviceData.deviceToken);
+              if (deviceData.lernoryId) localStorage.setItem(LERNORY_ID_KEY, deviceData.lernoryId);
+            }
+          } catch {}
+        }
         setLocation('/dashboard');
       }
     } catch (err) {
@@ -206,7 +239,7 @@ export default function Signup() {
 
                 <div className="space-y-2">
                   <Label htmlFor="password">Password</Label>
-                  <div className="relative">
+                  <div className="relative flex items-center">
                     <Input
                       id="password"
                       type={showPassword ? "text" : "password"}
@@ -214,22 +247,17 @@ export default function Signup() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
+                      className="pr-10"
                       data-testid="input-password"
                     />
-                    <Button
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-0 top-0 h-full px-3"
+                      className="absolute right-3 text-muted-foreground hover:text-foreground"
                       onClick={() => setShowPassword(!showPassword)}
                       data-testid="button-toggle-password"
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </Button>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
 

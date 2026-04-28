@@ -41,15 +41,23 @@ A three-tier fallback system is implemented for AI:
 -   **CBT Mode**: Simulation of Computer-Based Testing for JAMB, WAEC, NECO with subject selection, flexible durations, real-time timer, and progress tracking.
 -   **Pricing & Subscription System**: Three pricing tiers (Free, Pro, Premium) integrated with Paystack, with database schemas for `pricingTiers` and `subscriptions`.
 
-## Recent Changes (January 2026)
+## Recent Changes (April 2026)
 - **Authentication Sync**: Added automatic user sync from Supabase Auth to local PostgreSQL database in both `supabaseAuth` and `optionalSupabaseAuth` middleware to prevent foreign key constraint violations
 - **Database Schema**: Added `subscription_tier`, `subscription_expires_at`, and `paystack_customer_id` columns to users table
 - **Gemini AI**: Fixed chatWithGemini function calls to use proper message format with system role
 - **Code Fixes**: Fixed Set iteration using Array.from(), corrected getCoursesByCreator to getCoursesByTeacher
 - **Design Compliance**: Removed hover-elevate/active-elevate classes from Button components per design guidelines
+- **Enhanced Authentication System**:
+  - **Lernory ID**: Unique 8-char ID (LRN-XXXXXX format) assigned to every user, stored in Supabase user_metadata via admin API. Enables login by ID without remembering email.
+  - **Device Trust**: HMAC-signed JWT device tokens saved in `lernory_device_token` localStorage. Verified on `/api/auth/verify-device` for trusted device auto-login banner.
+  - **Active Session Detection**: Login page checks Supabase session on load. If user already authenticated → shows "Continue with Lernory" banner (skips re-entry of credentials).
+  - **New Auth Routes**: `POST /api/auth/save-device`, `POST /api/auth/verify-device`, `GET /api/auth/lernory-lookup/:lernoryId`, `POST /api/auth/lernory-login`, `DELETE /api/auth/device`
+  - **Login Page Views**: 4 states — checking (spinner), trusted-device (auto-login), active-session (Continue with Lernory), standard email/Lernory ID tabs
+  - **No DB Dependency**: All device trust and Lernory ID features use Supabase admin API + HMAC JWT. No Neon DB calls for auth features.
 
 ### Known Configuration Issues
 - **Google OAuth**: Must be enabled in Supabase dashboard for OAuth login to work. Currently only email/password authentication is available until Google provider is configured in Supabase.
+- **Neon DB**: DDL migrations fail with "password authentication failed for neondb_owner" — schema is already up to date and existing data persists. New auth features bypass this by using Supabase admin API.
 
 ## External Dependencies
 ### Core Infrastructure

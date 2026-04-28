@@ -47,8 +47,19 @@ export const users = pgTable("users", {
   subscriptionTier: varchar("subscription_tier", { length: 50 }).default('free'),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
   paystackCustomerId: varchar("paystack_customer_id"),
+  lernoryId: varchar("lernory_id").unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Device sessions for trusted device auto-login
+export const deviceSessions = pgTable("device_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  deviceToken: varchar("device_token").notNull().unique(),
+  deviceInfo: jsonb("device_info"),
+  lastUsedAt: timestamp("last_used_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const upsertUserSchema = createInsertSchema(users).pick({
@@ -61,6 +72,10 @@ export const upsertUserSchema = createInsertSchema(users).pick({
 
 export type UpsertUser = z.infer<typeof upsertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+export const insertDeviceSessionSchema = createInsertSchema(deviceSessions).omit({ id: true, createdAt: true, lastUsedAt: true });
+export type InsertDeviceSession = z.infer<typeof insertDeviceSessionSchema>;
+export type DeviceSession = typeof deviceSessions.$inferSelect;
 
 // Schools table (multi-tenant)
 export const schools = pgTable("schools", {

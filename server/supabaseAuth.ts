@@ -3,6 +3,39 @@ import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
 import { users } from '@shared/schema';
 import { eq } from 'drizzle-orm';
+import crypto from 'crypto';
+
+export function generateLernoryId(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let id = 'LRN-';
+  for (let i = 0; i < 8; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
+
+// Simple HMAC-signed device token (no DB required)
+const DEVICE_SECRET = process.env.SESSION_SECRET || 'lernory-device-secret';
+
+export function createDeviceToken(payload: { userId: string; lernoryId: string; email: string }): string {
+  const data = JSON.stringify({ ...payload, iat: Date.now() });
+  const encoded = Buffer.from(data).toString('base64url');
+  const sig = crypto.createHmac('sha256', DEVICE_SECRET).update(encoded).digest('hex');
+  return `${encoded}.${sig}`;
+}
+
+export function verifyDeviceToken(token: string): { userId: string; lernoryId: string; email: string } | null {
+  try {
+    const [encoded, sig] = token.split('.');
+    if (!encoded || !sig) return null;
+    const expectedSig = crypto.createHmac('sha256', DEVICE_SECRET).update(encoded).digest('hex');
+    if (sig !== expectedSig) return null;
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString());
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 // Prioritize VITE_SUPABASE_URL since it's confirmed working for frontend
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
@@ -37,16 +70,37 @@ async function ensureUserExists(supabaseUser: any): Promise<void> {
     if (existingUser.length === 0) {
       // Create user in local database with Supabase user data
       const userMetadata = supabaseUser.user_metadata || {};
-      await db.insert(users).values({
-        id: supabaseUser.id,
-        email: supabaseUser.email,
-        firstName: userMetadata.full_name?.split(' ')[0] || userMetadata.name?.split(' ')[0] || null,
-        lastName: userMetadata.full_name?.split(' ').slice(1).join(' ') || null,
-        profileImageUrl: userMetadata.avatar_url || userMetadata.picture || null,
-        role: 'student',
-        subscriptionTier: 'free',
-      });
-      console.log('Created local user record for:', supabaseUser.email);
+      let lernoryId = generateLernoryId();
+      // Ensure unique lernory_id (retry on collision)
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          await db.insert(users).values({
+            id: supabaseUser.id,
+            email: supabaseUser.email,
+            firstName: userMetadata.full_name?.split(' ')[0] || userMetadata.name?.split(' ')[0] || null,
+            lastName: userMetadata.full_name?.split(' ').slice(1).join(' ') || null,
+            profileImageUrl: userMetadata.avatar_url || userMetadata.picture || null,
+            role: 'student',
+            subscriptionTier: 'free',
+            lernoryId,
+          });
+          console.log('Created local user record for:', supabaseUser.email, 'with Lernory ID:', lernoryId);
+          break;
+        } catch (insertErr: any) {
+          if (insertErr.message?.includes('unique') && insertErr.message?.includes('lernory_id')) {
+            lernoryId = generateLernoryId();
+          } else {
+            throw insertErr;
+          }
+        }
+      }
+    } else if (!existingUser[0].lernoryId) {
+      // Assign Lernory ID to existing users who don't have one
+      const lernoryId = generateLernoryId();
+      try {
+        await db.update(users).set({ lernoryId }).where(eq(users.id, supabaseUser.id));
+        console.log('Assigned Lernory ID to existing user:', supabaseUser.email);
+      } catch {}
     }
   } catch (error) {
     // Log but don't fail - user might already exist from a race condition
