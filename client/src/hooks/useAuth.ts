@@ -1,25 +1,44 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQueryClient } from "@tanstack/react-query";
-import { supabase, signInWithGoogle as supabaseGoogleSignIn, signInWithEmail as supabaseEmailSignIn, signOut as supabaseSignOut } from '@/lib/supabase';
+import { supabase, signInWithGoogle as supabaseGoogleSignIn, signOut as supabaseSignOut } from '@/lib/supabase';
 import type { User } from "@shared/schema";
 
-// Create a basic user from Supabase auth data
-function createUserFromAuth(authUser: any): User {
+// Build a User object directly from Supabase Auth session data (no DB call needed)
+function userFromAuth(authUser: any): User {
+  const meta = authUser.user_metadata || {};
+  const fullName = meta.full_name || meta.name || '';
+  const nameParts = fullName.split(' ');
   const now = new Date();
   return {
     id: authUser.id,
     email: authUser.email || '',
-    firstName: authUser.user_metadata?.full_name?.split(' ')[0] || authUser.user_metadata?.name?.split(' ')[0] || '',
-    lastName: authUser.user_metadata?.full_name?.split(' ').slice(1).join(' ') || authUser.user_metadata?.name?.split(' ').slice(1).join(' ') || '',
-    profileImageUrl: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || '',
+    firstName: nameParts[0] || meta.firstName || '',
+    lastName: nameParts.slice(1).join(' ') || meta.lastName || '',
+    profileImageUrl: meta.avatar_url || meta.picture || '',
     role: 'student',
     schoolId: null,
-    subscriptionTier: 'free',
+    subscriptionTier: meta.subscription_tier || 'free',
     subscriptionExpiresAt: null,
     paystackCustomerId: null,
+    lernoryId: meta.lernory_id || null,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+// Attempt to enrich profile from local API (non-blocking, best-effort)
+async function tryFetchServerProfile(userId: string, accessToken: string): Promise<Partial<User> | null> {
+  try {
+    const resp = await fetch('/api/auth/user', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data?.id) return data as Partial<User>;
+    }
+  } catch {}
+  return null;
 }
 
 export function useAuth() {
@@ -27,71 +46,27 @@ export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchUserProfile = useCallback(async (authUser: any): Promise<User> => {
-    // Always create a basic user from auth data first
-    const basicUser = createUserFromAuth(authUser);
-    
-    try {
-      const { data: userProfile, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      // If user exists in DB, return their full profile
-      if (!error && userProfile) {
-        return mapDbUserToUser(userProfile);
-      }
-
-      // User not found - try to create profile in background (non-blocking insert)
-      if (error?.code === 'PGRST116') {
-        // Fire and forget - don't wait for insert result
-        (async () => {
-          try {
-            await supabase.from('users').insert({
-              id: authUser.id,
-              email: authUser.email || '',
-              first_name: basicUser.firstName,
-              last_name: basicUser.lastName,
-              profile_image_url: basicUser.profileImageUrl,
-              role: 'student',
-              subscription_tier: 'free',
-            });
-          } catch {}
-        })();
-      }
-
-      return basicUser;
-    } catch {
-      return basicUser;
-    }
-  }, []);
-
   useEffect(() => {
     let isMounted = true;
-    
+
     const initAuth = async () => {
       try {
-        // Add timeout to prevent hanging forever
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Auth timeout')), 5000)
-        );
-        
-        const sessionPromise = supabase.auth.getSession();
-        const result = await Promise.race([sessionPromise, timeoutPromise]) as any;
-        
+        const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
-        
-        if (result?.data?.session?.user) {
-          const userProfile = await fetchUserProfile(result.data.session.user);
-          if (isMounted) setUser(userProfile);
+        if (session?.user) {
+          // Set user immediately from auth data
+          setUser(userFromAuth(session.user));
+          setIsLoading(false);
+          // Enrich in background from server profile
+          tryFetchServerProfile(session.user.id, session.access_token).then(serverProfile => {
+            if (isMounted && serverProfile) {
+              setUser(prev => prev ? { ...prev, ...serverProfile } : prev);
+            }
+          });
+          return;
         }
-      } catch (error: any) {
-        // Only log actual errors, not expected timeout during testing
-        if (error?.message !== 'Auth timeout') {
-          console.warn('Auth initialization error:', error?.message || 'Unknown error');
-        }
-        // Silent fail - just mark as not loading
+      } catch (err: any) {
+        console.warn('Auth init error:', err?.message);
       } finally {
         if (isMounted) setIsLoading(false);
       }
@@ -100,25 +75,22 @@ export function useAuth() {
     initAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        // Set basic user immediately for instant redirect
-        const basicUser = createUserFromAuth(session.user);
-        setUser(basicUser);
+      if (!isMounted) return;
+
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+        // Set user instantly from auth data
+        setUser(userFromAuth(session.user));
         setIsLoading(false);
-        
-        // Fetch full profile in background (non-blocking)
-        fetchUserProfile(session.user).then(fullProfile => {
-          if (isMounted) setUser(fullProfile);
-        }).catch(() => {});
+        // Enrich in background
+        tryFetchServerProfile(session.user.id, session.access_token).then(serverProfile => {
+          if (isMounted && serverProfile) {
+            setUser(prev => prev ? { ...prev, ...serverProfile } : prev);
+          }
+        });
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsLoading(false);
         queryClient.clear();
-      } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-        // Background profile refresh
-        fetchUserProfile(session.user).then(fullProfile => {
-          if (isMounted) setUser(fullProfile);
-        }).catch(() => {});
       }
     });
 
@@ -126,15 +98,10 @@ export function useAuth() {
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, [fetchUserProfile, queryClient]);
+  }, [queryClient]);
 
   const signInWithGoogle = useCallback(async () => {
     const { error } = await supabaseGoogleSignIn();
-    return { error: error ? new Error(error.message) : null };
-  }, []);
-
-  const signInWithOTP = useCallback(async (email: string) => {
-    const { error } = await supabaseEmailSignIn(email);
     return { error: error ? new Error(error.message) : null };
   }, []);
 
@@ -142,6 +109,8 @@ export function useAuth() {
     const { error } = await supabaseSignOut();
     if (!error) {
       setUser(null);
+      localStorage.removeItem('lernory_device_token');
+      localStorage.removeItem('lernory_user_id');
       queryClient.clear();
     }
     return { error: error ? new Error(error.message) : null };
@@ -152,24 +121,6 @@ export function useAuth() {
     isLoading,
     isAuthenticated: !!user,
     signInWithGoogle,
-    signInWithOTP,
     signOut,
-  };
-}
-
-function mapDbUserToUser(data: any): User {
-  return {
-    id: data.id,
-    email: data.email,
-    firstName: data.first_name,
-    lastName: data.last_name,
-    profileImageUrl: data.profile_image_url,
-    role: data.role || 'student',
-    schoolId: data.school_id,
-    subscriptionTier: data.subscription_tier || 'free',
-    subscriptionExpiresAt: data.subscription_expires_at ? new Date(data.subscription_expires_at) : null,
-    paystackCustomerId: data.paystack_customer_id,
-    createdAt: new Date(data.created_at),
-    updatedAt: new Date(data.updated_at),
   };
 }

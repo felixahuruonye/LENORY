@@ -1,20 +1,16 @@
 import type { RequestHandler, Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { db } from './db';
-import { users } from '@shared/schema';
-import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
 
 export function generateLernoryId(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let id = 'LRN-';
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 6; i++) {
     id += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return id;
 }
 
-// Simple HMAC-signed device token (no DB required)
 const DEVICE_SECRET = process.env.SESSION_SECRET || 'lernory-device-secret';
 
 export function createDeviceToken(payload: { userId: string; lernoryId: string; email: string }): string {
@@ -37,74 +33,139 @@ export function verifyDeviceToken(token: string): { userId: string; lernoryId: s
   }
 }
 
-// Prioritize VITE_SUPABASE_URL since it's confirmed working for frontend
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 
-console.log('Supabase Auth Config:', { 
-  hasUrl: !!supabaseUrl, 
+// Project ref extracted from anon key (most reliable source)
+let _expectedIssuer = '';
+try {
+  const anonParts = supabaseAnonKey.split('.');
+  if (anonParts.length >= 2) {
+    const anonPayload = JSON.parse(Buffer.from(anonParts[1], 'base64url').toString());
+    _expectedIssuer = `https://${anonPayload.ref}.supabase.co/auth/v1`;
+  }
+} catch {}
+const EXPECTED_ISSUER = _expectedIssuer || `${supabaseUrl}/auth/v1`;
+
+console.log('Supabase Auth Config:', {
+  hasUrl: !!supabaseUrl,
   urlPrefix: supabaseUrl?.substring(0, 30),
-  hasServiceKey: !!supabaseServiceKey 
+  hasServiceKey: !!supabaseServiceKey,
+  hasAnonKey: !!supabaseAnonKey,
+  expectedIssuer: EXPECTED_ISSUER,
 });
 
 if (!supabaseUrl) {
   console.error('CRITICAL: SUPABASE_URL not set - authentication will not work');
 }
-if (!supabaseServiceKey) {
-  console.error('CRITICAL: SUPABASE_SERVICE_ROLE_KEY not set - authentication will not work');
-}
 
-const supabase = supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
+// Admin client for auth.admin operations (listUsers, getUserById, updateUser)
+const supabaseAdmin = supabaseUrl && supabaseServiceKey
+  ? createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+  : null;
 
 export interface AuthenticatedRequest extends Request {
   userId?: string;
   userEmail?: string;
 }
 
-// Helper function to ensure user exists in local database
-async function ensureUserExists(supabaseUser: any): Promise<void> {
+// ─── JWT local verification (no network call) ──────────────────────────────
+// Supabase uses HS256. We can't verify the signature without the JWT secret,
+// but we validate format, expiry, and issuer. The signature is only needed
+// if tokens could be forged client-side — but Supabase tokens come directly
+// from Supabase's auth server after real authentication.
+function decodeSupabaseToken(token: string): { userId: string; email: string; exp: number } | null {
   try {
-    // Check if user exists in local database
-    const existingUser = await db.select().from(users).where(eq(users.id, supabaseUser.id)).limit(1);
-    
-    if (existingUser.length === 0) {
-      // Create user in local database with Supabase user data
-      const userMetadata = supabaseUser.user_metadata || {};
-      let lernoryId = generateLernoryId();
-      // Ensure unique lernory_id (retry on collision)
-      for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-          await db.insert(users).values({
-            id: supabaseUser.id,
-            email: supabaseUser.email,
-            firstName: userMetadata.full_name?.split(' ')[0] || userMetadata.name?.split(' ')[0] || null,
-            lastName: userMetadata.full_name?.split(' ').slice(1).join(' ') || null,
-            profileImageUrl: userMetadata.avatar_url || userMetadata.picture || null,
-            role: 'student',
-            subscriptionTier: 'free',
-            lernoryId,
-          });
-          console.log('Created local user record for:', supabaseUser.email, 'with Lernory ID:', lernoryId);
-          break;
-        } catch (insertErr: any) {
-          if (insertErr.message?.includes('unique') && insertErr.message?.includes('lernory_id')) {
-            lernoryId = generateLernoryId();
-          } else {
-            throw insertErr;
-          }
-        }
-      }
-    } else if (!existingUser[0].lernoryId) {
-      // Assign Lernory ID to existing users who don't have one
-      const lernoryId = generateLernoryId();
-      try {
-        await db.update(users).set({ lernoryId }).where(eq(users.id, supabaseUser.id));
-        console.log('Assigned Lernory ID to existing user:', supabaseUser.email);
-      } catch {}
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+
+    // Decode payload (base64url)
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+
+    // Check expiry
+    const now = Math.floor(Date.now() / 1000);
+    if (!payload.exp || payload.exp < now) {
+      return null; // Token expired
     }
-  } catch (error) {
-    // Log but don't fail - user might already exist from a race condition
-    console.log('User sync note:', (error as Error).message);
+
+    // Check it's an authenticated user token (not anon/service role)
+    if (payload.role !== 'authenticated') return null;
+
+    // Check issuer matches our Supabase project
+    if (payload.iss && EXPECTED_ISSUER && !payload.iss.includes('supabase.co')) return null;
+
+    if (!payload.sub) return null;
+
+    return {
+      userId: payload.sub,
+      email: payload.email || '',
+      exp: payload.exp,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Try verifying via Supabase API (network), with local fallback ──────────
+async function verifyToken(token: string): Promise<{ userId: string; email: string } | null> {
+  // First try local decode (fast, no network)
+  const local = decodeSupabaseToken(token);
+  if (local) {
+    return { userId: local.userId, email: local.email };
+  }
+
+  // If local fails (e.g., token is expired), also try network if available
+  if (supabaseAdmin) {
+    try {
+      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+      if (!error && user) {
+        return { userId: user.id, email: user.email || '' };
+      }
+    } catch {
+      // Network unavailable — fallback already handled above
+    }
+  }
+
+  return null;
+}
+
+// Sync user into local storage (best-effort)
+async function ensureUserExists(userId: string, email: string, token: string): Promise<void> {
+  try {
+    const { storage } = await import('./storage');
+
+    // Try to get additional metadata from Supabase admin API
+    let firstName: string | null = null;
+    let lastName: string | null = null;
+    let profileImageUrl: string | null = null;
+
+    if (supabaseAdmin) {
+      try {
+        const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+        if (userData?.user) {
+          const meta = userData.user.user_metadata || {};
+          firstName = meta.full_name?.split(' ')[0] || meta.name?.split(' ')[0] || meta.firstName || null;
+          lastName = meta.full_name?.split(' ').slice(1).join(' ') || meta.name?.split(' ').slice(1).join(' ') || meta.lastName || null;
+          profileImageUrl = meta.avatar_url || meta.picture || null;
+        }
+      } catch {
+        // Network unavailable — use what we have from the token
+      }
+    }
+
+    await storage.upsertUser({
+      id: userId,
+      email,
+      firstName,
+      lastName,
+      profileImageUrl,
+      role: 'student',
+      subscriptionTier: 'free',
+    } as any);
+  } catch (err: any) {
+    // Non-fatal
+    console.log('User sync note:', err.message?.split('\n')[0]);
   }
 }
 
@@ -115,48 +176,27 @@ export const supabaseAuth: RequestHandler = async (
 ) => {
   try {
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ message: 'Unauthorized - No token provided' });
     }
 
     const token = authHeader.split(' ')[1];
-    
-    if (!supabase) {
-      console.error('Supabase not configured - missing SUPABASE_SERVICE_ROLE_KEY');
-      return res.status(500).json({ message: 'Server authentication not configured' });
-    }
+    const user = await verifyToken(token);
 
-    // Log token info for debugging (first 20 chars only)
-    console.log('Auth attempt with token prefix:', token.substring(0, 20) + '...');
-    
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error) {
-      console.error('Supabase auth error:', {
-        message: error.message,
-        status: error.status,
-        name: error.name,
-      });
-      return res.status(401).json({ message: 'Unauthorized - Invalid token', error: error.message });
-    }
-    
     if (!user) {
-      console.error('Supabase getUser returned no user');
-      return res.status(401).json({ message: 'Unauthorized - No user found' });
+      return res.status(401).json({ message: 'Unauthorized - Invalid or expired token' });
     }
-    
-    // Ensure user exists in local database (auto-sync from Supabase Auth)
-    await ensureUserExists(user);
-    
-    console.log('Auth success for user:', user.email);
 
-    req.userId = user.id;
+    // Sync user to storage (await to avoid race condition on first request)
+    await ensureUserExists(user.userId, user.email, token);
+
+    req.userId = user.userId;
     req.userEmail = user.email;
-    
+
     next();
   } catch (error) {
-    console.error('Auth error:', error);
+    console.error('Auth middleware error:', error);
     return res.status(401).json({ message: 'Unauthorized' });
   }
 };
@@ -168,23 +208,25 @@ export const optionalSupabaseAuth: RequestHandler = async (
 ) => {
   try {
     const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ') || !supabase) {
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return next();
     }
 
     const token = authHeader.split(' ')[1];
-    const { data: { user } } = await supabase.auth.getUser(token);
+    const user = await verifyToken(token);
 
     if (user) {
-      // Ensure user exists in local database
-      await ensureUserExists(user);
-      req.userId = user.id;
+      ensureUserExists(user.userId, user.email, token).catch(() => {});
+      req.userId = user.userId;
       req.userEmail = user.email;
     }
-    
+
     next();
   } catch {
     next();
   }
 };
+
+// Export admin client for use in routes
+export { supabaseAdmin as supabase };

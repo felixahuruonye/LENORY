@@ -53,6 +53,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.userId;
       const user = await storage.getUser(userId);
+      // If user not in storage yet, return a minimal user object built from auth data
+      if (!user) {
+        return res.json({
+          id: userId,
+          email: req.userEmail || '',
+          firstName: null,
+          lastName: null,
+          profileImageUrl: null,
+          role: 'student',
+          subscriptionTier: 'free',
+        });
+      }
       res.json(user);
     } catch (error) {
       console.error("Error fetching user:", error);

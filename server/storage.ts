@@ -110,7 +110,7 @@ import {
   type GeneratedLesson,
   type InsertGeneratedLesson,
 } from "@shared/schema";
-import { db } from "./db";
+import { db, supabaseDb } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 
 export interface IStorage {
@@ -1469,7 +1469,98 @@ class MemoryStorage implements IStorage {
   }
 }
 
-// Use database storage for persistent data
-export const storage = new DatabaseStorage();
+// ─── Supabase-backed Storage ──────────────────────────────────────────────────
+// Uses Supabase REST API for user persistence + in-memory for everything else
 
-console.log('✅ Using PostgreSQL database storage - data persists permanently');
+class SupabaseStorage extends MemoryStorage {
+  // ── Users (persistent via Supabase REST) ────────────────────────────────────
+  async getUser(id: string): Promise<User | undefined> {
+    // Try Supabase first
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('users')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (!error && data) return mapSupabaseUser(data);
+      } catch {}
+    }
+    // Fall back to memory
+    return super.getUser(id);
+  }
+
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    // Write to memory immediately
+    const memUser = await super.upsertUser(userData);
+
+    // Best-effort sync to Supabase
+    if (supabaseDb) {
+      try {
+        const row = {
+          id: userData.id,
+          email: userData.email || '',
+          first_name: userData.firstName || null,
+          last_name: userData.lastName || null,
+          profile_image_url: userData.profileImageUrl || null,
+          role: 'student',
+          subscription_tier: 'free',
+          updated_at: new Date().toISOString(),
+        };
+        await supabaseDb.from('users').upsert(row, { onConflict: 'id' });
+      } catch {}
+    }
+    return memUser;
+  }
+
+  async updateUser(id: string, updates: any): Promise<User | undefined> {
+    const memUser = await super.updateUser(id, updates);
+
+    if (supabaseDb) {
+      try {
+        const row: any = { updated_at: new Date().toISOString() };
+        if (updates.firstName !== undefined) row.first_name = updates.firstName;
+        if (updates.lastName !== undefined) row.last_name = updates.lastName;
+        if (updates.profileImageUrl !== undefined) row.profile_image_url = updates.profileImageUrl;
+        if (updates.subscriptionTier !== undefined) row.subscription_tier = updates.subscriptionTier;
+        await supabaseDb.from('users').update(row).eq('id', id);
+      } catch {}
+    }
+    return memUser;
+  }
+}
+
+function mapSupabaseUser(data: any): User {
+  return {
+    id: data.id,
+    email: data.email,
+    firstName: data.first_name || null,
+    lastName: data.last_name || null,
+    profileImageUrl: data.profile_image_url || null,
+    role: data.role || 'student',
+    schoolId: data.school_id || null,
+    subscriptionTier: data.subscription_tier || 'free',
+    subscriptionExpiresAt: data.subscription_expires_at ? new Date(data.subscription_expires_at) : null,
+    paystackCustomerId: data.paystack_customer_id || null,
+    lernoryId: data.lernory_id || null,
+    createdAt: data.created_at ? new Date(data.created_at) : new Date(),
+    updatedAt: data.updated_at ? new Date(data.updated_at) : new Date(),
+  } as User;
+}
+
+// Initialize Supabase users table if it doesn't exist (called from server startup)
+export async function initSupabaseSchema() {
+  if (!supabaseDb) return;
+  try {
+    const { error } = await supabaseDb.from('users').select('id').limit(1);
+    if (!error) {
+      console.log('✅ Supabase users table is ready');
+    } else {
+      console.log('ℹ️ Supabase users table note:', error.message?.substring(0, 80));
+      console.log('  → To enable full persistence: run the SQL from /api/admin/init-db in Supabase dashboard');
+    }
+  } catch {}
+}
+
+export const storage = new SupabaseStorage();
+console.log('✅ Storage initialized (Supabase + in-memory hybrid)');

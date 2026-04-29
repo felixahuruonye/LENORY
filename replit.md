@@ -21,8 +21,13 @@ The backend is an Express.js application written in TypeScript, providing RESTfu
 7.  **curriculumBrain.ts**: Complete curriculum for Nigerian exams (JAMB, WAEC, NECO), covering topics, key points, common mistakes, and study path recommendations.
 8.  **advancedTutors.ts**: Six subject-specific tutor prompts (Mathematics, Physics, Chemistry, Biology, English, Government) with tailored strategies, including ASCII diagram generation for visual learning.
 
-### Database & ORM
-PostgreSQL (Neon Serverless) with Drizzle ORM. The schema supports users, chat sessions, learning history, study plans, memory entries, exam results, generated content, projects, pricing tiers, and subscriptions.
+### Database & Storage
+**IMPORTANT**: Neon Serverless PostgreSQL is currently broken (password authentication failure for all queries). The system uses a hybrid storage approach:
+- **Primary Storage**: `SupabaseStorage` class — wraps `MemoryStorage` with best-effort Supabase REST API persistence for user data
+- **Fallback**: In-memory storage (`MemoryStorage`) for all operations when Supabase DB is unreachable
+- **Note**: Supabase REST API is also unreachable from server-side Node.js (DNS failure). Data persists only within the server process session (not across restarts). To fix permanently, add `SUPABASE_JWT_SECRET` env var and set up the `users` table in Supabase.
+
+Drizzle ORM schema (`shared/schema.ts`) defines the data model for TypeScript type safety but is NOT actively used for DB operations (Neon is broken). The stub `db` object in `server/db.ts` is a TypeScript compatibility shim.
 
 ### AI & External Services
 A three-tier fallback system is implemented for AI:
@@ -42,22 +47,24 @@ A three-tier fallback system is implemented for AI:
 -   **Pricing & Subscription System**: Three pricing tiers (Free, Pro, Premium) integrated with Paystack, with database schemas for `pricingTiers` and `subscriptions`.
 
 ## Recent Changes (April 2026)
-- **Authentication Sync**: Added automatic user sync from Supabase Auth to local PostgreSQL database in both `supabaseAuth` and `optionalSupabaseAuth` middleware to prevent foreign key constraint violations
-- **Database Schema**: Added `subscription_tier`, `subscription_expires_at`, and `paystack_customer_id` columns to users table
-- **Gemini AI**: Fixed chatWithGemini function calls to use proper message format with system role
-- **Code Fixes**: Fixed Set iteration using Array.from(), corrected getCoursesByCreator to getCoursesByTeacher
-- **Design Compliance**: Removed hover-elevate/active-elevate classes from Button components per design guidelines
+- **Storage Architecture Overhaul**: Replaced broken Neon DB with `SupabaseStorage` (extends `MemoryStorage`). Server now uses in-memory + Supabase REST API hybrid. Neon is completely dead.
+- **Local JWT Verification**: `supabaseAuth` middleware now decodes Supabase JWTs locally (no network call) instead of calling `supabase.auth.getUser(token)`. Checks expiry, role (`authenticated`), and issuer. Falls back to network if local decode fails.
+- **User Sync via Storage**: `ensureUserExists` now calls `storage.upsertUser()` instead of Drizzle ORM. Awaited in auth middleware to prevent race conditions.
+- **Auth User Route Fix**: `/api/auth/user` returns a minimal user object from JWT claims when user isn't in storage yet (prevents empty 200 response).
+- **Supabase Project Mismatch Detected**: `SUPABASE_SERVICE_ROLE_KEY` is for project `almrajoumwliddtmppsm` but URL points to `nfudflrajpmluhwwhhrc`. Lernory admin features (user lookup, etc.) may fail.
+- **Login/Signup Pages**: Properly handle email confirmation, Lernory ID login, device trust, active session detection.
 - **Enhanced Authentication System**:
   - **Lernory ID**: Unique 8-char ID (LRN-XXXXXX format) assigned to every user, stored in Supabase user_metadata via admin API. Enables login by ID without remembering email.
   - **Device Trust**: HMAC-signed JWT device tokens saved in `lernory_device_token` localStorage. Verified on `/api/auth/verify-device` for trusted device auto-login banner.
   - **Active Session Detection**: Login page checks Supabase session on load. If user already authenticated → shows "Continue with Lernory" banner (skips re-entry of credentials).
-  - **New Auth Routes**: `POST /api/auth/save-device`, `POST /api/auth/verify-device`, `GET /api/auth/lernory-lookup/:lernoryId`, `POST /api/auth/lernory-login`, `DELETE /api/auth/device`
-  - **Login Page Views**: 4 states — checking (spinner), trusted-device (auto-login), active-session (Continue with Lernory), standard email/Lernory ID tabs
-  - **No DB Dependency**: All device trust and Lernory ID features use Supabase admin API + HMAC JWT. No Neon DB calls for auth features.
+  - **Login Page Views**: 5 states — checking, trusted-device, active-session, confirm-email, email/Lernory ID form
 
 ### Known Configuration Issues
-- **Google OAuth**: Must be enabled in Supabase dashboard for OAuth login to work. Currently only email/password authentication is available until Google provider is configured in Supabase.
-- **Neon DB**: DDL migrations fail with "password authentication failed for neondb_owner" — schema is already up to date and existing data persists. New auth features bypass this by using Supabase admin API.
+- **Google OAuth**: Must be enabled in Supabase dashboard for OAuth login to work. Currently only email/password authentication is available.
+- **Neon DB**: Completely broken — "password authentication failed for neondb_owner" on ALL queries including SELECT. Cannot be fixed without Neon dashboard access.
+- **Supabase REST Unreachable from Server**: Node.js server can't resolve `nfudflrajpmluhwwhhrc.supabase.co` (DNS failure). All in-memory data is lost on server restart.
+- **Supabase Key Mismatch**: Service role key is for a different project (`almrajoumwliddtmppsm`) than the URL project (`nfudflrajpmluhwwhhrc`). Admin features (listUsers, getUserById) will fail.
+- **Fix for persistence**: To enable full persistence, either: (a) provide the correct Supabase service role key for project `nfudflrajpmluhwwhhrc`, or (b) provide `SUPABASE_JWT_SECRET` env var for proper JWT signature verification.
 
 ## External Dependencies
 ### Core Infrastructure

@@ -6,8 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
-import { signInWithGoogle, signUpWithEmailPassword } from "@/lib/supabase";
-import { Loader2, Zap, UserPlus, CheckCircle, Eye, EyeOff } from "lucide-react";
+import { signInWithGoogle, signUpWithEmailPassword, supabase } from "@/lib/supabase";
+import { Loader2, Zap, UserPlus, CheckCircle, Eye, EyeOff, Mail } from "lucide-react";
 import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
 
@@ -19,22 +19,42 @@ function getDeviceInfo() {
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     language: navigator.language,
-    screenWidth: window.screen.width,
-    screenHeight: window.screen.height,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     timestamp: new Date().toISOString(),
   };
 }
 
+async function saveDeviceInBackground(accessToken: string) {
+  try {
+    const resp = await fetch("/api/auth/save-device", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ deviceInfo: getDeviceInfo() }),
+    });
+    if (resp.ok) {
+      const deviceData = await resp.json();
+      localStorage.setItem(DEVICE_TOKEN_KEY, deviceData.deviceToken);
+      if (deviceData.lernoryId) localStorage.setItem(LERNORY_ID_KEY, deviceData.lernoryId);
+    }
+  } catch {}
+}
+
+type SignupView = "form" | "check-email";
+
 export default function Signup() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const [view, setView] = useState<SignupView>("form");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [signupEmail, setSignupEmail] = useState("");
 
   const features = [
     "AI-powered tutoring for all subjects",
@@ -48,18 +68,11 @@ export default function Signup() {
     try {
       const { error } = await signInWithGoogle();
       if (error) {
-        toast({
-          title: "Signup Failed",
-          description: error.message,
-          variant: "destructive",
-        });
+        toast({ title: "Signup Failed", description: error.message, variant: "destructive" });
       }
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Something went wrong. Please try again.",
-        variant: "destructive",
-      });
+      // Google OAuth redirects the browser — no further handling needed here
+    } catch {
+      toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
       setIsGoogleLoading(false);
     }
@@ -67,106 +80,131 @@ export default function Signup() {
 
   const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!email || !password || !confirmPassword) {
-      toast({
-        title: "Missing Fields",
-        description: "Please fill in all fields.",
-        variant: "destructive",
-      });
+      toast({ title: "Missing Fields", description: "Please fill in all fields.", variant: "destructive" });
       return;
     }
-
     if (password.length < 6) {
-      toast({
-        title: "Password Too Short",
-        description: "Password must be at least 6 characters.",
-        variant: "destructive",
-      });
+      toast({ title: "Password Too Short", description: "Password must be at least 6 characters.", variant: "destructive" });
       return;
     }
-
     if (password !== confirmPassword) {
-      toast({
-        title: "Passwords Don't Match",
-        description: "Please make sure your passwords match.",
-        variant: "destructive",
-      });
+      toast({ title: "Passwords Don't Match", description: "Please make sure your passwords match.", variant: "destructive" });
       return;
     }
 
     setIsLoading(true);
     try {
       const { data, error } = await signUpWithEmailPassword(email, password);
-      
+
       if (error) {
-        if (error.message.toLowerCase().includes('already registered')) {
+        if (error.message.toLowerCase().includes('already registered') || error.message.toLowerCase().includes('already been registered')) {
           toast({
-            title: "Account Exists",
+            title: "Account Already Exists",
             description: "This email is already registered. Please log in instead.",
             variant: "destructive",
           });
+          setTimeout(() => setLocation('/login'), 1500);
         } else {
-          toast({
-            title: "Signup Failed",
-            description: error.message,
-            variant: "destructive",
-          });
+          toast({ title: "Signup Failed", description: error.message, variant: "destructive" });
         }
         return;
       }
 
-      if (data?.session || data?.user) {
-        toast({
-          title: "Account Created!",
-          description: "Welcome to LERNORY! Setting up your account...",
-        });
-        // Save device session after signup
-        if (data.session?.access_token) {
-          try {
-            const resp = await fetch("/api/auth/save-device", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${data.session.access_token}`,
-              },
-              body: JSON.stringify({ deviceInfo: getDeviceInfo() }),
-            });
-            if (resp.ok) {
-              const deviceData = await resp.json();
-              localStorage.setItem(DEVICE_TOKEN_KEY, deviceData.deviceToken);
-              if (deviceData.lernoryId) localStorage.setItem(LERNORY_ID_KEY, deviceData.lernoryId);
-            }
-          } catch {}
-        }
+      if (data?.session) {
+        // Email confirmation is disabled — user is signed in immediately
+        toast({ title: "Welcome to LERNORY!", description: "Your account is ready." });
+        saveDeviceInBackground(data.session.access_token);
         setLocation('/dashboard');
+      } else if (data?.user) {
+        // Email confirmation required — show the check-email screen
+        setSignupEmail(email);
+        setView("check-email");
+      } else {
+        toast({ title: "Something went wrong", description: "Please try again.", variant: "destructive" });
       }
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Something went wrong. Please try again.",
-        variant: "destructive",
-      });
+    } catch {
+      toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Listen for auth state — handles when user clicks email confirmation link and
+  // the tab (or a new tab) gets the session
+  const handleResendEmail = async () => {
+    if (!signupEmail) return;
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: signupEmail,
+      });
+      if (error) {
+        toast({ title: "Could not resend", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Email resent!", description: "Check your inbox again." });
+      }
+    } catch {
+      toast({ title: "Error", description: "Could not resend confirmation email.", variant: "destructive" });
+    }
+  };
+
+  // ── Check-email view ─────────────────────────────────────────────────────────
+  if (view === "check-email") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 px-4">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+              <Mail className="h-8 w-8 text-primary" />
+            </div>
+            <CardTitle className="text-2xl font-display">Check Your Email</CardTitle>
+            <CardDescription className="text-base mt-2">
+              We sent a confirmation link to{" "}
+              <span className="font-semibold text-foreground">{signupEmail}</span>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Click the link in that email to confirm your account, then come back here to log in.
+            </p>
+            <Button
+              size="lg"
+              className="w-full bg-gradient-to-r from-primary to-chart-2 border-primary"
+              onClick={() => setLocation('/login')}
+              data-testid="button-go-to-login"
+            >
+              Go to Login
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-sm"
+              onClick={handleResendEmail}
+              data-testid="button-resend-email"
+            >
+              Didn't get the email? Resend
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ── Signup form ──────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-background via-background to-primary/5">
       <header className="fixed top-0 left-0 right-0 z-50 border-b bg-background/80 backdrop-blur-sm">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href="/">
-              <div className="flex items-center gap-2 cursor-pointer">
-                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
-                  <Zap className="h-5 w-5 text-primary-foreground" />
-                </div>
-                <span className="font-display font-bold text-xl">LERNORY</span>
+          <Link href="/">
+            <div className="flex items-center gap-2 cursor-pointer">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
+                <Zap className="h-5 w-5 text-primary-foreground" />
               </div>
-            </Link>
-            <ThemeToggle />
-          </div>
+              <span className="font-display font-bold text-xl">LERNORY</span>
+            </div>
+          </Link>
+          <ThemeToggle />
         </div>
       </header>
 
@@ -219,7 +257,7 @@ export default function Signup() {
                   <span className="w-full border-t" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">Or</span>
+                  <span className="bg-card px-2 text-muted-foreground">Or sign up with email</span>
                 </div>
               </div>
 
@@ -233,6 +271,7 @@ export default function Signup() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    autoComplete="email"
                     data-testid="input-email"
                   />
                 </div>
@@ -248,6 +287,7 @@ export default function Signup() {
                       onChange={(e) => setPassword(e.target.value)}
                       required
                       className="pr-10"
+                      autoComplete="new-password"
                       data-testid="input-password"
                     />
                     <button
@@ -270,6 +310,7 @@ export default function Signup() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
+                    autoComplete="new-password"
                     data-testid="input-confirm-password"
                   />
                 </div>
@@ -292,7 +333,7 @@ export default function Signup() {
 
               <p className="text-center text-sm text-muted-foreground">
                 Already have an account?{" "}
-                <Link href="/login" className="text-primary hover:underline" data-testid="link-login">
+                <Link href="/login" className="text-primary hover:underline font-medium" data-testid="link-login">
                   Log in
                 </Link>
               </p>

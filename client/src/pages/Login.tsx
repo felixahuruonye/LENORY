@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
 import { signInWithGoogle, signInWithEmailPassword, supabase } from "@/lib/supabase";
-import { Loader2, Zap, LogIn, Eye, EyeOff, Smartphone, ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react";
+import { Loader2, Zap, LogIn, Eye, EyeOff, Smartphone, ArrowRight, ArrowLeft, CheckCircle2, Mail } from "lucide-react";
 import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
 
@@ -19,14 +19,31 @@ function getDeviceInfo() {
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     language: navigator.language,
-    screenWidth: window.screen.width,
-    screenHeight: window.screen.height,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     timestamp: new Date().toISOString(),
   };
 }
 
-type LoginView = "checking" | "trusted-device" | "active-session" | "email-login" | "lernory-id";
+// Fire-and-forget: save device token in background after successful login
+async function saveDeviceInBackground(accessToken: string) {
+  try {
+    const resp = await fetch("/api/auth/save-device", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ deviceInfo: getDeviceInfo() }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      localStorage.setItem(DEVICE_TOKEN_KEY, data.deviceToken);
+      if (data.lernoryId) localStorage.setItem(LERNORY_ID_KEY, data.lernoryId);
+    }
+  } catch {}
+}
+
+type LoginView = "checking" | "trusted-device" | "active-session" | "email-login" | "lernory-id" | "confirm-email";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -41,8 +58,8 @@ export default function Login() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [trustedUser, setTrustedUser] = useState<{ firstName?: string; email?: string; lernoryId?: string } | null>(null);
   const [activeSessionUser, setActiveSessionUser] = useState<{ email?: string; firstName?: string } | null>(null);
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
 
-  // Lernory ID lookup state
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<{ maskedEmail: string; firstName?: string } | null>(null);
   const [lernoryPassword, setLernoryPassword] = useState("");
@@ -52,7 +69,7 @@ export default function Login() {
   }, []);
 
   async function checkAuth() {
-    // Check if we have a trusted device token
+    // 1. Check trusted device token
     const deviceToken = localStorage.getItem(DEVICE_TOKEN_KEY);
     if (deviceToken) {
       try {
@@ -63,82 +80,54 @@ export default function Login() {
         });
         const data = await resp.json();
         if (data.valid) {
-          // We have a trusted device - try to restore session
           const { data: { session } } = await supabase.auth.getSession();
           if (session) {
-            // Session still valid + trusted device → show welcome back
-            setTrustedUser({
-              firstName: data.firstName,
-              email: data.email,
-              lernoryId: data.lernoryId,
-            });
+            setTrustedUser({ firstName: data.firstName, email: data.email, lernoryId: data.lernoryId });
             setView("trusted-device");
             return;
-          } else {
-            // Session expired, remove device token
-            localStorage.removeItem(DEVICE_TOKEN_KEY);
-            localStorage.removeItem(LERNORY_ID_KEY);
           }
-        } else {
-          localStorage.removeItem(DEVICE_TOKEN_KEY);
-          localStorage.removeItem(LERNORY_ID_KEY);
         }
-      } catch {
-        localStorage.removeItem(DEVICE_TOKEN_KEY);
+      } catch {}
+      localStorage.removeItem(DEVICE_TOKEN_KEY);
+      localStorage.removeItem(LERNORY_ID_KEY);
+    }
+
+    // 2. Check for an existing active session
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setActiveSessionUser({
+          email: session.user.email,
+          firstName: session.user.user_metadata?.full_name?.split(" ")[0] ||
+                     session.user.user_metadata?.name?.split(" ")[0],
+        });
+        setView("active-session");
+        return;
       }
-    }
+    } catch {}
 
-    // Check for active Supabase session (no trusted device)
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      setActiveSessionUser({
-        email: session.user.email,
-        firstName: session.user.user_metadata?.full_name?.split(" ")[0] ||
-                   session.user.user_metadata?.name?.split(" ")[0],
-      });
-      setView("active-session");
-      return;
-    }
-
-    // No session at all
     setView("email-login");
   }
 
-  async function saveDeviceAndRedirect(accessToken: string) {
-    try {
-      const resp = await fetch("/api/auth/save-device", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ deviceInfo: getDeviceInfo() }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        localStorage.setItem(DEVICE_TOKEN_KEY, data.deviceToken);
-        if (data.lernoryId) localStorage.setItem(LERNORY_ID_KEY, data.lernoryId);
-      }
-    } catch {}
-    setLocation("/dashboard");
-  }
-
-  const handleTrustedContinue = () => {
-    setLocation("/dashboard");
-  };
+  const handleTrustedContinue = () => setLocation("/dashboard");
 
   const handleActiveSessionContinue = async () => {
     setIsLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) {
-        await saveDeviceAndRedirect(session.access_token);
+        saveDeviceInBackground(session.access_token);
       }
-    } catch {
-      setLocation("/dashboard");
-    } finally {
-      setIsLoading(false);
-    }
+    } catch {}
+    setIsLoading(false);
+    setLocation("/dashboard");
+  };
+
+  const handleSwitchAccount = async () => {
+    localStorage.removeItem(DEVICE_TOKEN_KEY);
+    localStorage.removeItem(LERNORY_ID_KEY);
+    await supabase.auth.signOut();
+    setView("email-login");
   };
 
   const handleGoogleLogin = async () => {
@@ -148,6 +137,7 @@ export default function Login() {
       if (error) {
         toast({ title: "Login Failed", description: error.message, variant: "destructive" });
       }
+      // Browser redirects to OAuth — no further action needed here
     } catch {
       toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
@@ -164,21 +154,29 @@ export default function Login() {
     setIsLoading(true);
     try {
       const { data, error } = await signInWithEmailPassword(email, password);
+
       if (error) {
-        if (error.message.toLowerCase().includes("invalid login credentials")) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("invalid login credentials") || msg.includes("invalid email or password")) {
           toast({
             title: "Login Failed",
-            description: "Invalid email or password. New here? Create an account.",
+            description: "Incorrect email or password. New here? Create an account.",
             variant: "destructive",
           });
+        } else if (msg.includes("email not confirmed")) {
+          setUnconfirmedEmail(email);
+          setView("confirm-email");
         } else {
           toast({ title: "Login Failed", description: error.message, variant: "destructive" });
         }
         return;
       }
-      if (data?.session?.access_token) {
-        toast({ title: "Welcome Back!", description: "Logging you in..." });
-        await saveDeviceAndRedirect(data.session.access_token);
+
+      if (data?.session) {
+        toast({ title: "Welcome Back!", description: "Redirecting to your dashboard..." });
+        // Redirect immediately — save device in background (non-blocking)
+        saveDeviceInBackground(data.session.access_token);
+        setLocation("/dashboard");
       }
     } catch {
       toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
@@ -190,7 +188,7 @@ export default function Login() {
   const handleLernoryIdLookup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!lernoryId.trim()) {
-      toast({ title: "Enter Lernory ID", description: "Please enter your Lernory ID (e.g. LRN-XXXXXXXX)", variant: "destructive" });
+      toast({ title: "Enter Lernory ID", description: "Please enter your Lernory ID (e.g. LRN-XXXXXX)", variant: "destructive" });
       return;
     }
     setLookupLoading(true);
@@ -198,7 +196,7 @@ export default function Login() {
       const resp = await fetch(`/api/auth/lernory-lookup/${lernoryId.trim().toUpperCase()}`);
       const data = await resp.json();
       if (!data.found) {
-        toast({ title: "Not Found", description: "No account found with that Lernory ID. Check and try again.", variant: "destructive" });
+        toast({ title: "Not Found", description: "No account found with that Lernory ID.", variant: "destructive" });
         return;
       }
       setLookupResult({ maskedEmail: data.maskedEmail, firstName: data.firstName });
@@ -214,7 +212,6 @@ export default function Login() {
     if (!lookupResult || !lernoryPassword) return;
     setIsLoading(true);
     try {
-      // Server-side login keeps email private
       const resp = await fetch("/api/auth/lernory-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -226,13 +223,10 @@ export default function Login() {
         return;
       }
       if (data.accessToken) {
-        // Restore session in Supabase client
-        await supabase.auth.setSession({
-          access_token: data.accessToken,
-          refresh_token: data.refreshToken,
-        });
-        toast({ title: `Welcome back${lookupResult.firstName ? ", " + lookupResult.firstName : ""}!`, description: "Logging you in..." });
-        await saveDeviceAndRedirect(data.accessToken);
+        await supabase.auth.setSession({ access_token: data.accessToken, refresh_token: data.refreshToken });
+        toast({ title: `Welcome back${lookupResult.firstName ? ", " + lookupResult.firstName : ""}!` });
+        saveDeviceInBackground(data.accessToken);
+        setLocation("/dashboard");
       }
     } catch {
       toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
@@ -241,28 +235,21 @@ export default function Login() {
     }
   };
 
-  const handleSwitchAccount = async () => {
-    const deviceToken = localStorage.getItem(DEVICE_TOKEN_KEY);
-    if (deviceToken) {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.access_token) {
-          await fetch("/api/auth/device", {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({ deviceToken }),
-          });
-        }
-      } catch {}
-      localStorage.removeItem(DEVICE_TOKEN_KEY);
-      localStorage.removeItem(LERNORY_ID_KEY);
+  const handleResendConfirmation = async () => {
+    if (!unconfirmedEmail) return;
+    try {
+      const { error } = await supabase.auth.resend({ type: 'signup', email: unconfirmedEmail });
+      if (error) {
+        toast({ title: "Could not resend", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Email resent!", description: "Check your inbox." });
+      }
+    } catch {
+      toast({ title: "Error", description: "Could not resend confirmation email.", variant: "destructive" });
     }
-    setView("email-login");
   };
 
+  // ─── Checking session ────────────────────────────────────────────────────────
   if (view === "checking") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5">
@@ -294,7 +281,7 @@ export default function Login() {
 
       <main className="flex-1 flex items-center justify-center px-4 pt-20 pb-8">
 
-        {/* TRUSTED DEVICE VIEW */}
+        {/* ── TRUSTED DEVICE ── */}
         {view === "trusted-device" && trustedUser && (
           <Card className="w-full max-w-md">
             <CardHeader className="text-center">
@@ -304,7 +291,8 @@ export default function Login() {
               <CardTitle className="text-2xl font-display">Welcome Back!</CardTitle>
               {trustedUser.firstName && (
                 <CardDescription className="text-base">
-                  Good to see you again, <span className="font-semibold text-foreground">{trustedUser.firstName}</span>
+                  Good to see you again,{" "}
+                  <span className="font-semibold text-foreground">{trustedUser.firstName}</span>
                 </CardDescription>
               )}
               {trustedUser.lernoryId && (
@@ -327,20 +315,14 @@ export default function Login() {
                 Continue with Lernory
                 <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
-              <Button
-                variant="ghost"
-                size="lg"
-                className="w-full"
-                onClick={handleSwitchAccount}
-                data-testid="button-switch-account"
-              >
-                Not you? Use a different account
+              <Button variant="ghost" size="lg" className="w-full" onClick={handleSwitchAccount} data-testid="button-switch-account">
+                Not you? Sign in with a different account
               </Button>
             </CardContent>
           </Card>
         )}
 
-        {/* ACTIVE SESSION (no trusted device) */}
+        {/* ── ACTIVE SESSION ── */}
         {view === "active-session" && activeSessionUser && (
           <Card className="w-full max-w-md">
             <CardHeader className="text-center">
@@ -360,29 +342,49 @@ export default function Login() {
                 disabled={isLoading}
                 data-testid="button-continue-lernory"
               >
-                {isLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                ) : (
-                  <ArrowRight className="h-5 w-5 mr-2" />
-                )}
+                {isLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <ArrowRight className="h-5 w-5 mr-2" />}
                 Continue with Lernory
               </Button>
-              <p className="text-center text-xs text-muted-foreground">
-                This will also save this device for quick future access.
-              </p>
-              <Button
-                variant="ghost"
-                className="w-full"
-                onClick={handleSwitchAccount}
-                data-testid="button-switch-account"
-              >
+              <Button variant="ghost" className="w-full" onClick={handleSwitchAccount} data-testid="button-switch-account">
                 Sign in with a different account
               </Button>
             </CardContent>
           </Card>
         )}
 
-        {/* EMAIL LOGIN VIEW */}
+        {/* ── CONFIRM EMAIL ── */}
+        {view === "confirm-email" && (
+          <Card className="w-full max-w-md text-center">
+            <CardHeader>
+              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+                <Mail className="h-8 w-8 text-primary" />
+              </div>
+              <CardTitle className="text-2xl font-display">Confirm Your Email</CardTitle>
+              <CardDescription className="text-base mt-1">
+                We sent a confirmation link to{" "}
+                <span className="font-semibold text-foreground">{unconfirmedEmail}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Please click the link in that email, then come back here to log in.
+              </p>
+              <Button
+                size="lg"
+                className="w-full bg-gradient-to-r from-primary to-chart-2 border-primary"
+                onClick={() => setView("email-login")}
+                data-testid="button-try-login-again"
+              >
+                Try Logging In Again
+              </Button>
+              <Button variant="ghost" className="w-full text-sm" onClick={handleResendConfirmation} data-testid="button-resend-confirm">
+                Resend confirmation email
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── EMAIL LOGIN ── */}
         {view === "email-login" && (
           <Card className="w-full max-w-md">
             <CardHeader className="text-center">
@@ -401,18 +403,12 @@ export default function Login() {
                 disabled={isGoogleLoading}
                 data-testid="button-google-login"
               >
-                {isGoogleLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                ) : (
-                  <SiGoogle className="h-5 w-5 mr-2" />
-                )}
+                {isGoogleLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <SiGoogle className="h-5 w-5 mr-2" />}
                 Continue with Google
               </Button>
 
               <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
+                <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
                 <div className="relative flex justify-center text-xs uppercase">
                   <span className="bg-card px-2 text-muted-foreground">Or</span>
                 </div>
@@ -428,6 +424,7 @@ export default function Login() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    autoComplete="email"
                     data-testid="input-email"
                   />
                 </div>
@@ -442,6 +439,7 @@ export default function Login() {
                       onChange={(e) => setPassword(e.target.value)}
                       required
                       className="pr-10"
+                      autoComplete="current-password"
                       data-testid="input-password"
                     />
                     <button
@@ -467,9 +465,7 @@ export default function Login() {
               </form>
 
               <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
+                <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
                 <div className="relative flex justify-center text-xs uppercase">
                   <span className="bg-card px-2 text-muted-foreground">Or log in with</span>
                 </div>
@@ -495,20 +491,20 @@ export default function Login() {
           </Card>
         )}
 
-        {/* LERNORY ID VIEW */}
+        {/* ── LERNORY ID ── */}
         {view === "lernory-id" && (
           <Card className="w-full max-w-md">
-            <CardHeader>
+            <CardHeader className="relative">
               <Button
                 variant="ghost"
                 size="icon"
-                className="absolute left-4 top-4"
+                className="absolute left-2 top-2"
                 onClick={() => { setView("email-login"); setLookupResult(null); setLernoryId(""); setLernoryPassword(""); }}
                 data-testid="button-back"
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
-              <div className="text-center">
+              <div className="text-center pt-2">
                 <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
                   <Smartphone className="h-7 w-7 text-primary-foreground" />
                 </div>
@@ -524,11 +520,11 @@ export default function Login() {
                     <Input
                       id="lernory-id"
                       type="text"
-                      placeholder="e.g. LRN-AB12CD34"
+                      placeholder="e.g. LRN-AB12CD"
                       value={lernoryId}
                       onChange={(e) => setLernoryId(e.target.value.toUpperCase())}
                       className="font-mono text-center tracking-widest"
-                      maxLength={12}
+                      maxLength={10}
                       data-testid="input-lernory-id"
                     />
                     <p className="text-xs text-muted-foreground text-center">
@@ -542,7 +538,7 @@ export default function Login() {
                     disabled={lookupLoading}
                     data-testid="button-lookup-lernory-id"
                   >
-                    {lookupLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : null}
+                    {lookupLoading && <Loader2 className="h-5 w-5 animate-spin mr-2" />}
                     Find My Account
                   </Button>
                 </form>
@@ -551,8 +547,7 @@ export default function Login() {
                   <div className="bg-primary/10 rounded-md p-4 space-y-1">
                     <p className="text-sm font-medium text-foreground flex items-center gap-2">
                       <CheckCircle2 className="h-4 w-4 text-primary" />
-                      Account found
-                      {lookupResult.firstName && <span>— {lookupResult.firstName}</span>}
+                      Account found{lookupResult.firstName && ` — ${lookupResult.firstName}`}
                     </p>
                     <p className="text-sm text-muted-foreground font-mono pl-6">{lookupResult.maskedEmail}</p>
                   </div>
@@ -567,6 +562,7 @@ export default function Login() {
                         onChange={(e) => setLernoryPassword(e.target.value)}
                         required
                         className="pr-10"
+                        autoComplete="current-password"
                         data-testid="input-lernory-password"
                       />
                       <button
@@ -588,28 +584,14 @@ export default function Login() {
                     {isLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <LogIn className="h-5 w-5 mr-2" />}
                     Sign In
                   </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full"
-                    onClick={() => { setLookupResult(null); setLernoryId(""); }}
-                    data-testid="button-change-lernory-id"
-                  >
-                    Try a different Lernory ID
+                  <Button variant="ghost" className="w-full" onClick={() => setLookupResult(null)} data-testid="button-different-id">
+                    Use a different Lernory ID
                   </Button>
                 </form>
               )}
-
-              <p className="text-center text-sm text-muted-foreground">
-                New to Lernory?{" "}
-                <Link href="/signup" className="text-primary hover:underline font-medium" data-testid="link-signup">
-                  Create an account
-                </Link>
-              </p>
             </CardContent>
           </Card>
         )}
-
       </main>
     </div>
   );
