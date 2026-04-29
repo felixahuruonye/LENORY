@@ -126,7 +126,7 @@ export default function WebsiteLearn() {
                   data-testid="button-get-explanation"
                 >
                   <BookOpen className="h-4 w-4 mr-2" />
-                  Get Explanation from LEARNORY
+                  Get Explanation from LENORY
                 </Button>
               </Card>
             ) : isLoading ? (
@@ -134,7 +134,7 @@ export default function WebsiteLearn() {
                 <div className="flex flex-col items-center gap-4">
                   <Loader2 className="h-8 w-8 animate-spin" />
                   <div className="text-center">
-                    <p className="font-semibold">LEARNORY is analyzing your code...</p>
+                    <p className="font-semibold">LENORY is analyzing your code...</p>
                     <p className="text-xs text-muted-foreground mt-1">This should take 10-15 seconds</p>
                   </div>
                 </div>

@@ -53,7 +53,7 @@ export async function handleGeminiLiveConnection(ws: WS, userId: string) {
     type: "session_started",
     sessionId,
     voices: GEMINI_VOICES,
-    message: "Connected to LEARNORY AI Voice with Gemini Live streaming.",
+    message: "Connected to LENORY AI Voice with Gemini Live streaming.",
   }));
 
   ws.on("message", async (message: Buffer, isBinary: boolean) => {
@@ -122,7 +122,7 @@ async function initializeGeminiLiveSession(session: GeminiLiveSession) {
     
     const config = {
       responseModalities: [Modality.AUDIO, Modality.TEXT],
-      systemInstruction: `You are LEARNORY, an advanced AI tutor specializing in Nigerian education (JAMB, WAEC, NECO).
+      systemInstruction: `You are LENORY, an advanced AI tutor specializing in Nigerian education (JAMB, WAEC, NECO).
         
 Voice: ${session.selectedVoice}
 Language: ${session.language}

@@ -12,7 +12,7 @@ import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
 
 const DEVICE_TOKEN_KEY = "lernory_device_token";
-const LERNORY_ID_KEY = "lernory_user_id";
+const LENORY_ID_KEY = "lernory_user_id";
 
 function getDeviceInfo() {
   return {
@@ -37,7 +37,7 @@ async function saveDeviceInBackground(accessToken: string) {
     if (resp.ok) {
       const deviceData = await resp.json();
       localStorage.setItem(DEVICE_TOKEN_KEY, deviceData.deviceToken);
-      if (deviceData.lernoryId) localStorage.setItem(LERNORY_ID_KEY, deviceData.lernoryId);
+      if (deviceData.lenoryId) localStorage.setItem(LENORY_ID_KEY, deviceData.lenoryId);
     }
   } catch {}
 }
@@ -114,7 +114,7 @@ export default function Signup() {
 
       if (data?.session) {
         // Email confirmation is disabled — user is signed in immediately
-        toast({ title: "Welcome to LERNORY!", description: "Your account is ready." });
+        toast({ title: "Welcome to LENORY!", description: "Your account is ready." });
         saveDeviceInBackground(data.session.access_token);
         setLocation('/dashboard');
       } else if (data?.user) {
@@ -201,7 +201,7 @@ export default function Signup() {
               <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
                 <Zap className="h-5 w-5 text-primary-foreground" />
               </div>
-              <span className="font-display font-bold text-xl">LERNORY</span>
+              <span className="font-display font-bold text-xl">LENORY</span>
             </div>
           </Link>
           <ThemeToggle />

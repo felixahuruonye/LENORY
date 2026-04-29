@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -37,7 +39,7 @@ import {
   Code,
   Lightbulb,
 } from "lucide-react";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch, useRoute } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -91,20 +93,24 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Set session from URL or first session or create new one
+  // Auto-fill voice message from URL param
+  const searchParams = new URLSearchParams(searchString);
+  const voiceParam = searchParams.get("voice");
+  useEffect(() => {
+    if (voiceParam) {
+      setMessage(decodeURIComponent(voiceParam));
+    }
+  }, [voiceParam]);
+
+  // Set session from URL — no empty session creation on load
   useEffect(() => {
     if (user) {
-      // If URL has sessionId, use it
       if (urlSessionId && sessions.some(s => s.id === urlSessionId)) {
         setCurrentSessionId(urlSessionId);
-      } else if (!currentSessionId) {
-        // No URL session, use first session or create new
-        if (sessions.length > 0) {
-          setCurrentSessionId(sessions[0].id);
-        } else {
-          createNewChat();
-        }
+      } else if (!currentSessionId && sessions.length > 0) {
+        setCurrentSessionId(sessions[0].id);
       }
+      // Do NOT auto-create a session — wait for first message
     }
   }, [user, sessions, urlSessionId]);
 
@@ -230,9 +236,9 @@ export default function Chat() {
     }
   };
 
-  // Send message
+  // Send message — creates session on first message if needed
   const handleSendMessage = async () => {
-    if (!message.trim() || !currentSessionId || isLoading) return;
+    if (!message.trim() || isLoading) return;
 
     // Check if user is asking to open a feature
     const featureRoute = detectFeatureOpen(message);
@@ -249,12 +255,30 @@ export default function Chat() {
       return;
     }
 
+    // Create session on first message if we don't have one
+    let sessionId = currentSessionId;
+    if (!sessionId) {
+      try {
+        const res = await apiRequest("POST", "/api/chat/sessions", {
+          title: message.trim().slice(0, 60),
+          mode: "chat",
+        });
+        const session = await res.json();
+        sessionId = session.id;
+        setCurrentSessionId(session.id);
+        queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+      } catch {
+        toast({ title: "Error", description: "Failed to create chat session", variant: "destructive" });
+        return;
+      }
+    }
+
     try {
       setIsLoading(true);
       const res = await apiRequest("POST", "/api/chat/send", {
         content: message.trim(),
-        sessionId: currentSessionId,
-        autoLearn: true, // Enable auto-learning
+        sessionId,
+        autoLearn: true,
       });
       await res.json();
 
@@ -262,11 +286,7 @@ export default function Chat() {
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       setMessage("");
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to send message",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -455,7 +475,7 @@ export default function Chat() {
                     <Menu className="w-5 h-5" />
                   )}
                 </Button>
-                <h1 className="font-semibold text-base sm:text-lg">LEARNORY</h1>
+                <h1 className="font-semibold text-base sm:text-lg">LENORY</h1>
 
                 {/* Quick Action Menu */}
                 <DropdownMenu>
@@ -505,6 +525,12 @@ export default function Chat() {
                       <Link href="/image-gallery" className="flex items-center cursor-pointer">
                         <Image className="w-4 h-4 mr-2" />
                         <span>Go to Image Gallery</span>
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild data-testid="action-video-gen">
+                      <Link href="/video-gen" className="flex items-center cursor-pointer">
+                        <Zap className="w-4 h-4 mr-2" />
+                        <span>Generate Video</span>
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild data-testid="action-courses">
@@ -654,8 +680,16 @@ export default function Chat() {
                         </div>
                       )}
                       <div className="flex justify-between items-start gap-3">
-                        <div className="whitespace-pre-wrap break-words text-sm flex-1">
-                          {msg.content}
+                        <div className="break-words text-sm flex-1 min-w-0">
+                          {msg.role === "assistant" ? (
+                            <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-code:bg-secondary prose-code:px-1 prose-code:rounded prose-pre:bg-secondary prose-pre:p-3 prose-pre:rounded-lg prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {msg.content}
+                              </ReactMarkdown>
+                            </div>
+                          ) : (
+                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                          )}
                         </div>
                         {msg.role === "assistant" && (
                           <button

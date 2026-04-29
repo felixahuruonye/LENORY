@@ -1542,7 +1542,7 @@ function mapSupabaseUser(data: any): User {
     subscriptionTier: data.subscription_tier || 'free',
     subscriptionExpiresAt: data.subscription_expires_at ? new Date(data.subscription_expires_at) : null,
     paystackCustomerId: data.paystack_customer_id || null,
-    lernoryId: data.lernory_id || null,
+    lenoryId: data.lenory_id || null,
     createdAt: data.created_at ? new Date(data.created_at) : new Date(),
     updatedAt: data.updated_at ? new Date(data.updated_at) : new Date(),
   } as User;

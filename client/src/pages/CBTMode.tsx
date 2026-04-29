@@ -66,7 +66,7 @@ export default function CBTModeEnhanced() {
       setIsExamActive(false);
       queryClient.invalidateQueries({ queryKey: ['/api/cbt/history'] });
       queryClient.invalidateQueries({ queryKey: ['/api/cbt/analytics'] });
-      toast({ title: '✅ Exam Graded by LEARNORY!', description: `Your score: ${data.gradingResult.score}%` });
+      toast({ title: '✅ Exam Graded by LENORY!', description: `Your score: ${data.gradingResult.score}%` });
     },
     onError: (error: any) => {
       setView('exam');
@@ -221,7 +221,7 @@ export default function CBTModeEnhanced() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Loading view - LEARNORY generating questions
+  // Loading view - LENORY generating questions
   if (view === 'loading') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -269,7 +269,7 @@ export default function CBTModeEnhanced() {
           {/* Message */}
           <div className="space-y-4 mb-12">
             <h2 className="text-3xl font-bold text-white">
-              LEARNORY Getting Your Questions Ready
+              LENORY Getting Your Questions Ready
             </h2>
             <p className="text-lg text-blue-200">
               Please wait for the exam to start...
@@ -313,7 +313,7 @@ export default function CBTModeEnhanced() {
           <div className="flex items-center justify-between mb-8">
             <h1 className="text-4xl font-bold flex items-center gap-3">
               <CheckCircle2 className="w-10 h-10 text-green-500" />
-              LEARNORY Results
+              LENORY Results
             </h1>
             <Badge className="px-4 py-2 text-lg bg-green-600">{examResult.score}%</Badge>
           </div>
@@ -335,7 +335,7 @@ export default function CBTModeEnhanced() {
 
           <Card className="p-6 mb-8 bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
             <p className="text-lg font-bold mb-4 flex items-center gap-2">
-              💡 LEARNORY Recommendations
+              💡 LENORY Recommendations
             </p>
             <ul className="space-y-2">
               {examResult.recommendations?.map((rec: string, idx: number) => (
@@ -368,7 +368,7 @@ export default function CBTModeEnhanced() {
           <Button onClick={() => setView('dashboard')} variant="outline" className="mb-8">← Back</Button>
           
           <h1 className="text-4xl font-bold mb-2">Configure Exam</h1>
-          <p className="text-muted-foreground mb-8">Select exam type and subjects. LEARNORY will generate 50 questions per subject.</p>
+          <p className="text-muted-foreground mb-8">Select exam type and subjects. LENORY will generate 50 questions per subject.</p>
 
           <Card className="p-6 space-y-6">
             {/* Exam Type Selection */}
@@ -434,7 +434,7 @@ export default function CBTModeEnhanced() {
               {isLoadingQuestions ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating Questions with LEARNORY...
+                  Generating Questions with LENORY...
                 </>
               ) : (
                 '▶ Start Exam'
@@ -458,7 +458,7 @@ export default function CBTModeEnhanced() {
         {/* Header */}
         <div className="flex justify-between items-center mb-6 text-white">
           <div className="flex-1">
-            <h1 className="text-2xl font-bold">LEARNORY CBT</h1>
+            <h1 className="text-2xl font-bold">LENORY CBT</h1>
             <p className="text-sm text-slate-400">{selectedExamType}</p>
           </div>
 
@@ -637,7 +637,7 @@ export default function CBTModeEnhanced() {
       <div className="max-w-5xl mx-auto">
         <h1 className="text-4xl font-bold mb-2 flex items-center gap-3">
           <BookOpen className="w-10 h-10 text-blue-500" />
-          LEARNORY CBT Mode
+          LENORY CBT Mode
         </h1>
         <p className="text-muted-foreground mb-8">
           AI-Powered Exam Simulation • Real-Time Question Generation • Intelligent Grading
@@ -651,7 +651,7 @@ export default function CBTModeEnhanced() {
               Take Exam
             </h2>
             <p className="text-muted-foreground mb-6">
-              Select your exam type and subjects. LEARNORY generates real questions and intelligently grades your answers.
+              Select your exam type and subjects. LENORY generates real questions and intelligently grades your answers.
             </p>
             <Button onClick={() => setView('config')} className="w-full text-lg py-6">
               Start New Exam
@@ -680,7 +680,7 @@ export default function CBTModeEnhanced() {
         <div className="mt-12 grid md:grid-cols-3 gap-6">
           <Card className="p-6">
             <p className="text-lg font-bold mb-2">🤖 Smart Generation</p>
-            <p className="text-sm text-muted-foreground">LEARNORY AI generates 50+ questions per subject</p>
+            <p className="text-sm text-muted-foreground">LENORY AI generates 50+ questions per subject</p>
           </Card>
           <Card className="p-6">
             <p className="text-lg font-bold mb-2">📊 Instant Grading</p>

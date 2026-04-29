@@ -118,7 +118,7 @@ export default function WebsiteGenerator() {
         queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
         toast({
           title: "✅ Debug Complete!",
-          description: "Your website has been fixed by LEARNORY AI. Preview the changes!",
+          description: "Your website has been fixed by LENORY AI. Preview the changes!",
         });
       }
     },
@@ -137,7 +137,7 @@ export default function WebsiteGenerator() {
     if (!selectedWebsiteData || !debugPrompt.trim()) return;
     
     setIsDebugging(true);
-    setDebugMessages(["🔍 LEARNORY AI analyzing your request...", "⏳ Processing with Gemini API..."]);
+    setDebugMessages(["🔍 LENORY AI analyzing your request...", "⏳ Processing with Gemini API..."]);
     setShowDebugMode(true);
     
     try {
@@ -462,7 +462,7 @@ export default function WebsiteGenerator() {
                 <TabsContent value="debug" className="mt-4">
                   <Card className="p-4 space-y-4">
                     <div>
-                      <label className="text-sm font-semibold block mb-2">What's broken? (Tell LEARNORY AI)</label>
+                      <label className="text-sm font-semibold block mb-2">What's broken? (Tell LENORY AI)</label>
                       <Textarea
                         placeholder="e.g., 'The button doesn't respond to clicks', 'The layout breaks on mobile', 'The colors don't match the design'..."
                         value={debugPrompt}
@@ -482,12 +482,12 @@ export default function WebsiteGenerator() {
                       {isDebugging ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          LEARNORY AI is fixing...
+                          LENORY AI is fixing...
                         </>
                       ) : (
                         <>
                           <Zap className="h-4 w-4 mr-2" />
-                          Debug with LEARNORY AI
+                          Debug with LENORY AI
                         </>
                       )}
                     </Button>

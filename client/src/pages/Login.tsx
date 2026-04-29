@@ -12,7 +12,7 @@ import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
 
 const DEVICE_TOKEN_KEY = "lernory_device_token";
-const LERNORY_ID_KEY = "lernory_user_id";
+const LENORY_ID_KEY = "lernory_user_id";
 
 function getDeviceInfo() {
   return {
@@ -38,7 +38,7 @@ async function saveDeviceInBackground(accessToken: string) {
     if (resp.ok) {
       const data = await resp.json();
       localStorage.setItem(DEVICE_TOKEN_KEY, data.deviceToken);
-      if (data.lernoryId) localStorage.setItem(LERNORY_ID_KEY, data.lernoryId);
+      if (data.lenoryId) localStorage.setItem(LENORY_ID_KEY, data.lenoryId);
     }
   } catch {}
 }
@@ -52,17 +52,17 @@ export default function Login() {
   const [view, setView] = useState<LoginView>("checking");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [lernoryId, setLernoryId] = useState("");
+  const [lenoryId, setLenoryId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [trustedUser, setTrustedUser] = useState<{ firstName?: string; email?: string; lernoryId?: string } | null>(null);
+  const [trustedUser, setTrustedUser] = useState<{ firstName?: string; email?: string; lenoryId?: string } | null>(null);
   const [activeSessionUser, setActiveSessionUser] = useState<{ email?: string; firstName?: string } | null>(null);
   const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
 
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<{ maskedEmail: string; firstName?: string } | null>(null);
-  const [lernoryPassword, setLernoryPassword] = useState("");
+  const [lernoryPassword, setLenoryPassword] = useState("");
 
   useEffect(() => {
     checkAuth();
@@ -82,14 +82,14 @@ export default function Login() {
         if (data.valid) {
           const { data: { session } } = await supabase.auth.getSession();
           if (session) {
-            setTrustedUser({ firstName: data.firstName, email: data.email, lernoryId: data.lernoryId });
+            setTrustedUser({ firstName: data.firstName, email: data.email, lenoryId: data.lenoryId });
             setView("trusted-device");
             return;
           }
         }
       } catch {}
       localStorage.removeItem(DEVICE_TOKEN_KEY);
-      localStorage.removeItem(LERNORY_ID_KEY);
+      localStorage.removeItem(LENORY_ID_KEY);
     }
 
     // 2. Check for an existing active session
@@ -125,7 +125,7 @@ export default function Login() {
 
   const handleSwitchAccount = async () => {
     localStorage.removeItem(DEVICE_TOKEN_KEY);
-    localStorage.removeItem(LERNORY_ID_KEY);
+    localStorage.removeItem(LENORY_ID_KEY);
     await supabase.auth.signOut();
     setView("email-login");
   };
@@ -185,29 +185,29 @@ export default function Login() {
     }
   };
 
-  const handleLernoryIdLookup = async (e: React.FormEvent) => {
+  const handleLenoryIdLookup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!lernoryId.trim()) {
-      toast({ title: "Enter Lernory ID", description: "Please enter your Lernory ID (e.g. LRN-XXXXXX)", variant: "destructive" });
+    if (!lenoryId.trim()) {
+      toast({ title: "Enter Lenory ID", description: "Please enter your Lenory ID (e.g. LRN-XXXXXX)", variant: "destructive" });
       return;
     }
     setLookupLoading(true);
     try {
-      const resp = await fetch(`/api/auth/lernory-lookup/${lernoryId.trim().toUpperCase()}`);
+      const resp = await fetch(`/api/auth/lernory-lookup/${lenoryId.trim().toUpperCase()}`);
       const data = await resp.json();
       if (!data.found) {
-        toast({ title: "Not Found", description: "No account found with that Lernory ID.", variant: "destructive" });
+        toast({ title: "Not Found", description: "No account found with that Lenory ID.", variant: "destructive" });
         return;
       }
       setLookupResult({ maskedEmail: data.maskedEmail, firstName: data.firstName });
     } catch {
-      toast({ title: "Error", description: "Could not look up Lernory ID. Try again.", variant: "destructive" });
+      toast({ title: "Error", description: "Could not look up Lenory ID. Try again.", variant: "destructive" });
     } finally {
       setLookupLoading(false);
     }
   };
 
-  const handleLernoryIdLogin = async (e: React.FormEvent) => {
+  const handleLenoryIdLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!lookupResult || !lernoryPassword) return;
     setIsLoading(true);
@@ -215,7 +215,7 @@ export default function Login() {
       const resp = await fetch("/api/auth/lernory-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lernoryId: lernoryId.trim().toUpperCase(), password: lernoryPassword }),
+        body: JSON.stringify({ lenoryId: lenoryId.trim().toUpperCase(), password: lernoryPassword }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -272,7 +272,7 @@ export default function Login() {
               <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
                 <Zap className="h-5 w-5 text-primary-foreground" />
               </div>
-              <span className="font-display font-bold text-xl">LERNORY</span>
+              <span className="font-display font-bold text-xl">LENORY</span>
             </div>
           </Link>
           <ThemeToggle />
@@ -295,10 +295,10 @@ export default function Login() {
                   <span className="font-semibold text-foreground">{trustedUser.firstName}</span>
                 </CardDescription>
               )}
-              {trustedUser.lernoryId && (
+              {trustedUser.lenoryId && (
                 <div className="mt-2 inline-flex items-center gap-2 bg-primary/10 text-primary text-sm font-mono px-3 py-1 rounded-md mx-auto">
                   <Smartphone className="h-3.5 w-3.5" />
-                  {trustedUser.lernoryId}
+                  {trustedUser.lenoryId}
                 </div>
               )}
             </CardHeader>
@@ -312,7 +312,7 @@ export default function Login() {
                 onClick={handleTrustedContinue}
                 data-testid="button-continue-lernory"
               >
-                Continue with Lernory
+                Continue with Lenory
                 <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
               <Button variant="ghost" size="lg" className="w-full" onClick={handleSwitchAccount} data-testid="button-switch-account">
@@ -343,7 +343,7 @@ export default function Login() {
                 data-testid="button-continue-lernory"
               >
                 {isLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <ArrowRight className="h-5 w-5 mr-2" />}
-                Continue with Lernory
+                Continue with Lenory
               </Button>
               <Button variant="ghost" className="w-full" onClick={handleSwitchAccount} data-testid="button-switch-account">
                 Sign in with a different account
@@ -478,11 +478,11 @@ export default function Login() {
                 data-testid="button-use-lernory-id"
               >
                 <Smartphone className="h-4 w-4 mr-2" />
-                Use my Lernory ID
+                Use my Lenory ID
               </Button>
 
               <p className="text-center text-sm text-muted-foreground">
-                New to Lernory?{" "}
+                New to Lenory?{" "}
                 <Link href="/signup" className="text-primary hover:underline font-medium" data-testid="link-signup">
                   Create an account
                 </Link>
@@ -491,7 +491,7 @@ export default function Login() {
           </Card>
         )}
 
-        {/* ── LERNORY ID ── */}
+        {/* ── LENORY ID ── */}
         {view === "lernory-id" && (
           <Card className="w-full max-w-md">
             <CardHeader className="relative">
@@ -499,7 +499,7 @@ export default function Login() {
                 variant="ghost"
                 size="icon"
                 className="absolute left-2 top-2"
-                onClick={() => { setView("email-login"); setLookupResult(null); setLernoryId(""); setLernoryPassword(""); }}
+                onClick={() => { setView("email-login"); setLookupResult(null); setLenoryId(""); setLenoryPassword(""); }}
                 data-testid="button-back"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -508,27 +508,27 @@ export default function Login() {
                 <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
                   <Smartphone className="h-7 w-7 text-primary-foreground" />
                 </div>
-                <CardTitle className="text-2xl font-display">Lernory ID Login</CardTitle>
-                <CardDescription>Enter your unique Lernory ID to sign in</CardDescription>
+                <CardTitle className="text-2xl font-display">Lenory ID Login</CardTitle>
+                <CardDescription>Enter your unique Lenory ID to sign in</CardDescription>
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
               {!lookupResult ? (
-                <form onSubmit={handleLernoryIdLookup} className="space-y-4">
+                <form onSubmit={handleLenoryIdLookup} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="lernory-id">Your Lernory ID</Label>
+                    <Label htmlFor="lernory-id">Your Lenory ID</Label>
                     <Input
                       id="lernory-id"
                       type="text"
                       placeholder="e.g. LRN-AB12CD"
-                      value={lernoryId}
-                      onChange={(e) => setLernoryId(e.target.value.toUpperCase())}
+                      value={lenoryId}
+                      onChange={(e) => setLenoryId(e.target.value.toUpperCase())}
                       className="font-mono text-center tracking-widest"
                       maxLength={10}
                       data-testid="input-lernory-id"
                     />
                     <p className="text-xs text-muted-foreground text-center">
-                      Your Lernory ID can be found in your account settings
+                      Your Lenory ID can be found in your account settings
                     </p>
                   </div>
                   <Button
@@ -543,7 +543,7 @@ export default function Login() {
                   </Button>
                 </form>
               ) : (
-                <form onSubmit={handleLernoryIdLogin} className="space-y-4">
+                <form onSubmit={handleLenoryIdLogin} className="space-y-4">
                   <div className="bg-primary/10 rounded-md p-4 space-y-1">
                     <p className="text-sm font-medium text-foreground flex items-center gap-2">
                       <CheckCircle2 className="h-4 w-4 text-primary" />
@@ -559,7 +559,7 @@ export default function Login() {
                         type={showPassword ? "text" : "password"}
                         placeholder="Enter your password"
                         value={lernoryPassword}
-                        onChange={(e) => setLernoryPassword(e.target.value)}
+                        onChange={(e) => setLenoryPassword(e.target.value)}
                         required
                         className="pr-10"
                         autoComplete="current-password"
@@ -585,7 +585,7 @@ export default function Login() {
                     Sign In
                   </Button>
                   <Button variant="ghost" className="w-full" onClick={() => setLookupResult(null)} data-testid="button-different-id">
-                    Use a different Lernory ID
+                    Use a different Lenory ID
                   </Button>
                 </form>
               )}

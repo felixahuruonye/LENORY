@@ -61,7 +61,7 @@ export default function AuthCallback() {
             if (resp.ok) {
               const data = await resp.json();
               localStorage.setItem("lernory_device_token", data.deviceToken);
-              if (data.lernoryId) localStorage.setItem("lernory_user_id", data.lernoryId);
+              if (data.lenoryId) localStorage.setItem("lernory_user_id", data.lenoryId);
             }
           } catch {}
           

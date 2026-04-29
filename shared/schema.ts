@@ -47,7 +47,7 @@ export const users = pgTable("users", {
   subscriptionTier: varchar("subscription_tier", { length: 50 }).default('free'),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
   paystackCustomerId: varchar("paystack_customer_id"),
-  lernoryId: varchar("lernory_id").unique(),
+  lenoryId: varchar("lenory_id").unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

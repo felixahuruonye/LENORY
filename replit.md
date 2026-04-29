@@ -1,7 +1,7 @@
-# LERNORY ULTRA - Advanced AI-Powered EdTech Platform
+# LENORY - Advanced AI-Powered EdTech Platform
 
 ## Overview
-LERNORY ULTRA is a comprehensive EdTech platform that leverages multi-modal AI to transform education. It offers an 8D dashboard, advanced chat with AI tutoring modes, a comprehensive learning memory system, gamification, personalized study planning, and subject-specific expertise. The platform is designed for students, teachers, lecturers, and educational institutions, with a focus on enterprise-grade features tailored for the Nigerian education sector, aiming to provide a futuristic and engaging learning experience. It includes a complete pricing and subscription system with Paystack integration and enhanced AI capabilities for project reading and interactive onboarding.
+LENORY is a comprehensive EdTech platform that leverages multi-modal AI to transform education. It offers an 8D dashboard, advanced chat with AI tutoring modes, a comprehensive learning memory system, gamification, personalized study planning, and subject-specific expertise. The platform is designed for students, teachers, lecturers, and educational institutions, with a focus on enterprise-grade features tailored for the Nigerian education sector. Features include: time-based greeting, credit system, AssemblyAI voice ("Hey LENORY"), ChatGPT-like markdown chat, video generation (Replicate/Zeroscope), credit top-up packs, and admin dashboard with user management.
 
 ## User Preferences
 Preferred communication style: Simple, everyday language. Prefers futuristic design with glassmorphism and neon effects. Wants faster, stronger backend logic without UI changes. Wants all learning data to persist permanently (auto-learned preferences, chat history, exam results, memory entries).

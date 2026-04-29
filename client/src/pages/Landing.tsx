@@ -141,7 +141,7 @@ export default function Landing() {
                 <Zap className="h-5 w-5 text-primary-foreground" />
               </div>
               <span className="text-xl sm:text-2xl font-display font-bold bg-gradient-to-r from-primary to-chart-2 bg-clip-text text-transparent">
-                LERNORY
+                LENORY
               </span>
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
@@ -406,7 +406,7 @@ export default function Landing() {
           </ScrollReveal>
           <ScrollReveal delay={100}>
             <p className="text-lg sm:text-xl text-muted-foreground mb-8">
-              Join thousands of students and educators using LERNORY to achieve their goals
+              Join thousands of students and educators using LENORY to achieve their goals
             </p>
           </ScrollReveal>
           <ScrollReveal delay={200}>
@@ -434,7 +434,7 @@ export default function Landing() {
                 <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
                   <Zap className="h-5 w-5 text-primary-foreground" />
                 </div>
-                <span className="text-xl font-display font-bold">LERNORY</span>
+                <span className="text-xl font-display font-bold">LENORY</span>
               </div>
               <p className="text-sm text-muted-foreground">
                 The future of voice-first AI learning for African students
@@ -466,7 +466,7 @@ export default function Landing() {
             </div>
           </div>
           <div className="mt-8 pt-8 border-t border-border text-center text-sm text-muted-foreground">
-            © 2025 LERNORY. Built for the future of education.
+            © 2025 LENORY. Built for the future of education.
           </div>
         </div>
       </footer>

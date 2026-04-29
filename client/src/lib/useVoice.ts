@@ -18,8 +18,8 @@ const DEFAULT_VOICE = "Aoede";
 function preprocessTextForSpeech(text: string): string {
   let processed = text;
   
-  // Convert LEARNORY to lowercase so it's read as a word, not spelled
-  processed = processed.replace(/LEARNORY/g, "learnory");
+  // Convert LENORY to lowercase so it's read as a word, not spelled
+  processed = processed.replace(/LENORY/g, "learnory");
   
   // Remove markdown formatting
   processed = processed

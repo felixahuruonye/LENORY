@@ -90,7 +90,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-6">
               <a href="/" className="text-xl font-display font-bold bg-gradient-to-r from-primary to-chart-2 bg-clip-text text-transparent">
-                LERNORY
+                LENORY
               </a>
               <nav className="hidden md:flex items-center gap-4">
                 <Button variant="ghost" asChild>

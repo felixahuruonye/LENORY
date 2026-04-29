@@ -273,7 +273,7 @@ export default function LiveAI() {
         }
         break;
       case "ai_response":
-        const aiMessage = data.text?.replace(/LEARNORY/g, "Learnory").trim() || "";
+        const aiMessage = data.text?.replace(/LENORY/g, "Learnory").trim() || "";
         if (aiMessage) {
           addMessage("assistant", aiMessage);
           await saveMessageToDatabase("assistant", aiMessage);
@@ -355,9 +355,9 @@ export default function LiveAI() {
       // Auto-greet with text only (voice comes from Gemini when user unmutes)
       setTimeout(async () => {
         const greetings = [
-          "Hello! I'm your LEARNORY AI tutor. What would you like to learn today?",
+          "Hello! I'm your LENORY AI tutor. What would you like to learn today?",
           "Hi! I'm here to help you study. What topic interests you?",
-          "Welcome to LEARNORY! I'm ready to assist with your learning.",
+          "Welcome to LENORY! I'm ready to assist with your learning.",
         ];
         const greeting = greetings[Math.floor(Math.random() * greetings.length)];
         
@@ -580,7 +580,7 @@ export default function LiveAI() {
   // Clean text for speech (remove all markdown, special characters)
   const cleanTextForSpeech = (text: string): string => {
     return text
-      .replace(/LEARNORY/g, "Learnory")
+      .replace(/LENORY/g, "Learnory")
       .replace(/\*\*(.+?)\*\*/g, "$1")  // Remove bold markers, keep text
       .replace(/\*(.+?)\*/g, "$1")      // Remove italic markers
       .replace(/`(.+?)`/g, "$1")        // Remove code markers
@@ -669,7 +669,7 @@ export default function LiveAI() {
         
         // Clean up display text
         aiMessage = aiMessage
-          .replace(/LEARNORY/g, "Learnory")
+          .replace(/LENORY/g, "Learnory")
           .trim();
         
         if (!aiMessage || aiMessage.trim() === "") {
@@ -756,7 +756,7 @@ export default function LiveAI() {
     });
   };
 
-  // Handle submission of file + description to LEARNORY API
+  // Handle submission of file + description to LENORY API
   const handleAnalyzeWithDescription = async () => {
     if (!uploadedFile || !fileDescription.trim()) {
       toast({
@@ -775,7 +775,7 @@ export default function LiveAI() {
       formData.append("description", fileDescription);
       
       toast({
-        title: "🔍 Analyzing with LEARNORY...",
+        title: "🔍 Analyzing with LENORY...",
         description: `Processing ${uploadedFile.name}...`,
       });
 
@@ -810,7 +810,7 @@ export default function LiveAI() {
       await playAudio(displayResponse);
 
       toast({
-        title: "✅ LEARNORY Analysis Complete",
+        title: "✅ LENORY Analysis Complete",
         description: "Response generated and read aloud",
       });
 
@@ -877,7 +877,7 @@ export default function LiveAI() {
                 {isSpeaking && (
                   <>
                     <Volume2 className="w-4 h-4 animate-pulse text-blue-500" />
-                    <span>LEARNORY Speaking...</span>
+                    <span>LENORY Speaking...</span>
                   </>
                 )}
                 {isProcessing && (
@@ -1200,7 +1200,7 @@ export default function LiveAI() {
                   {isProcessing && (
                     <div className={`text-xs p-3 rounded animate-pulse ${isDarkMode ? "bg-slate-700" : "bg-white"}`}>
                       <p className={isDarkMode ? "text-slate-300" : "text-slate-700"}>
-                        ⏳ Analyzing with LEARNORY...
+                        ⏳ Analyzing with LENORY...
                       </p>
                     </div>
                   )}
@@ -1217,7 +1217,7 @@ export default function LiveAI() {
                       📎 File: <span className="text-purple-600 dark:text-purple-400">{uploadedFile.name}</span>
                     </p>
                     <p className={`text-xs ${isDarkMode ? "text-slate-400" : "text-slate-600"}`}>
-                      Now describe what you need help with. This helps LEARNORY give you better responses.
+                      Now describe what you need help with. This helps LENORY give you better responses.
                     </p>
                   </div>
 
@@ -1243,7 +1243,7 @@ export default function LiveAI() {
                       data-testid="button-analyze-with-description"
                     >
                       <Send className="w-4 h-4" />
-                      {isProcessing ? "Analyzing..." : "Analyze with LEARNORY"}
+                      {isProcessing ? "Analyzing..." : "Analyze with LENORY"}
                     </Button>
 
                     <Button
@@ -1262,7 +1262,7 @@ export default function LiveAI() {
                   {isProcessing && (
                     <div className={`text-xs p-3 rounded animate-pulse ${isDarkMode ? "bg-slate-700" : "bg-white"}`}>
                       <p className={isDarkMode ? "text-slate-300" : "text-slate-700"}>
-                        🔍 LEARNORY is analyzing your file and request...
+                        🔍 LENORY is analyzing your file and request...
                       </p>
                     </div>
                   )}

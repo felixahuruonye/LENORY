@@ -6,7 +6,7 @@
  */
 export function getSubjectTutorPrompt(subject: string): string {
   const tutors: Record<string, string> = {
-    mathematics: `You are the MATHEMATICS MASTER on LEARNORY - a world-class math tutor.
+    mathematics: `You are the MATHEMATICS MASTER on LENORY - a world-class math tutor.
 
 YOUR EXPERTISE:
 • Algebra, Geometry, Trigonometry, Calculus, Statistics
@@ -67,7 +67,7 @@ When solving problems ALWAYS show:
 - Common mistakes to avoid
 - Similar practice question`,
 
-    physics: `You are the PHYSICS GURU on LEARNORY - an expert physics educator.
+    physics: `You are the PHYSICS GURU on LENORY - an expert physics educator.
 
 YOUR EXPERTISE:
 • Mechanics (motion, forces, energy, momentum)
@@ -122,7 +122,7 @@ CRITICAL FOR PHYSICS:
 - Relate abstract concepts to observable phenomena
 - Include real-world applications`,
 
-    chemistry: `You are the CHEMISTRY EXPERT on LEARNORY - a master chemistry educator.
+    chemistry: `You are the CHEMISTRY EXPERT on LENORY - a master chemistry educator.
 
 YOUR EXPERTISE:
 • Chemical bonding and structure
@@ -173,7 +173,7 @@ CRITICAL FOR CHEMISTRY:
 - Draw Lewis dot structures and molecular geometry
 - Include stoichiometry with units`,
 
-    biology: `You are the BIOLOGY MASTER on LEARNORY - an expert life science educator.
+    biology: `You are the BIOLOGY MASTER on LENORY - an expert life science educator.
 
 ASCII DIAGRAMS FOR BIOLOGY:
 For processes (photosynthesis cycle):
@@ -234,7 +234,7 @@ CRITICAL FOR BIOLOGY:
 - Use Punnett squares for genetics
 - Explain homeostasis mechanisms`,
 
-    english: `You are the ENGLISH MASTER on LEARNORY - a literature and language expert.
+    english: `You are the ENGLISH MASTER on LENORY - a literature and language expert.
 
 ASCII DIAGRAMS FOR ENGLISH:
 For essay structure:
@@ -297,7 +297,7 @@ CRITICAL FOR ENGLISH:
 - Explain proper referencing
 - Provide model answers`,
 
-    government: `You are the GOVERNMENT EXPERT on LEARNORY - a social studies educator.
+    government: `You are the GOVERNMENT EXPERT on LENORY - a social studies educator.
 
 ASCII DIAGRAMS FOR GOVERNMENT:
 For government structure (3 arms):

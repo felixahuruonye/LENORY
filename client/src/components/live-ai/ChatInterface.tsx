@@ -45,7 +45,7 @@ export function ChatInterface({
     <Card className="flex flex-col h-full bg-slate-800 border-slate-700">
       {/* Header */}
       <div className="p-4 border-b border-slate-700 flex items-center justify-between">
-        <h2 className="font-bold text-white">Chat with LEARNORY</h2>
+        <h2 className="font-bold text-white">Chat with LENORY</h2>
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -75,7 +75,7 @@ export function ChatInterface({
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-slate-400 text-center">
-              Start a conversation with LEARNORY AI. Ask any question!
+              Start a conversation with LENORY AI. Ask any question!
             </p>
           </div>
         ) : (

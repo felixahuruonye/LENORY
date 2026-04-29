@@ -35,8 +35,8 @@ interface WebSearchResponse {
   summary: string;
 }
 
-// Generate exam questions with LEARNORY (Gemini AI) - Real questions per subject
-export async function generateQuestionsWithLEARNORY(
+// Generate exam questions with LENORY (Gemini AI) - Real questions per subject
+export async function generateQuestionsWithLENORY(
   examType: string,
   subject: string,
   count: number = 250
@@ -52,7 +52,7 @@ export async function generateQuestionsWithLEARNORY(
     const batchSize = 50; // Generate in batches of 50 to avoid token limits
     const numBatches = Math.ceil(totalCount / batchSize);
     
-    console.log(`📚 LEARNORY generating ${totalCount} ${subject} questions (${numBatches} batches) for ${examType}...`);
+    console.log(`📚 LENORY generating ${totalCount} ${subject} questions (${numBatches} batches) for ${examType}...`);
 
     // Specific prompts for each exam type and subject to ensure accurate questions
     const subjectPrompts: Record<string, string> = {
@@ -190,16 +190,16 @@ REQUIREMENTS:
       });
     }
 
-    console.log(`✅ LEARNORY generated ${validQuestions.length} validated questions for ${subject}`);
+    console.log(`✅ LENORY generated ${validQuestions.length} validated questions for ${subject}`);
     return validQuestions;
   } catch (error) {
-    console.error(`❌ LEARNORY error for ${subject}:`, error);
+    console.error(`❌ LENORY error for ${subject}:`, error);
     throw error;
   }
 }
 
-// Grade answers with LEARNORY (Gemini AI) - Provides AI-powered analysis and explanations
-export async function gradeAnswersWithLEARNORY(
+// Grade answers with LENORY (Gemini AI) - Provides AI-powered analysis and explanations
+export async function gradeAnswersWithLENORY(
   questions: Array<{ id: string; question: string; options: string[]; correct: string; explanation?: string }>,
   answers: Record<string, string>
 ): Promise<{
@@ -251,7 +251,7 @@ export async function gradeAnswersWithLEARNORY(
 
     const localScore = Math.round((correctCount / questions.length) * 100);
 
-    const prompt = `You are LEARNORY - an expert educational AI tutor. Grade these exam answers and provide detailed, personalized feedback. Student got ${localScore}% correct (${correctCount}/${questions.length}).
+    const prompt = `You are LENORY - an expert educational AI tutor. Grade these exam answers and provide detailed, personalized feedback. Student got ${localScore}% correct (${correctCount}/${questions.length}).
 
 QUESTIONS AND ANSWERS:
 ${questionsData}
@@ -263,7 +263,7 @@ Analyze the answers and return ONLY valid JSON (no other text):
     {"questionId": "1", "isCorrect": true, "explanation": "Well done...", "keyLearning": "Key insight..."},
     {"questionId": "2", "isCorrect": false, "explanation": "The correct answer is...", "keyLearning": "Important concept..."}
   ],
-  "summary": "Overall performance summary with personalized insights from LEARNORY",
+  "summary": "Overall performance summary with personalized insights from LENORY",
   "strongTopics": ["Topic 1", "Topic 2"],
   "weakTopics": ["Topic 3"],
   "recommendations": ["Study recommendation 1", "Study recommendation 2", "Study recommendation 3"]
@@ -278,16 +278,16 @@ Analyze the answers and return ONLY valid JSON (no other text):
     if (!responseText) throw new Error("Empty grading response");
 
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Could not extract JSON from LEARNORY grading");
+    if (!jsonMatch) throw new Error("Could not extract JSON from LENORY grading");
 
     const gradingData = JSON.parse(jsonMatch[0]);
     // Ensure score is set to calculated value
     gradingData.score = localScore;
-    console.log(`✅ LEARNORY grading complete: ${gradingData.score}%`);
+    console.log(`✅ LENORY grading complete: ${gradingData.score}%`);
 
     return gradingData;
   } catch (error) {
-    console.error("LEARNORY grading error:", error);
+    console.error("LENORY grading error:", error);
     throw error;
   }
 }
@@ -355,20 +355,20 @@ Response format (ONLY output valid JSON, no other text):
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("Calling LEARNORY AI with prompt length:", prompt.length);
+    console.log("Calling LENORY AI with prompt length:", prompt.length);
     
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: fullPrompt,
     });
 
-    console.log("LEARNORY AI response received, extracting text...");
+    console.log("LENORY AI response received, extracting text...");
     
     const responseText = response.text;
     
     if (!responseText) {
-      console.error("Empty response from LEARNORY AI");
-      throw new Error("Empty response from LEARNORY AI");
+      console.error("Empty response from LENORY AI");
+      throw new Error("Empty response from LENORY AI");
     }
     
     console.log("Response text length:", responseText.length);
@@ -377,7 +377,7 @@ Response format (ONLY output valid JSON, no other text):
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.error("Could not extract JSON from response:", responseText.substring(0, 500));
-      throw new Error(`Failed to extract JSON from LEARNORY AI response`);
+      throw new Error(`Failed to extract JSON from LENORY AI response`);
     }
 
     console.log("JSON extracted, parsing...");
@@ -392,7 +392,7 @@ Response format (ONLY output valid JSON, no other text):
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error("Error generating website with LEARNORY AI:", errorMsg);
+    console.error("Error generating website with LENORY AI:", errorMsg);
     throw error;
   }
 }
@@ -412,25 +412,25 @@ Explain it like you're teaching someone who has never written code before. Be de
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("Calling LEARNORY AI to explain code...");
+    console.log("Calling LENORY AI to explain code...");
     
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
     });
 
-    console.log("LEARNORY AI response received for code explanation");
+    console.log("LENORY AI response received for code explanation");
     
     const explanation = response.text;
     
     if (!explanation) {
-      throw new Error("Empty response from LEARNORY AI");
+      throw new Error("Empty response from LENORY AI");
     }
 
     return explanation;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error("Error explaining code with LEARNORY AI:", errorMsg);
+    console.error("Error explaining code with LENORY AI:", errorMsg);
     throw error;
   }
 }
@@ -442,7 +442,7 @@ interface DebugResult {
   steps: string[];
 }
 
-export async function debugCodeWithLEARNORY(html: string, css: string, js: string, debugPrompt: string): Promise<DebugResult> {
+export async function debugCodeWithLENORY(html: string, css: string, js: string, debugPrompt: string): Promise<DebugResult> {
   try {
     if (!apiKey) {
       throw new Error("Gemini API key not configured");
@@ -517,7 +517,7 @@ interface TopicExplanationResult {
   relatedTopics: string[];
 }
 
-export async function explainTopicWithLEARNORY(subject: string, topic: string, difficulty: string = "medium"): Promise<TopicExplanationResult> {
+export async function explainTopicWithLENORY(subject: string, topic: string, difficulty: string = "medium"): Promise<TopicExplanationResult> {
   const prompt = `Explain the topic "${topic}" in ${subject} at ${difficulty} level.
 
 Format: {"explanation": "...", "examples": ["ex1", "ex2"], "relatedTopics": ["topic1", "topic2"]}`;
@@ -550,13 +550,13 @@ interface ImageGenerationResult {
   prompt: string;
 }
 
-export async function generateImageWithLEARNORY(prompt: string): Promise<ImageGenerationResult> {
+export async function generateImageWithLENORY(prompt: string): Promise<ImageGenerationResult> {
   try {
     if (!apiKey) {
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("🎨 LEARNORY: Generating image with Stability AI for:", prompt);
+    console.log("🎨 LENORY: Generating image with Stability AI for:", prompt);
     
     // Use Gemini to enhance and refine the image prompt
     const enhancedPromptResponse = await ai.models.generateContent({
@@ -772,13 +772,13 @@ interface GeneratedLessonData {
   summary: string;
 }
 
-export async function fixTextWithLEARNORY(text: string): Promise<{ correctedText: string; explanation: string }> {
+export async function fixTextWithLENORY(text: string): Promise<{ correctedText: string; explanation: string }> {
   try {
     if (!apiKey) {
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("🔧 Fixing text with LEARNORY AI...");
+    console.log("🔧 Fixing text with LENORY AI...");
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -861,9 +861,9 @@ Make the objectives, key points, and summary educational, clear, and useful for 
   }
 }
 
-// Main chat function with LEARNORY system integration
+// Main chat function with LENORY system integration
 export async function chatWithAI(messages: Array<{role: string; content: string}>): Promise<string> {
-  const { generateLEARNORYSystemPrompt } = await import("./learnorySystem");
+  const { generateLENORYSystemPrompt } = await import("./learnorySystem");
   
   const lastMessage = messages[messages.length - 1]?.content || "";
   
@@ -886,8 +886,8 @@ export async function chatWithAI(messages: Array<{role: string; content: string}
     }
   }
 
-  // Generate comprehensive LEARNORY system prompt
-  const systemPrompt = generateLEARNORYSystemPrompt({
+  // Generate comprehensive LENORY system prompt
+  const systemPrompt = generateLENORYSystemPrompt({
     subject: detectedSubject,
     userLevel: "intermediate",
     weakTopics: [],

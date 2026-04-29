@@ -178,7 +178,7 @@ export function AvatarDisplay({ voice, isActive, isListening, isMouthOpen = fals
       />
       <div className={`text-center ${isActive ? "animate-pulse" : ""}`}>
         <p className="text-sm font-semibold text-purple-300">
-          {isActive ? "LEARNORY AI Tutor" : "Starting..."}
+          {isActive ? "LENORY AI Tutor" : "Starting..."}
         </p>
         <p className="text-xs text-slate-400">
           {isListening ? "🎤 Listening..." : "Ready to help"}

@@ -2,7 +2,7 @@ import type { RequestHandler, Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-export function generateLernoryId(): string {
+export function generateLenoryId(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let id = 'LRN-';
   for (let i = 0; i < 6; i++) {
@@ -13,14 +13,14 @@ export function generateLernoryId(): string {
 
 const DEVICE_SECRET = process.env.SESSION_SECRET || 'lernory-device-secret';
 
-export function createDeviceToken(payload: { userId: string; lernoryId: string; email: string }): string {
+export function createDeviceToken(payload: { userId: string; lenoryId: string; email: string }): string {
   const data = JSON.stringify({ ...payload, iat: Date.now() });
   const encoded = Buffer.from(data).toString('base64url');
   const sig = crypto.createHmac('sha256', DEVICE_SECRET).update(encoded).digest('hex');
   return `${encoded}.${sig}`;
 }
 
-export function verifyDeviceToken(token: string): { userId: string; lernoryId: string; email: string } | null {
+export function verifyDeviceToken(token: string): { userId: string; lenoryId: string; email: string } | null {
   try {
     const [encoded, sig] = token.split('.');
     if (!encoded || !sig) return null;

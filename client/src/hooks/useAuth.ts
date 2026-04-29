@@ -20,7 +20,7 @@ function userFromAuth(authUser: any): User {
     subscriptionTier: meta.subscription_tier || 'free',
     subscriptionExpiresAt: null,
     paystackCustomerId: null,
-    lernoryId: meta.lernory_id || null,
+    lenoryId: meta.lenory_id || null,
     createdAt: now,
     updatedAt: now,
   };

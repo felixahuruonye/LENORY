@@ -37,16 +37,16 @@ export function GetStartedGuide({ open, onOpenChange }: GetStartedGuideProps) {
   const steps = [
     {
       id: "welcome",
-      title: "Welcome to LERNORY ULTRA!",
+      title: "Welcome to LENORY ULTRA!",
       description: "Your AI-powered learning companion",
       icon: Star,
-      content: `LERNORY ULTRA is an advanced EdTech platform with AI tutoring, exams, memory tracking, and more. Let's explore what you can do!`,
+      content: `LENORY ULTRA is an advanced EdTech platform with AI tutoring, exams, memory tracking, and more. Let's explore what you can do!`,
       color: "from-blue-500 to-cyan-500",
     },
     {
       id: "chat",
       title: "💬 Advanced Chat",
-      description: "Ask LERNORY anything",
+      description: "Ask LENORY anything",
       icon: MessageSquare,
       content: `Chat with AI in multiple modes:
 • AI Tutor - Get explanations for any topic
@@ -123,7 +123,7 @@ export function GetStartedGuide({ open, onOpenChange }: GetStartedGuideProps) {
       title: "💡 Pro Tips",
       description: "Maximize your learning",
       icon: Lightbulb,
-      content: `Get the most out of LERNORY:
+      content: `Get the most out of LENORY:
 ✓ Save chat histories to Memory Panel
 ✓ Practice regularly with CBT exams
 ✓ Track your progress in Memory
@@ -136,7 +136,7 @@ export function GetStartedGuide({ open, onOpenChange }: GetStartedGuideProps) {
     {
       id: "start",
       title: "Ready to Get Started?",
-      description: "Let's explore LERNORY!",
+      description: "Let's explore LENORY!",
       icon: CheckCircle2,
       content: `You're all set! Start with:
 1. Ask a question in Advanced Chat

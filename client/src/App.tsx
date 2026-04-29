@@ -33,6 +33,7 @@ import LiveAI from "@/pages/LiveAI";
 import CBTMode from "@/pages/CBTMode";
 import GeneratedLessons from "@/pages/GeneratedLessons";
 import AdminDashboard from "@/pages/AdminDashboard";
+import VideoGeneration from "@/pages/VideoGeneration";
 import AuthCallback from "@/pages/AuthCallback";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
@@ -112,6 +113,7 @@ function Router() {
       <Route path="/cbt-mode" component={CBTMode} />
       <Route path="/notifications" component={Notifications} />
       <Route path="/live-ai" component={LiveAI} />
+      <Route path="/video-gen" component={VideoGeneration} />
       <Route>
         <Redirect to="/dashboard" />
       </Route>

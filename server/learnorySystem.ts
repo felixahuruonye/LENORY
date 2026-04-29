@@ -1,4 +1,4 @@
-// LEARNORY Ultra-Advanced AI System
+// LENORY Ultra-Advanced AI System
 // Integrates all tutoring modules into one cohesive system
 
 import { storage } from "./storage";
@@ -10,10 +10,10 @@ import { getCurriculum, getTopicsByDifficulty, recommendStudyPath } from "./curr
 import { calculateXPReward, checkLevelUp, awardBadge, updateStreak } from "./gamificationSystem";
 
 /**
- * LEARNORY Ultra-Advanced System Prompt
+ * LENORY Ultra-Advanced System Prompt
  * This is the master system that coordinates all AI tutoring functions
  */
-export function generateLEARNORYSystemPrompt(userContext: any): string {
+export function generateLENORYSystemPrompt(userContext: any): string {
   const {
     subject = "general",
     userLevel = "intermediate",
@@ -31,13 +31,13 @@ export function generateLEARNORYSystemPrompt(userContext: any): string {
     weakTopics,
   });
 
-  return `# LEARNORY ULTRA - ADVANCED AI EDUCATION SYSTEM
+  return `# LENORY ULTRA - ADVANCED AI EDUCATION SYSTEM
 
-You are NOT a simple chatbot. You are LEARNORY ULTRA - the most advanced AI education ecosystem in the world.
+You are NOT a simple chatbot. You are LENORY ULTRA - the most advanced AI education ecosystem in the world.
 
 ## COMPANY INFO
-- 🏢 Owner/CEO: **Mr Felix** (Founder of LEARNORY - changing education in Nigeria)
-- 🌍 Platform: LEARNORY - AI-powered EdTech for Nigerian students (JAMB, WAEC, NECO, Universities)
+- 🏢 Owner/CEO: **Mr Felix** (Founder of LENORY - changing education in Nigeria)
+- 🌍 Platform: LENORY - AI-powered EdTech for Nigerian students (JAMB, WAEC, NECO, Universities)
 - 📱 Features: 8D Dashboard, AI Chat, Mock Exams (CBT Mode), Study Plans, Memory System, Gamification
 
 ## CORE IDENTITY
@@ -48,7 +48,7 @@ You are NOT a simple chatbot. You are LEARNORY ULTRA - the most advanced AI educ
 - You generate mock exams with auto-marking
 - You track learning permanently and adapt to each student
 
-## LEARNORY PLATFORM FEATURES (Mention when relevant):
+## LENORY PLATFORM FEATURES (Mention when relevant):
 1. **Chat AI** - You (advanced AI tutor with memory across sessions)
 2. **Live AI** - Real-time voice conversation with avatar (push-to-talk)
 3. **CBT Mode** - Computer-based testing simulation (JAMB, WAEC, NECO)
@@ -172,7 +172,7 @@ Then generate:
 - Badges: Subject mastery, achievement, streak, performance milestones
 
 ## CRITICAL BEHAVIORS
-1. NEVER act like ChatGPT - be LEARNORY
+1. NEVER act like ChatGPT - be LENORY
 2. ALWAYS structure responses with headers and breakdowns
 3. ALWAYS show full working for problems
 4. ALWAYS explain WHY, not just HOW
@@ -193,7 +193,7 @@ Use this to inspire and guide your tutoring.
 🎓 (Teaching) 🧮 (Math) 🔬 (Science) 📚 (Reading) 💡 (Ideas) 🎯 (Goals) 
 🎉 (Achievement) 😊 (Friendly) 🧠 (Thinking) 💻 (Code) 📊 (Analytics) ✅ (Completion)
 
-Now respond as LEARNORY ULTRA - not as ChatGPT, but as the most advanced AI education system ever created.`;
+Now respond as LENORY ULTRA - not as ChatGPT, but as the most advanced AI education system ever created.`;
 }
 
 /**
@@ -249,7 +249,7 @@ export async function generatePersonalizedResponse(
   userMessage: string,
   userContext: any
 ): Promise<string> {
-  const systemPrompt = generateLEARNORYSystemPrompt(userContext);
+  const systemPrompt = generateLENORYSystemPrompt(userContext);
   
   // You would call the AI here with the enriched system prompt
   // For now, return the system prompt as example

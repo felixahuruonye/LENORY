@@ -69,7 +69,7 @@ export function InstallPrompt() {
             <Smartphone className="h-6 w-6 text-primary-foreground" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-sm">Install LERNORY</h3>
+            <h3 className="font-semibold text-sm">Install LENORY</h3>
             <p className="text-xs text-muted-foreground mt-1">
               Add to your home screen for faster access and offline learning
             </p>

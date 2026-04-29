@@ -517,11 +517,11 @@ export default function LiveSession() {
     setIsProcessing(true);
     toast({
       title: "Generating lesson",
-      description: "LEARNORY AI is processing your text and creating a lesson...",
+      description: "LENORY AI is processing your text and creating a lesson...",
     });
 
     try {
-      // Use LEARNORY AI to generate lesson from manual text
+      // Use LENORY AI to generate lesson from manual text
       const response = await apiRequest("POST", "/api/generate-lesson-from-text", {
         text: manualTranscriptInput,
         recordingId: recordings.length > 0 ? recordings[0].id : null,

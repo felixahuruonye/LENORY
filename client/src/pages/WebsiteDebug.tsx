@@ -173,7 +173,7 @@ export default function WebsiteDebug() {
                     <div className="h-full flex items-center justify-center text-center text-muted-foreground">
                       <div>
                         <Zap className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                        <p>Ask LEARNORY AI to debug or improve your code</p>
+                        <p>Ask LENORY AI to debug or improve your code</p>
                         <p className="text-xs mt-2">
                           Examples: "Add a button click handler", "Make the text responsive", "Fix the layout"
                         </p>
@@ -210,7 +210,7 @@ export default function WebsiteDebug() {
                 {/* Input Area */}
                 <div className="border-t p-4 space-y-3">
                   <Textarea
-                    placeholder="Ask LEARNORY to debug, fix issues, or improve your code..."
+                    placeholder="Ask LENORY to debug, fix issues, or improve your code..."
                     value={debugPrompt}
                     onChange={(e) => setDebugPrompt(e.target.value)}
                     onKeyDown={(e) => {
@@ -236,7 +236,7 @@ export default function WebsiteDebug() {
                       ) : (
                         <>
                           <Send className="h-4 w-4 mr-2" />
-                          Ask LEARNORY
+                          Ask LENORY
                         </>
                       )}
                     </Button>

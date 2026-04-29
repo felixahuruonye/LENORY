@@ -9,7 +9,7 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { storage } from "./storage";
-import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLernoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
+import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
   chatWithAI,
   chatWithAISmartFallback,
@@ -22,16 +22,16 @@ import {
   generateFlashcards,
   generateWebsiteWithGemini,
   explainCodeForBeginners,
-  debugCodeWithLEARNORY,
-  explainTopicWithLEARNORY,
-  generateImageWithLEARNORY,
+  debugCodeWithLENORY,
+  explainTopicWithLENORY,
+  generateImageWithLENORY,
   generateSmartChatTitle,
   analyzeFileWithGeminiVision,
   searchInternetWithGemini,
   generateLessonFromTextWithGemini,
-  fixTextWithLEARNORY,
-  gradeAnswersWithLEARNORY,
-  generateQuestionsWithLEARNORY,
+  fixTextWithLENORY,
+  gradeAnswersWithLENORY,
+  generateQuestionsWithLENORY,
   chatWithGemini,
 } from "./gemini";
 import { nanoid } from "nanoid";
@@ -72,7 +72,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ─── Lernory Auth Routes ────────────────────────────────────────────────────
+  // ─── Lenory Auth Routes ────────────────────────────────────────────────────
 
   // Helper: get Supabase admin client
   async function getSupabaseAdmin() {
@@ -83,7 +83,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
   }
 
-  // Save device session + generate Lernory ID if missing (auth required)
+  // Save device session + generate Lenory ID if missing (auth required)
   app.post('/api/auth/save-device', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -97,23 +97,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { data: userData, error: userErr } = await admin.auth.admin.getUserById(userId);
       if (userErr || !userData?.user) return res.status(404).json({ message: 'User not found' });
 
-      let lernoryId = userData.user.user_metadata?.lernory_id;
+      let lenoryId = userData.user.user_metadata?.lenory_id;
       let firstName = userData.user.user_metadata?.full_name?.split(' ')[0] ||
                       userData.user.user_metadata?.name?.split(' ')[0] ||
                       userData.user.user_metadata?.firstName || '';
 
-      // Generate Lernory ID if not set
-      if (!lernoryId) {
-        lernoryId = generateLernoryId();
+      // Generate Lenory ID if not set
+      if (!lenoryId) {
+        lenoryId = generateLenoryId();
         await admin.auth.admin.updateUserById(userId, {
-          user_metadata: { ...userData.user.user_metadata, lernory_id: lernoryId },
+          user_metadata: { ...userData.user.user_metadata, lenory_id: lenoryId },
         });
       }
 
       // Create signed device token (no DB needed)
-      const deviceToken = createDeviceToken({ userId, lernoryId, email: userEmail });
+      const deviceToken = createDeviceToken({ userId, lenoryId, email: userEmail });
 
-      res.json({ deviceToken, lernoryId, firstName });
+      res.json({ deviceToken, lenoryId, firstName });
     } catch (error) {
       console.error('Save device error:', error);
       res.status(500).json({ message: 'Failed to save device session' });
@@ -137,7 +137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error || !userData?.user) return res.json({ valid: false });
 
       const user = userData.user;
-      const lernoryId = user.user_metadata?.lernory_id || payload.lernoryId;
+      const lenoryId = user.user_metadata?.lenory_id || payload.lenoryId;
       const firstName = user.user_metadata?.full_name?.split(' ')[0] ||
                         user.user_metadata?.name?.split(' ')[0] ||
                         user.user_metadata?.firstName || '';
@@ -146,7 +146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         valid: true,
         userId: payload.userId,
         email: user.email,
-        lernoryId,
+        lenoryId,
         firstName,
       });
     } catch (error) {
@@ -154,14 +154,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Lernory ID lookup - returns masked email (Supabase admin search)
-  app.get('/api/auth/lernory-lookup/:lernoryId', async (req: Request, res: Response) => {
+  // Lenory ID lookup - returns masked email (Supabase admin search)
+  app.get('/api/auth/lernory-lookup/:lenoryId', async (req: Request, res: Response) => {
     try {
-      const { lernoryId } = req.params;
+      const { lenoryId } = req.params;
       const admin = await getSupabaseAdmin();
       if (!admin) return res.status(500).json({ found: false });
 
-      // Search users by metadata lernory_id - paginate through users
+      // Search users by metadata lenory_id - paginate through users
       let page = 1;
       const perPage = 1000;
       let found = false;
@@ -172,7 +172,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
         if (error || !data?.users?.length) break;
         
-        const match = data.users.find(u => u.user_metadata?.lernory_id === lernoryId.toUpperCase());
+        const match = data.users.find(u => u.user_metadata?.lenory_id === lenoryId.toUpperCase());
         if (match) {
           const email = match.email || '';
           const [localPart, domain] = email.split('@');
@@ -191,29 +191,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (!found) return res.status(404).json({ found: false });
-      res.json({ found: true, maskedEmail, firstName, lernoryId: lernoryId.toUpperCase() });
+      res.json({ found: true, maskedEmail, firstName, lenoryId: lenoryId.toUpperCase() });
     } catch (error) {
       res.status(500).json({ found: false, error: 'Lookup failed' });
     }
   });
 
-  // Lernory ID server-side login (keeps email private, uses Supabase admin search)
+  // Lenory ID server-side login (keeps email private, uses Supabase admin search)
   app.post('/api/auth/lernory-login', async (req: Request, res: Response) => {
     try {
-      const { lernoryId, password } = req.body;
-      if (!lernoryId || !password) return res.status(400).json({ message: 'Lernory ID and password required' });
+      const { lenoryId, password } = req.body;
+      if (!lenoryId || !password) return res.status(400).json({ message: 'Lenory ID and password required' });
 
       const admin = await getSupabaseAdmin();
       if (!admin) return res.status(500).json({ message: 'Auth not configured' });
 
-      // Find user by lernory_id in metadata
+      // Find user by lenory_id in metadata
       let foundEmail: string | null = null;
       let foundFirstName = '';
       let page = 1;
       while (true) {
         const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
         if (error || !data?.users?.length) break;
-        const match = data.users.find(u => u.user_metadata?.lernory_id === lernoryId.toUpperCase());
+        const match = data.users.find(u => u.user_metadata?.lenory_id === lenoryId.toUpperCase());
         if (match) {
           foundEmail = match.email || null;
           foundFirstName = match.user_metadata?.full_name?.split(' ')[0] ||
@@ -224,7 +224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         page++;
       }
 
-      if (!foundEmail) return res.status(404).json({ message: 'No account found with this Lernory ID' });
+      if (!foundEmail) return res.status(404).json({ message: 'No account found with this Lenory ID' });
 
       // Authenticate via Supabase with anon key
       const { createClient } = await import('@supabase/supabase-js');
@@ -242,7 +242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         firstName: foundFirstName,
       });
     } catch (error) {
-      console.error('Lernory login error:', error);
+      console.error('Lenory login error:', error);
       res.status(500).json({ message: 'Login failed' });
     }
   });
@@ -431,7 +431,7 @@ ${importantTopics.map((topic, i) => `${i + 1}. "${topic.substring(0, 150)}${topi
       const crossSessionMemory = extractCrossSesssionMemory();
       
       // Build personalized system message with CROSS-SESSION MEMORY INSTRUCTIONS
-      let systemMessage = `You are LEARNORY, an advanced AI tutor. You are speaking with ${userName}.
+      let systemMessage = `You are LENORY, an advanced AI tutor. You are speaking with ${userName}.
 
 ## MEMORY & CONTEXT:
 - THIS CONVERSATION has ${history.length} messages so far. Reference and build upon EVERYTHING discussed in this session.
@@ -533,7 +533,7 @@ If they ask about similar topics or reference past conversations, remind them wh
       }
 
       // Check if user asked for image explanation
-      // FIX: Don't add LEARNORY branding to generated images - just return the response
+      // FIX: Don't add LENORY branding to generated images - just return the response
       const imageKeywords = ["explain with image", "show me", "visualize", "draw", "illustrate", "with image", "with a picture", "with diagram"];
       const shouldGenerateImage = imageKeywords.some(keyword => content.toLowerCase().includes(keyword));
       
@@ -542,9 +542,9 @@ If they ask about similar topics or reference past conversations, remind them wh
         try {
           console.log("🎨 Generating image for chat response...");
           const imagePrompt = `Create a visual representation for: ${aiResponse.substring(0, 200)}`;
-          const image = await generateImageWithLEARNORY(imagePrompt);
+          const image = await generateImageWithLENORY(imagePrompt);
           
-          // Store generated image - NO LEARNORY BRANDING ADDED
+          // Store generated image - NO LENORY BRANDING ADDED
           await storage.createGeneratedImage({
             userId,
             prompt: imagePrompt,
@@ -607,7 +607,7 @@ If they ask about similar topics or reference past conversations, remind them wh
         }
       }
 
-      // CRITICAL FIX: Don't add LEARNORY branding to the AI response itself
+      // CRITICAL FIX: Don't add LENORY branding to the AI response itself
       // The response should be pure - branding stays in UI, not in generated content
       // This prevents AI from overwriting user's requested branding on websites, images, PDFs
       res.json({ 
@@ -1078,7 +1078,7 @@ If they ask about similar topics or reference past conversations, remind them wh
           analysis = await chatWithAI([
             { role: "user", content: `Please help analyze this file: ${fileContext}` }
           ]);
-          analysis = analysis || "File analyzed with LEARNORY";
+          analysis = analysis || "File analyzed with LENORY";
         } catch (fallbackErr) {
           console.error("Fallback analysis failed:", fallbackErr);
           usedApi = "failed";
@@ -1229,9 +1229,9 @@ If they ask about similar topics or reference past conversations, remind them wh
         return res.status(404).json({ message: "Website not found" });
       }
 
-      console.log("🔍 LEARNORY AI Debug Started:", debugPrompt.substring(0, 50));
+      console.log("🔍 LENORY AI Debug Started:", debugPrompt.substring(0, 50));
       
-      const debugResult = await debugCodeWithLEARNORY(
+      const debugResult = await debugCodeWithLENORY(
         website.htmlCode,
         website.cssCode,
         website.jsCode || "",
@@ -1871,7 +1871,7 @@ Generate a syllabus with:
       }
 
       // Create unique reference
-      const reference = `LERNORY_${nanoid(16)}`;
+      const reference = `LENORY_${nanoid(16)}`;
 
       // Create purchase with pending status
       const purchase = await storage.createPurchase({
@@ -1996,7 +1996,7 @@ Generate a syllabus with:
     }
   });
 
-  // Generate lesson from text using LEARNORY AI (for manual text entries)
+  // Generate lesson from text using LENORY AI (for manual text entries)
   app.post('/api/generate-lesson-from-text', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -2006,7 +2006,7 @@ Generate a syllabus with:
         return res.status(400).json({ message: "Text is required" });
       }
 
-      console.log("📚 Generating lesson from manual text with LEARNORY AI...");
+      console.log("📚 Generating lesson from manual text with LENORY AI...");
       const geminiData = await generateLessonFromTextWithGemini(text);
 
       const lesson = await storage.createGeneratedLesson({
@@ -2027,7 +2027,7 @@ Generate a syllabus with:
     }
   });
 
-  // AI Fix endpoint - Fix text with LEARNORY AI
+  // AI Fix endpoint - Fix text with LENORY AI
   app.post('/api/ai-fix-text', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { text } = req.body;
@@ -2036,8 +2036,8 @@ Generate a syllabus with:
         return res.status(400).json({ message: "Text is required" });
       }
 
-      console.log("🔧 Fixing text with LEARNORY AI...");
-      const fixed = await fixTextWithLEARNORY(text);
+      console.log("🔧 Fixing text with LENORY AI...");
+      const fixed = await fixTextWithLENORY(text);
 
       res.json(fixed);
     } catch (error) {
@@ -2189,11 +2189,11 @@ KEY_WORDS: [keywords separated by commas]`,
       }
 
       // Generate explanation
-      const explanation = await explainTopicWithLEARNORY(subject, topic, difficulty);
+      const explanation = await explainTopicWithLENORY(subject, topic, difficulty);
       
       // @ts-ignore - Generate image with provided topic as prompt
       const imagePrompt = `${subject} - ${topic}`;
-      const image = await generateImageWithLEARNORY(imagePrompt);
+      const image = await generateImageWithLENORY(imagePrompt);
 
       // Store explanation
       // @ts-ignore - Store explanation with available fields
@@ -2239,7 +2239,7 @@ KEY_WORDS: [keywords separated by commas]`,
         return res.status(400).json({ message: "Prompt is required" });
       }
 
-      const image = await generateImageWithLEARNORY(prompt);
+      const image = await generateImageWithLENORY(prompt);
       
       const stored = await storage.createGeneratedImage({
         userId,
@@ -2708,7 +2708,7 @@ KEY_WORDS: [keywords separated by commas]`,
     }
   });
 
-  // CBT Mode API Routes - Generate questions with LEARNORY AI
+  // CBT Mode API Routes - Generate questions with LENORY AI
   // (Other CBT methods simplified - focusing on question generation for MVP)
 
   // Recording API endpoints
@@ -2827,7 +2827,7 @@ KEY_WORDS: [keywords separated by commas]`,
     }
   });
 
-  // Generate exam questions with LEARNORY - Feature: Real exam questions generated by AI (up to 250 per subject)
+  // Generate exam questions with LENORY - Feature: Real exam questions generated by AI (up to 250 per subject)
   app.post('/api/cbt/generate-questions', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { examType, subject, count = 250 } = req.body;
@@ -2837,7 +2837,7 @@ KEY_WORDS: [keywords separated by commas]`,
       }
 
       console.log(`📚 Generating ${count} questions for ${subject} (${examType})...`);
-      const questions = await generateQuestionsWithLEARNORY(examType, subject, Math.min(count, 250));
+      const questions = await generateQuestionsWithLENORY(examType, subject, Math.min(count, 250));
       res.json({ questions });
     } catch (error: any) {
       console.error("Question generation error:", error);
@@ -2845,7 +2845,7 @@ KEY_WORDS: [keywords separated by commas]`,
     }
   });
 
-  // CBT Grading with LEARNORY - Feature 1: AI-powered grading and explanations
+  // CBT Grading with LENORY - Feature 1: AI-powered grading and explanations
   app.post('/api/cbt/grade', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { questions, answers, sessionId, examType, subjects } = req.body;
@@ -2855,8 +2855,8 @@ KEY_WORDS: [keywords separated by commas]`,
         return res.status(400).json({ message: 'Questions and answers required' });
       }
 
-      // Grade with LEARNORY AI
-      const gradingResult = await gradeAnswersWithLEARNORY(questions, answers);
+      // Grade with LENORY AI
+      const gradingResult = await gradeAnswersWithLENORY(questions, answers);
 
       // Save exam history - Feature 2: Exam history database
       const examHistory = await storage.createCbtExamHistory({
@@ -3285,6 +3285,289 @@ KEY_WORDS: [keywords separated by commas]`,
     } catch (error) {
       res.status(500).json({ message: "Failed to cancel subscription" });
     }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CREDIT SYSTEM
+  // ─────────────────────────────────────────────────────────────────────────────
+  const ADMIN_EMAIL = 'felixahuruonye@gmail.com';
+
+  interface CreditData {
+    balance: number;
+    monthlyUsed: number;
+    lastMonthlyReset: string; // YYYY-MM
+    lastDailyReset: string;   // YYYY-MM-DD
+    dailyGiven: number;
+  }
+  const userCreditsStore = new Map<string, CreditData>();
+
+  function getMonthKey() { return new Date().toISOString().slice(0, 7); }
+  function getDayKey() { return new Date().toISOString().slice(0, 10); }
+
+  function getOrCreateCredits(userId: string, userEmail?: string, tier = 'free'): CreditData {
+    if (!userCreditsStore.has(userId)) {
+      userCreditsStore.set(userId, {
+        balance: 20,
+        monthlyUsed: 0,
+        lastMonthlyReset: getMonthKey(),
+        lastDailyReset: getDayKey(),
+        dailyGiven: 10,
+      });
+    }
+    const data = userCreditsStore.get(userId)!;
+    if (userEmail === ADMIN_EMAIL) {
+      data.balance = 9999;
+      return data;
+    }
+    const maxBalance = tier === 'premium' ? 9999 : tier === 'pro' ? 500 : 50;
+    const dailyAdd = tier === 'premium' ? 9999 : tier === 'pro' ? 50 : 10;
+    const today = getDayKey();
+    if (data.lastDailyReset !== today) {
+      data.balance = Math.min(data.balance + dailyAdd, maxBalance);
+      data.lastDailyReset = today;
+      data.dailyGiven = dailyAdd;
+    }
+    const thisMonth = getMonthKey();
+    if (data.lastMonthlyReset !== thisMonth) {
+      data.monthlyUsed = 0;
+      data.lastMonthlyReset = thisMonth;
+    }
+    return data;
+  }
+
+  app.get('/api/credits', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const tier = user?.subscriptionTier || 'free';
+      const credits = getOrCreateCredits(userId, user?.email || '', tier);
+      const maxMonthly = tier === 'premium' ? 999999 : tier === 'pro' ? 5000 : 50;
+      res.json({
+        balance: credits.balance,
+        monthlyUsed: credits.monthlyUsed,
+        maxMonthly,
+        tier,
+        isAdmin: user?.email === ADMIN_EMAIL,
+        dailyGiven: credits.dailyGiven,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get credits" });
+    }
+  });
+
+  app.post('/api/credits/deduct', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const { amount = 1 } = req.body;
+      const user = await storage.getUser(userId);
+      if (user?.email === ADMIN_EMAIL) {
+        return res.json({ success: true, balance: 9999, message: "Admin: unlimited" });
+      }
+      const tier = user?.subscriptionTier || 'free';
+      const credits = getOrCreateCredits(userId, user?.email || '', tier);
+      if (credits.balance < amount) {
+        return res.status(402).json({ error: "Insufficient credits", balance: credits.balance });
+      }
+      credits.balance -= amount;
+      credits.monthlyUsed += amount;
+      res.json({ success: true, balance: credits.balance });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to deduct credits" });
+    }
+  });
+
+  app.post('/api/credits/topup', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const { amount = 10 } = req.body; // credits to purchase
+      const nairaAmount = amount * 100; // N100 per credit, N1000 = 10 credits
+      const paystackKey = process.env.PAYSTACK_SECRET_KEY;
+      if (!paystackKey) return res.status(500).json({ error: "Payment not configured" });
+      const response = await fetch('https://api.paystack.co/transaction/initialize', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${paystackKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: user?.email || 'unknown@lenory.ai',
+          amount: nairaAmount * 100, // kobo
+          metadata: { userId, creditAmount: amount, type: 'credit_topup' },
+          callback_url: `${req.protocol}://${req.get('host')}/api/credits/topup/callback`,
+        }),
+      });
+      const data = await response.json();
+      if (data.data?.authorization_url) {
+        res.json({ authorizationUrl: data.data.authorization_url, reference: data.data.reference });
+      } else {
+        res.status(500).json({ error: "Payment initialization failed" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to initialize top-up" });
+    }
+  });
+
+  app.get('/api/credits/topup/callback', async (req: Request, res: Response) => {
+    try {
+      const { reference } = req.query as { reference: string };
+      const paystackKey = process.env.PAYSTACK_SECRET_KEY;
+      const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+        headers: { Authorization: `Bearer ${paystackKey}` },
+      });
+      const data = await verifyRes.json();
+      if (data.data?.status === 'success') {
+        const { userId, creditAmount } = data.data.metadata;
+        const credits = getOrCreateCredits(userId);
+        credits.balance += Number(creditAmount);
+        res.redirect('/dashboard?topup=success');
+      } else {
+        res.redirect('/pricing?topup=failed');
+      }
+    } catch (error) {
+      res.redirect('/pricing?topup=error');
+    }
+  });
+
+  // Admin: manually adjust credits
+  app.post('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const adminUser = await storage.getUser(req.userId);
+      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      const { userId } = req.params;
+      const { amount, action } = req.body; // action: 'add' | 'set' | 'deduct'
+      const credits = getOrCreateCredits(userId);
+      if (action === 'set') credits.balance = Number(amount);
+      else if (action === 'add') credits.balance += Number(amount);
+      else if (action === 'deduct') credits.balance = Math.max(0, credits.balance - Number(amount));
+      res.json({ success: true, balance: credits.balance });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to adjust credits" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ASSEMBLYAI – Real-time transcription token
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/assemblyai/token', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const apiKey = process.env.ASSEMBLYAI_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "AssemblyAI not configured" });
+      const response = await fetch('https://api.assemblyai.com/v2/realtime/token', {
+        method: 'POST',
+        headers: { authorization: apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ expires_in: 480 }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('AssemblyAI token error:', text);
+        return res.status(response.status).json({ error: 'Token request failed' });
+      }
+      const data = await response.json();
+      res.json({ token: data.token });
+    } catch (error) {
+      console.error('AssemblyAI token error:', error);
+      res.status(500).json({ error: "Token generation failed" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ELEVENLABS – TTS
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/elevenlabs/speech', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "ElevenLabs not configured" });
+      const { text, voiceId = 'pNInz6obpgDQGcFmaJgB' } = req.body;
+      if (!text) return res.status(400).json({ error: "text is required" });
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'content-type': 'application/json',
+          'accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: text.slice(0, 500),
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      });
+      if (!response.ok) return res.status(500).json({ error: "TTS failed" });
+      const buffer = await response.arrayBuffer();
+      res.set('Content-Type', 'audio/mpeg');
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      res.status(500).json({ error: "ElevenLabs error" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // VIDEO GENERATION – Replicate
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/video/generate', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const replicateToken = process.env.REPLICATE_API_TOKEN;
+      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured" });
+      const { prompt } = req.body;
+      if (!prompt) return res.status(400).json({ error: "prompt is required" });
+      // Deduct credits (video = 5 credits)
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      if (user?.email !== ADMIN_EMAIL) {
+        const credits = getOrCreateCredits(userId, user?.email || '');
+        if (credits.balance < 5) {
+          return res.status(402).json({ error: "Insufficient credits. Video generation costs 5 credits." });
+        }
+        credits.balance -= 5;
+      }
+      // Start prediction with Replicate
+      const createRes = await fetch('https://api.replicate.com/v1/models/anotherjesse/zeroscope-v2-xl/predictions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${replicateToken}`,
+          'Content-Type': 'application/json',
+          Prefer: 'wait',
+        },
+        body: JSON.stringify({
+          input: {
+            prompt,
+            num_frames: 24,
+            fps: 8,
+            width: 576,
+            height: 320,
+            num_inference_steps: 20,
+          },
+        }),
+      });
+      const prediction = await createRes.json();
+      if (prediction.error) return res.status(500).json({ error: prediction.error });
+      res.json({ id: prediction.id, status: prediction.status, output: prediction.output });
+    } catch (error) {
+      console.error('Video generation error:', error);
+      res.status(500).json({ error: "Video generation failed" });
+    }
+  });
+
+  app.get('/api/video/status/:id', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const replicateToken = process.env.REPLICATE_API_TOKEN;
+      const { id } = req.params;
+      const response = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
+        headers: { Authorization: `Bearer ${replicateToken}` },
+      });
+      const data = await response.json();
+      res.json({ status: data.status, output: data.output, error: data.error });
+    } catch (error) {
+      res.status(500).json({ error: "Status check failed" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // LOGOUT
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.get('/api/logout', (req: Request, res: Response) => {
+    res.redirect('/');
   });
 
   return httpServer;
