@@ -334,7 +334,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
-      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced } = req.body;
+      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced, overrideResponse } = req.body;
 
       if (!content?.trim()) {
         return res.status(400).json({ message: "Message content is required" });
@@ -502,18 +502,23 @@ If they ask about similar topics or reference past conversations, remind them wh
         "AI will reference": crossSessionTopics.length > 0 ? "✓ Past questions from other sessions" : "Only current session"
       });
 
-      // Get AI response with smart fallback (Gemini → OpenRouter → OpenAI)
+      // If overrideResponse is provided, skip AI and use it directly (e.g. for video generation)
       let aiResponse: string;
-      try {
-        aiResponse = await chatWithAISmartFallback(messages as any);
-        console.log("Got AI response:", aiResponse.substring(0, 150));
-        if (!aiResponse || aiResponse.trim() === "") {
-          console.warn("Empty AI response!");
-          aiResponse = "I received your message but had trouble formulating a response. Please try again.";
+      if (overrideResponse) {
+        aiResponse = overrideResponse;
+      } else {
+        // Get AI response with smart fallback (Gemini → OpenRouter → OpenAI)
+        try {
+          aiResponse = await chatWithAISmartFallback(messages as any);
+          console.log("Got AI response:", aiResponse.substring(0, 150));
+          if (!aiResponse || aiResponse.trim() === "") {
+            console.warn("Empty AI response!");
+            aiResponse = "I received your message but had trouble formulating a response. Please try again.";
+          }
+        } catch (aiError) {
+          console.error("AI API error:", aiError);
+          aiResponse = "I'm having trouble connecting to my AI services right now. Please try again in a moment.";
         }
-      } catch (aiError) {
-        console.error("AI API error:", aiError);
-        aiResponse = "I'm having trouble connecting to my AI services right now. Please try again in a moment.";
       }
 
       // Auto-save to memory for AI learning

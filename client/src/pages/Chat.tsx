@@ -61,7 +61,9 @@ export default function Chat() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [videoMode, setVideoMode] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Get sessionId from URL query params
   const searchString = useSearch();
@@ -76,6 +78,25 @@ export default function Chat() {
   const [searchResults, setSearchResults] = useState<any>(null);
   const [isSearching, setIsSearching] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-resize textarea to fit content (like Replit / ChatGPT)
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  };
+
+  // Activate video mode — pre-fills prompt hint in input
+  const activateVideoMode = () => {
+    setVideoMode(true);
+    setShowPlusMenu(false);
+    setMessage("Generate a short video about: ");
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      autoResize();
+    }, 50);
+  };
 
   // Load chat sessions
   const { data: sessions = [] } = useQuery<ChatSession[]>({
@@ -280,6 +301,13 @@ export default function Chat() {
   };
 
   // Send message — creates session on first message if needed
+  const resetInput = () => {
+    setMessage("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "36px";
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading) return;
 
@@ -290,11 +318,76 @@ export default function Chat() {
       return;
     }
 
+    // Video mode — call video generation API instead of chat
+    if (videoMode) {
+      const prompt = message.trim();
+      const userName = (user as any)?.firstName || (user as any)?.email?.split("@")[0] || "there";
+      setIsLoading(true);
+      resetInput();
+      try {
+        const res = await apiRequest("POST", "/api/video/generate", { prompt });
+        const data = await res.json();
+
+        if (data.error) {
+          toast({ title: "Video generation failed", description: data.error, variant: "destructive" });
+          setIsLoading(false);
+          return;
+        }
+
+        // Poll for completion if not done yet
+        let output = data.output;
+        let pollId = data.id;
+        let attempts = 0;
+        while (!output && pollId && attempts < 60) {
+          await new Promise(r => setTimeout(r, 3000));
+          const pollRes = await apiRequest("GET", `/api/video/status/${pollId}`);
+          const pollData = await pollRes.json();
+          if (pollData.output) { output = pollData.output; break; }
+          if (pollData.status === "failed") {
+            toast({ title: "Video failed", description: "Generation failed. Try again.", variant: "destructive" });
+            setIsLoading(false);
+            return;
+          }
+          attempts++;
+        }
+
+        const videoUrl = Array.isArray(output) ? output[0] : output;
+
+        // Save the exchange as chat messages so it appears in the conversation
+        let sessionId = currentSessionId;
+        if (!sessionId) {
+          const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
+          const sData = await sRes.json();
+          sessionId = sData.id;
+          setCurrentSessionId(sData.id);
+          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+        }
+
+        await apiRequest("POST", "/api/chat/send", {
+          content: prompt,
+          sessionId,
+          autoLearn: false,
+          skipAi: false,
+          overrideResponse: videoUrl
+            ? `Great choice, ${userName}! Here's your generated video:\n\n**Prompt:** ${prompt}\n\n[Watch Video ↗](${videoUrl})\n\n\`\`\`\n${videoUrl}\n\`\`\`\n\n*Download the link or right-click → Save video. Video expires after 24 hours.*`
+            : `Sorry ${userName}, the video could not be generated right now. Please try again.`,
+        });
+
+        await refetchMessages();
+        setVideoMode(false);
+      } catch (err) {
+        toast({ title: "Video error", description: "Failed to generate video. Make sure REPLICATE_API_TOKEN is set.", variant: "destructive" });
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     // Check if user is asking for internet search
     const searchQuery = detectSearchQuery(message);
     if (searchQuery) {
       await performSearch(searchQuery);
-      setMessage("");
+      resetInput();
       return;
     }
 
@@ -324,10 +417,9 @@ export default function Chat() {
         autoLearn: true,
       });
       await res.json();
-
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      setMessage("");
+      resetInput();
     } catch (error) {
       toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
     } finally {
@@ -570,11 +662,9 @@ export default function Chat() {
                         <span>Go to Image Gallery</span>
                       </Link>
                     </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-video-gen">
-                      <Link href="/video-gen" className="flex items-center cursor-pointer">
-                        <Zap className="w-4 h-4 mr-2" />
-                        <span>Generate Video</span>
-                      </Link>
+                    <DropdownMenuItem onClick={activateVideoMode} data-testid="action-video-gen" className="cursor-pointer">
+                      <Film className="w-4 h-4 mr-2" />
+                      <span>Generate Video</span>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild data-testid="action-courses">
                       <Link href="/courses" className="flex items-center cursor-pointer">
@@ -794,11 +884,11 @@ export default function Chat() {
                     {[
                       { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => { toast({ title: "Camera", description: "Use your device camera to capture" }); setShowPlusMenu(false); } },
                       { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { toast({ title: "Photos", description: "Select from your photo library" }); setShowPlusMenu(false); } },
-                      { icon: Film, label: "Videos", color: "text-purple-400 bg-purple-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/video-gen"; } },
+                      { icon: Film, label: "Videos", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
                       { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { toast({ title: "Files", description: "File upload via the Advanced Chat" }); setShowPlusMenu(false); } },
                       { icon: Calculator, label: "Math Scanner", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
                       { icon: Sparkles, label: "Create Image", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
-                      { icon: Film, label: "Create Video", color: "text-cyan-400 bg-cyan-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/video-gen"; } },
+                      { icon: Film, label: "Create Video", color: "text-cyan-400 bg-cyan-500/10", action: activateVideoMode },
                       { icon: BookOpen, label: "Start Course", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
                     ].map((item) => (
                       <button
@@ -817,65 +907,84 @@ export default function Chat() {
                 </div>
               )}
 
+              {/* Video mode indicator */}
+              {videoMode && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                  <Film className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                  <span className="text-xs text-purple-300 flex-1">Video generation mode — describe what you want to see</span>
+                  <button onClick={() => { setVideoMode(false); setMessage(""); }} className="text-purple-400 hover:text-purple-200">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* Input Row */}
-              <div className="flex items-end gap-2">
+              <div className={`flex items-end gap-2 rounded-2xl border transition-colors ${
+                isListening ? "border-red-500/60 bg-red-500/5" : videoMode ? "border-purple-500/40 bg-purple-500/5" : "border-border bg-card"
+              } px-3 py-2`}>
                 {/* Plus Button */}
-                <Button
-                  variant="ghost"
-                  size="icon"
+                <button
                   onClick={() => setShowPlusMenu(!showPlusMenu)}
-                  className={`flex-shrink-0 rounded-xl ${showPlusMenu ? "bg-primary/20 text-primary" : ""}`}
+                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${showPlusMenu ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}
                   title="Attach or create"
                   data-testid="button-plus-menu"
                 >
-                  {showPlusMenu ? <X className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
-                </Button>
+                  <Plus className="w-5 h-5" />
+                </button>
 
-                {/* Textarea with mic inside */}
-                <div className="flex-1 relative">
-                  <Textarea
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Ask Lenory anything... (Try 'Explain gravity')"
-                    className="resize-none pr-10 min-h-[44px] max-h-36"
-                    rows={1}
-                    disabled={isLoading}
-                    data-testid="input-message"
-                  />
-                  {/* Mic button inside textarea */}
-                  <button
-                    onClick={handleMicToggle}
-                    className={`absolute right-2 bottom-2 p-1.5 rounded-lg transition-all ${
-                      isListening
-                        ? "bg-red-500 text-white animate-pulse"
-                        : "text-muted-foreground hover:text-primary hover:bg-primary/10"
-                    }`}
-                    title={isListening ? "Stop listening" : "Voice input"}
-                    data-testid="button-mic"
-                  >
-                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  </button>
-                </div>
+                {/* Native auto-expanding textarea */}
+                <textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={(e) => { setMessage(e.target.value); autoResize(); }}
+                  onKeyDown={handleKeyDown}
+                  placeholder={videoMode ? "Describe your video... e.g. 'A river flowing through a Nigerian forest at sunset'" : "Message LENORY..."}
+                  className="flex-1 resize-none bg-transparent text-foreground placeholder:text-muted-foreground text-sm leading-relaxed outline-none border-none py-1.5 min-h-[36px] max-h-[200px] overflow-y-auto"
+                  rows={1}
+                  style={{ height: "36px" }}
+                  disabled={isLoading}
+                  data-testid="input-message"
+                />
+
+                {/* Mic button */}
+                <button
+                  onClick={handleMicToggle}
+                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${
+                    isListening
+                      ? "bg-red-500 text-white animate-pulse"
+                      : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+                  }`}
+                  title={isListening ? "Stop listening" : "Voice input"}
+                  data-testid="button-mic"
+                >
+                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </button>
 
                 {/* Send Button */}
-                <Button
+                <button
                   onClick={handleSendMessage}
                   disabled={!message.trim() || isLoading || isSearching}
-                  size="icon"
-                  className="flex-shrink-0 rounded-xl"
+                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${
+                    !message.trim() || isLoading || isSearching
+                      ? "text-muted-foreground/40 cursor-not-allowed"
+                      : videoMode
+                        ? "bg-purple-600 text-white hover:bg-purple-500"
+                        : "bg-primary text-primary-foreground hover:bg-primary/90"
+                  }`}
                   data-testid="button-send"
                 >
                   {isLoading || isSearching ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : videoMode ? (
+                    <Film className="w-4 h-4" />
                   ) : (
-                    <Send className="w-5 h-5" />
+                    <Send className="w-4 h-4" />
                   )}
-                </Button>
+                </button>
               </div>
 
               <p className="text-xs text-muted-foreground text-center">
-                LENORY can make mistakes. Verify important info.
+                LENORY · AI tutor for Nigerian students · Verify important info
               </p>
             </div>
           </div>
