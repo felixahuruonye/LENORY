@@ -602,11 +602,40 @@ async function generateImageWithStabilityAI(prompt: string): Promise<string> {
   const apiKey = process.env.STABILITY_API_KEY;
   if (!apiKey) throw new Error("STABILITY_API_KEY not configured");
 
-  try {
-    // Truncate prompt to 2000 characters (Stability AI limit)
-    const truncatedPrompt = prompt.length > 2000 ? prompt.substring(0, 2000) : prompt;
-    console.log(`📝 Prompt length: ${truncatedPrompt.length}/2000 chars`);
+  const truncatedPrompt = prompt.length > 10000 ? prompt.substring(0, 10000) : prompt;
+  console.log(`📝 Generating image with Stability AI v2beta, prompt length: ${truncatedPrompt.length}`);
 
+  // Try v2beta Stable Image Core API first (newer, more reliable)
+  try {
+    const formData = new FormData();
+    formData.append("prompt", truncatedPrompt);
+    formData.append("output_format", "png");
+    formData.append("aspect_ratio", "1:1");
+
+    const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/core", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Accept": "application/json",
+      },
+      body: formData,
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as any;
+      if (data.image) {
+        console.log("✅ Stability AI v2beta image generated successfully");
+        return `data:image/png;base64,${data.image}`;
+      }
+    }
+    const errText = await response.text().catch(() => `HTTP ${response.status}`);
+    console.warn(`Stability AI v2beta failed (${response.status}): ${errText.substring(0, 200)}`);
+  } catch (v2Err) {
+    console.warn("Stability AI v2beta error:", v2Err);
+  }
+
+  // Fallback: v1 SDXL API
+  try {
     const response = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
       method: "POST",
       headers: {
@@ -615,7 +644,7 @@ async function generateImageWithStabilityAI(prompt: string): Promise<string> {
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        text_prompts: [{ text: truncatedPrompt, weight: 1 }],
+        text_prompts: [{ text: truncatedPrompt.substring(0, 2000), weight: 1 }],
         cfg_scale: 7,
         height: 1024,
         width: 1024,
@@ -624,23 +653,20 @@ async function generateImageWithStabilityAI(prompt: string): Promise<string> {
       }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Stability AI error: ${response.status} - ${error}`);
+    if (response.ok) {
+      const data = (await response.json()) as any;
+      const base64Image = data.artifacts?.[0]?.base64;
+      if (base64Image) {
+        console.log("✅ Stability AI v1 SDXL image generated successfully");
+        return `data:image/png;base64,${base64Image}`;
+      }
     }
-
-    const data = (await response.json()) as any;
-    const base64Image = data.artifacts?.[0]?.base64;
-    
-    if (!base64Image) throw new Error("No image data in response");
-
-    const imageUrl = `data:image/png;base64,${base64Image}`;
-    console.log("✅ Stability AI image generated successfully");
-    return imageUrl;
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error("Stability AI error:", errorMsg);
-    throw error;
+    const errText = await response.text().catch(() => `HTTP ${response.status}`);
+    throw new Error(`Stability AI v1 failed (${response.status}): ${errText.substring(0, 200)}`);
+  } catch (v1Err) {
+    const errorMsg = v1Err instanceof Error ? v1Err.message : String(v1Err);
+    console.error("Stability AI v1 error:", errorMsg);
+    throw new Error(errorMsg);
   }
 }
 

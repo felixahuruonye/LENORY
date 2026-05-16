@@ -64,6 +64,8 @@ export default function Chat() {
   const [videoMode, setVideoMode] = useState(false);
   const recognitionRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Get sessionId from URL query params
   const searchString = useSearch();
@@ -96,6 +98,64 @@ export default function Chat() {
       textareaRef.current?.focus();
       autoResize();
     }, 50);
+  };
+
+  // Handle file selection for Gemini vision analysis
+  const handleFileAnalyze = async (file: File) => {
+    setShowPlusMenu(false);
+    if (!file) return;
+    const MAX_MB = 20;
+    if (file.size > MAX_MB * 1024 * 1024) {
+      toast({ title: "File too large", description: `Max file size is ${MAX_MB}MB`, variant: "destructive" });
+      return;
+    }
+    // Read as base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      const mimeType = file.type || "application/octet-stream";
+      const fileName = file.name;
+      const userMsg = file.type.startsWith("image/")
+        ? `[Image: ${fileName}]`
+        : `[File: ${fileName}]`;
+      setMessage(`Analyze this file: ${fileName}`);
+      toast({ title: "Analyzing file…", description: `Sending ${fileName} to LENORY AI` });
+      try {
+        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions the student might have about it." });
+        const data = await res.json();
+        if (data.analysis) {
+          // Send the analysis as if LENORY responded
+          setMessage("");
+          // We inject it as a chat message by calling send with special context
+          const analysisMsg = `I analyzed the file **${fileName}**:\n\n${data.analysis}`;
+          // Send user message first then inject assistant response
+          await handleSendMessageWithContent(`Analyze this file: ${fileName}`, analysisMsg);
+        }
+      } catch {
+        toast({ title: "Analysis failed", description: "Could not analyze file. Try again.", variant: "destructive" });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSendMessageWithContent = async (userContent: string, assistantContent: string) => {
+    if (!user) return;
+    let sessionId = currentSessionId;
+    if (!sessionId) {
+      try {
+        const res = await apiRequest("POST", "/api/chat/sessions", { title: userContent.slice(0, 40), mode: "standard" });
+        const newSession = await res.json();
+        sessionId = newSession.id;
+        setCurrentSessionId(sessionId);
+        queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+      } catch { return; }
+    }
+    // Create user message
+    await apiRequest("POST", "/api/chat/messages", { sessionId, role: "user", content: userContent });
+    // Create assistant message with the analysis
+    await apiRequest("POST", "/api/chat/messages", { sessionId, role: "assistant", content: assistantContent });
+    queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sessionId] });
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
   };
 
   // Load chat sessions
@@ -882,10 +942,10 @@ export default function Chat() {
                   </div>
                   <div className="grid grid-cols-4 gap-3">
                     {[
-                      { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => { toast({ title: "Camera", description: "Use your device camera to capture" }); setShowPlusMenu(false); } },
-                      { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { toast({ title: "Photos", description: "Select from your photo library" }); setShowPlusMenu(false); } },
+                      { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => { cameraInputRef.current?.click(); } },
+                      { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
                       { icon: Film, label: "Videos", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
-                      { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { toast({ title: "Files", description: "File upload via the Advanced Chat" }); setShowPlusMenu(false); } },
+                      { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
                       { icon: Calculator, label: "Math Scanner", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
                       { icon: Sparkles, label: "Create Image", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
                       { icon: Film, label: "Create Video", color: "text-cyan-400 bg-cyan-500/10", action: activateVideoMode },
@@ -990,6 +1050,33 @@ export default function Chat() {
           </div>
         </div>
       </div>
+
+      {/* Hidden file inputs for Camera, Photos, Files */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        data-testid="input-file-upload"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleFileAnalyze(file);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        data-testid="input-camera-upload"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleFileAnalyze(file);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }

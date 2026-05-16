@@ -9,7 +9,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link, useLocation } from "wouter";
-import HeyLenoryButton from "@/components/HeyLenoryButton";
 import {
   Search, Sparkles, MessageSquare, Code2, Mic, ImageIcon, Brain, Zap, Clock,
   FolderOpen, Settings, LogOut, Monitor, Bell, X, History, ArrowRight,
@@ -206,7 +205,7 @@ export default function AdvancedDashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <Sparkles className="h-5 w-5 sm:h-6 sm:w-6 text-primary" />
+              <img src="/favicon.png" alt="LENORY" className="h-8 w-8 rounded-xl object-cover" />
               <h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-primary to-chart-2 bg-clip-text text-transparent">
                 LENORY
               </h1>
@@ -572,8 +571,6 @@ export default function AdvancedDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Hey LENORY floating voice button */}
-      <HeyLenoryButton onTranscript={(text) => { navigate(`/chat?voice=${encodeURIComponent(text)}`); }} />
     </div>
   );
 }

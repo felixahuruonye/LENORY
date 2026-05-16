@@ -1,7 +1,7 @@
 {
-  "name": "LERNORY ULTRA - AI Learning Platform",
-  "short_name": "LERNORY",
-  "description": "AI-powered education platform with voice-first learning, magic link authentication, and personalized study plans for students",
+  "name": "LENORY - AI Learning Platform",
+  "short_name": "LENORY",
+  "description": "AI-powered education platform with voice-first learning, real-time transcription, and personalized study plans for students",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,13 +10,13 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/favicon.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/favicon.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
@@ -26,5 +26,5 @@
   "screenshots": [],
   "prefer_related_applications": false,
   "related_applications": [],
-  "id": "lernory-ultra-pwa"
+  "id": "lenory-ultra-pwa"
 }

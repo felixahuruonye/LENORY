@@ -3526,6 +3526,35 @@ KEY_WORDS: [keywords separated by commas]`,
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // GEMINI VISION – Analyze file/image from chat
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/chat/analyze-vision', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { base64, mimeType, fileName, prompt } = req.body;
+      if (!base64 || !mimeType) return res.status(400).json({ error: "Missing base64 or mimeType" });
+
+      const buffer = Buffer.from(base64, 'base64');
+      const { analyzeFileWithGeminiVision } = await import('./gemini');
+      const { extractedText } = await analyzeFileWithGeminiVision(buffer, mimeType, fileName || 'file');
+
+      // If a specific prompt was provided, do an additional pass using the prompt + extracted content
+      let analysis = extractedText;
+      if (prompt && extractedText) {
+        const { chatWithAI } = await import('./gemini');
+        const enhanced = await chatWithAI([
+          { role: "user", content: `${prompt}\n\nFile content/description:\n${extractedText}` }
+        ]);
+        analysis = enhanced || extractedText;
+      }
+
+      res.json({ analysis: analysis || "I could not extract content from this file." });
+    } catch (error) {
+      console.error("Vision analyze error:", error);
+      res.status(500).json({ error: "Failed to analyze file" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // ASSEMBLYAI – Real-time transcription token
   // ─────────────────────────────────────────────────────────────────────────────
   app.post('/api/assemblyai/token', supabaseAuth, async (req: any, res: Response) => {

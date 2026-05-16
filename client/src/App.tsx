@@ -1,10 +1,11 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { useAuth } from "@/hooks/useAuth";
+import HeyLenoryButton from "@/components/HeyLenoryButton";
 import Landing from "@/pages/Landing";
 import Dashboard from "@/pages/Dashboard";
 import AdvancedDashboard from "@/pages/AdvancedDashboard";
@@ -46,11 +47,7 @@ function Router() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center animate-pulse">
-            <svg className="h-7 w-7 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
+          <img src="/favicon.png" alt="LENORY" className="h-14 w-14 rounded-2xl object-cover animate-pulse" />
           <p className="text-muted-foreground">Loading...</p>
         </div>
       </div>
@@ -121,6 +118,19 @@ function Router() {
   );
 }
 
+function GlobalVoiceButton() {
+  const { isAuthenticated } = useAuth();
+  const [, navigate] = useLocation();
+  if (!isAuthenticated) return null;
+  return (
+    <HeyLenoryButton
+      onTranscript={(text) => {
+        navigate(`/chat?voice=${encodeURIComponent(text)}`);
+      }}
+    />
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -128,6 +138,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <GlobalVoiceButton />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
