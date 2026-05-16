@@ -683,6 +683,80 @@ If they ask about similar topics or reference past conversations, remind them wh
   });
 
   // Admin routes
+  // Supabase SQL schema for table creation — open to all authenticated users
+  app.get('/api/admin/db-schema', supabaseAuth, async (_req: any, res: Response) => {
+    const sql = `-- Run this SQL in your Supabase SQL Editor to enable full data persistence
+-- Project URL: https://nfudflrajpmluhwwhhrc.supabase.co
+
+CREATE TABLE IF NOT EXISTS public.chat_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT 'New Chat',
+  mode TEXT NOT NULL DEFAULT 'chat',
+  summary TEXT DEFAULT '',
+  message_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS chat_sessions_user_id_idx ON public.chat_sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS public.chat_messages (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES public.chat_sessions(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  attachments JSONB DEFAULT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS chat_messages_user_id_idx ON public.chat_messages(user_id);
+CREATE INDEX IF NOT EXISTS chat_messages_session_id_idx ON public.chat_messages(session_id);
+
+CREATE TABLE IF NOT EXISTS public.memory_entries (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL DEFAULT 'note',
+  subject TEXT DEFAULT NULL,
+  content TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS memory_entries_user_id_idx ON public.memory_entries(user_id);
+
+CREATE TABLE IF NOT EXISTS public.generated_lessons (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  recording_id TEXT DEFAULT NULL,
+  title TEXT NOT NULL,
+  objectives JSONB NOT NULL DEFAULT '[]',
+  key_points JSONB NOT NULL DEFAULT '[]',
+  summary TEXT NOT NULL DEFAULT '',
+  original_text TEXT DEFAULT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS generated_lessons_user_id_idx ON public.generated_lessons(user_id);
+
+-- Enable Row Level Security
+ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.memory_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.generated_lessons ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies: users can only access their own data
+CREATE POLICY IF NOT EXISTS "Users own their chat sessions" ON public.chat_sessions FOR ALL USING (auth.uid()::text = user_id);
+CREATE POLICY IF NOT EXISTS "Users own their chat messages" ON public.chat_messages FOR ALL USING (auth.uid()::text = user_id);
+CREATE POLICY IF NOT EXISTS "Users own their memory entries" ON public.memory_entries FOR ALL USING (auth.uid()::text = user_id);
+CREATE POLICY IF NOT EXISTS "Users own their lessons" ON public.generated_lessons FOR ALL USING (auth.uid()::text = user_id);
+
+-- Service role bypass (for server-side operations)
+CREATE POLICY IF NOT EXISTS "Service role bypass sessions" ON public.chat_sessions FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "Service role bypass messages" ON public.chat_messages FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "Service role bypass memory" ON public.memory_entries FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_lessons FOR ALL TO service_role USING (true) WITH CHECK (true);
+`;
+    res.json({ sql });
+  });
+
   app.get('/api/admin/users', supabaseAuth, async (req: any, res: Response) => {
     try {
       // In a real app, check admin flag on user

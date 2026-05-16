@@ -989,6 +989,7 @@ class MemoryStorage implements IStorage {
     memoryEntries: new Map(),
     generatedImages: new Map(),
     generatedWebsites: new Map(),
+    generatedLessons: new Map(),
     userProgress: new Map(),
     examResults: new Map(),
     cbtExamHistory: new Map(),
@@ -998,7 +999,7 @@ class MemoryStorage implements IStorage {
     projectFiles: new Map(),
     projectTasks: new Map(),
   };
-  private idCounter = { users: 0, messages: 0, sessions: 0, images: 0, websites: 0, exams: 0, analytics: 0, notifications: 0, projects: 0, files: 0, tasks: 0 };
+  private idCounter = { users: 0, messages: 0, sessions: 0, images: 0, websites: 0, exams: 0, analytics: 0, notifications: 0, projects: 0, files: 0, tasks: 0, lessons: 0 };
 
   // User operations
   async getUser(id: string) {
@@ -1312,9 +1313,20 @@ class MemoryStorage implements IStorage {
   async getRecordingsByUser() { return []; }
   async createRecording(r: any) { return r as Recording; }
   async deleteRecording() { }
-  async createGeneratedLesson(l: any) { return l as GeneratedLesson; }
-  async getGeneratedLessonsByUser() { return []; }
-  async deleteGeneratedLesson() { }
+  async createGeneratedLesson(l: any) {
+    const id = `lesson_${++this.idCounter.lessons}_${Date.now()}`;
+    const lesson = { id, ...l, createdAt: new Date() };
+    this.data.generatedLessons.set(id, lesson);
+    return lesson as GeneratedLesson;
+  }
+  async getGeneratedLessonsByUser(userId: string) {
+    return Array.from(this.data.generatedLessons.values())
+      .filter((l: any) => l.userId === userId)
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as GeneratedLesson[];
+  }
+  async deleteGeneratedLesson(id: string) {
+    this.data.generatedLessons.delete(id);
+  }
   async getCbtAnswersBySession() { return []; }
   async getNotification() { return undefined; }
   async deleteGeneratedWebsite(id: string) {
@@ -1515,7 +1527,6 @@ class SupabaseStorage extends MemoryStorage {
 
   async updateUser(id: string, updates: any): Promise<User | undefined> {
     const memUser = await super.updateUser(id, updates);
-
     if (supabaseDb) {
       try {
         const row: any = { updated_at: new Date().toISOString() };
@@ -1527,6 +1538,229 @@ class SupabaseStorage extends MemoryStorage {
       } catch {}
     }
     return memUser;
+  }
+
+  // ── Chat Sessions (persistent via Supabase) ──────────────────────────────────
+  async createChatSession(session: InsertChatSession): Promise<ChatSession> {
+    const memSession = await super.createChatSession(session);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('chat_sessions').upsert({
+          id: memSession.id,
+          user_id: session.userId,
+          title: session.title || 'New Chat',
+          mode: session.mode || 'chat',
+          summary: session.summary || '',
+          message_count: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      } catch {}
+    }
+    return memSession;
+  }
+
+  async getChatSessionsByUser(userId: string): Promise<ChatSession[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('chat_sessions')
+          .select('*')
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false });
+        if (!error && data && data.length > 0) {
+          return data.map((s: any) => ({
+            id: s.id, userId: s.user_id, title: s.title, mode: s.mode,
+            summary: s.summary || '', messageCount: s.message_count || 0,
+            createdAt: new Date(s.created_at), updatedAt: new Date(s.updated_at),
+          })) as ChatSession[];
+        }
+      } catch {}
+    }
+    return super.getChatSessionsByUser(userId);
+  }
+
+  async getChatSession(id: string): Promise<ChatSession | undefined> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb.from('chat_sessions').select('*').eq('id', id).single();
+        if (!error && data) {
+          return { id: data.id, userId: data.user_id, title: data.title, mode: data.mode,
+            summary: data.summary || '', messageCount: data.message_count || 0,
+            createdAt: new Date(data.created_at), updatedAt: new Date(data.updated_at) } as ChatSession;
+        }
+      } catch {}
+    }
+    return super.getChatSession(id);
+  }
+
+  async updateChatSession(id: string, updates: Partial<InsertChatSession>): Promise<ChatSession | undefined> {
+    const mem = await super.updateChatSession(id, updates);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('chat_sessions').update({
+          title: updates.title, mode: updates.mode,
+          summary: updates.summary, updated_at: new Date().toISOString(),
+        }).eq('id', id);
+      } catch {}
+    }
+    return mem;
+  }
+
+  async deleteChatSession(id: string): Promise<void> {
+    await super.deleteChatSession(id);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('chat_sessions').delete().eq('id', id);
+        await supabaseDb.from('chat_messages').delete().eq('session_id', id);
+      } catch {}
+    }
+  }
+
+  // ── Chat Messages (persistent via Supabase) ──────────────────────────────────
+  async createChatMessage(msg: InsertChatMessage): Promise<ChatMessage> {
+    const memMsg = await super.createChatMessage(msg);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('chat_messages').insert({
+          id: memMsg.id,
+          user_id: msg.userId,
+          session_id: msg.sessionId || null,
+          role: msg.role,
+          content: msg.content,
+          attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+          created_at: new Date().toISOString(),
+        });
+        // Update session message count
+        if (msg.sessionId) {
+          await supabaseDb.rpc('increment_message_count', { session_id: msg.sessionId }).catch(() => {
+            supabaseDb!.from('chat_sessions').select('message_count').eq('id', msg.sessionId).single().then(({ data }) => {
+              if (data) supabaseDb!.from('chat_sessions').update({ message_count: (data.message_count || 0) + 1, updated_at: new Date().toISOString() }).eq('id', msg.sessionId!);
+            });
+          });
+        }
+      } catch {}
+    }
+    return memMsg;
+  }
+
+  async getChatMessagesBySession(sessionId: string): Promise<ChatMessage[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('chat_messages').select('*').eq('session_id', sessionId).order('created_at', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map((m: any) => ({
+            id: m.id, userId: m.user_id, sessionId: m.session_id, role: m.role, content: m.content,
+            attachments: m.attachments ? (typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments) : null,
+            createdAt: new Date(m.created_at),
+          })) as ChatMessage[];
+        }
+      } catch {}
+    }
+    return super.getChatMessagesBySession(sessionId);
+  }
+
+  async getChatMessagesByUser(userId: string, limit = 500): Promise<ChatMessage[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('chat_messages').select('*').eq('user_id', userId)
+          .order('created_at', { ascending: false }).limit(limit);
+        if (!error && data && data.length > 0) {
+          return data.map((m: any) => ({
+            id: m.id, userId: m.user_id, sessionId: m.session_id, role: m.role, content: m.content,
+            attachments: m.attachments ? (typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments) : null,
+            createdAt: new Date(m.created_at),
+          })) as ChatMessage[];
+        }
+      } catch {}
+    }
+    return super.getChatMessagesByUser(userId, limit);
+  }
+
+  // ── Generated Lessons (persistent via Supabase) ──────────────────────────────
+  async createGeneratedLesson(l: any): Promise<GeneratedLesson> {
+    const memLesson = await super.createGeneratedLesson(l);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('generated_lessons').insert({
+          id: memLesson.id,
+          user_id: l.userId,
+          recording_id: l.recordingId || null,
+          title: l.title,
+          objectives: l.objectives || [],
+          key_points: l.keyPoints || [],
+          summary: l.summary || '',
+          original_text: l.originalText || null,
+          created_at: new Date().toISOString(),
+        });
+      } catch {}
+    }
+    return memLesson;
+  }
+
+  async getGeneratedLessonsByUser(userId: string): Promise<GeneratedLesson[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('generated_lessons').select('*').eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data && data.length > 0) {
+          return data.map((l: any) => ({
+            id: l.id, userId: l.user_id, recordingId: l.recording_id,
+            title: l.title, objectives: l.objectives || [],
+            keyPoints: l.key_points || [], summary: l.summary || '',
+            originalText: l.original_text || null, createdAt: new Date(l.created_at),
+          })) as GeneratedLesson[];
+        }
+      } catch {}
+    }
+    return super.getGeneratedLessonsByUser(userId);
+  }
+
+  async deleteGeneratedLesson(id: string): Promise<void> {
+    await super.deleteGeneratedLesson(id);
+    if (supabaseDb) {
+      try { await supabaseDb.from('generated_lessons').delete().eq('id', id); } catch {}
+    }
+  }
+
+  // ── Memory Entries (persistent via Supabase) ─────────────────────────────────
+  async createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry> {
+    const memEntry = await super.createMemoryEntry(entry);
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('memory_entries').insert({
+          id: memEntry.id,
+          user_id: entry.userId,
+          type: (entry as any).type || 'note',
+          subject: (entry as any).subject || null,
+          content: entry.content,
+          importance: (entry as any).importance || 1,
+          created_at: new Date().toISOString(),
+        });
+      } catch {}
+    }
+    return memEntry;
+  }
+
+  async getMemoryEntriesByUser(userId: string): Promise<MemoryEntry[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('memory_entries').select('*').eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data && data.length > 0) {
+          return data.map((m: any) => ({
+            id: m.id, userId: m.user_id, type: m.type, subject: m.subject,
+            content: m.content, importance: m.importance || 1,
+            createdAt: new Date(m.created_at),
+          })) as MemoryEntry[];
+        }
+      } catch {}
+    }
+    return super.getMemoryEntriesByUser(userId);
   }
 }
 

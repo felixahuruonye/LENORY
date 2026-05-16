@@ -38,6 +38,13 @@ import {
   Image,
   Code,
   Lightbulb,
+  Mic,
+  MicOff,
+  Camera,
+  FileText,
+  Film,
+  Calculator,
+  X,
 } from "lucide-react";
 import { Link, useLocation, useSearch, useRoute } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -50,9 +57,12 @@ import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shar
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
-  const { toggleSpeak, isPlaying } = useVoice();
+  const { speak, stop, isPlaying } = useVoice();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+  const [isListening, setIsListening] = useState(false);
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
   // Get sessionId from URL query params
   const searchString = useSearch();
   const urlSessionId = new URLSearchParams(searchString).get("sessionId");
@@ -92,6 +102,39 @@ export default function Chat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Sync speaker state — when speech ends naturally, clear playingMessageId
+  useEffect(() => {
+    if (!isPlaying) setPlayingMessageId(null);
+  }, [isPlaying]);
+
+  // Mic voice input handler
+  const handleMicToggle = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast({ title: "Not supported", description: "Voice input is not supported in this browser", variant: "destructive" });
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-NG";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setMessage(prev => prev ? prev + " " + transcript : transcript);
+      setIsListening(false);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
 
   // Auto-fill voice message from URL param
   const searchParams = new URLSearchParams(searchString);
@@ -694,19 +737,21 @@ export default function Chat() {
                         {msg.role === "assistant" && (
                           <button
                             onClick={() => {
-                              setPlayingMessageId(
-                                playingMessageId === msg.id ? null : msg.id
-                              );
-                              toggleSpeak(msg.content);
+                              if (playingMessageId === msg.id) {
+                                stop();
+                                setPlayingMessageId(null);
+                              } else {
+                                if (playingMessageId) stop();
+                                setPlayingMessageId(msg.id);
+                                speak(msg.content);
+                              }
                             }}
                             className={`flex-shrink-0 p-2 rounded-lg transition-all duration-200 ${
                               playingMessageId === msg.id
-                                ? "bg-primary text-primary-foreground"
-                                : "hover:bg-primary/20"
+                                ? "bg-primary text-primary-foreground animate-pulse"
+                                : "hover:bg-primary/20 text-muted-foreground hover:text-foreground"
                             }`}
-                            title={
-                              playingMessageId === msg.id ? "Stop" : "Read aloud"
-                            }
+                            title={playingMessageId === msg.id ? "Stop reading" : "Read aloud"}
                             data-testid={`button-speak-${msg.id}`}
                           >
                             {playingMessageId === msg.id ? (
@@ -734,31 +779,104 @@ export default function Chat() {
           </div>
 
           {/* Input Area */}
-          <div className="border-t border-border bg-background p-4">
-            <div className="max-w-4xl mx-auto flex gap-2">
-              <Textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type your message... (Shift+Enter for new line)"
-                className="flex-1 resize-none"
-                rows={3}
-                disabled={isLoading}
-                data-testid="input-message"
-              />
-              <Button
-                onClick={handleSendMessage}
-                disabled={!message.trim() || isLoading || isSearching}
-                size="icon"
-                className="self-end"
-                data-testid="button-send"
-              >
-                {isLoading || isSearching ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Send className="w-5 h-5" />
-                )}
-              </Button>
+          <div className="border-t border-border bg-background/95 backdrop-blur-sm p-3">
+            <div className="max-w-4xl mx-auto space-y-2">
+              {/* Plus Menu Popup */}
+              {showPlusMenu && (
+                <div className="p-3 bg-card rounded-xl border border-border shadow-lg">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-semibold">Attach or Create</span>
+                    <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {[
+                      { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => { toast({ title: "Camera", description: "Use your device camera to capture" }); setShowPlusMenu(false); } },
+                      { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { toast({ title: "Photos", description: "Select from your photo library" }); setShowPlusMenu(false); } },
+                      { icon: Film, label: "Videos", color: "text-purple-400 bg-purple-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/video-gen"; } },
+                      { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { toast({ title: "Files", description: "File upload via the Advanced Chat" }); setShowPlusMenu(false); } },
+                      { icon: Calculator, label: "Math Scanner", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
+                      { icon: Sparkles, label: "Create Image", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
+                      { icon: Film, label: "Create Video", color: "text-cyan-400 bg-cyan-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/video-gen"; } },
+                      { icon: BookOpen, label: "Start Course", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={item.action}
+                        className="flex flex-col items-center gap-1.5 p-2 rounded-lg hover-elevate transition-all"
+                        data-testid={`plus-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                      >
+                        <div className={`p-2.5 rounded-xl ${item.color}`}>
+                          <item.icon className="w-5 h-5" />
+                        </div>
+                        <span className="text-xs text-muted-foreground font-medium">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Input Row */}
+              <div className="flex items-end gap-2">
+                {/* Plus Button */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowPlusMenu(!showPlusMenu)}
+                  className={`flex-shrink-0 rounded-xl ${showPlusMenu ? "bg-primary/20 text-primary" : ""}`}
+                  title="Attach or create"
+                  data-testid="button-plus-menu"
+                >
+                  {showPlusMenu ? <X className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                </Button>
+
+                {/* Textarea with mic inside */}
+                <div className="flex-1 relative">
+                  <Textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask Lenory anything... (Try 'Explain gravity')"
+                    className="resize-none pr-10 min-h-[44px] max-h-36"
+                    rows={1}
+                    disabled={isLoading}
+                    data-testid="input-message"
+                  />
+                  {/* Mic button inside textarea */}
+                  <button
+                    onClick={handleMicToggle}
+                    className={`absolute right-2 bottom-2 p-1.5 rounded-lg transition-all ${
+                      isListening
+                        ? "bg-red-500 text-white animate-pulse"
+                        : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+                    }`}
+                    title={isListening ? "Stop listening" : "Voice input"}
+                    data-testid="button-mic"
+                  >
+                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {/* Send Button */}
+                <Button
+                  onClick={handleSendMessage}
+                  disabled={!message.trim() || isLoading || isSearching}
+                  size="icon"
+                  className="flex-shrink-0 rounded-xl"
+                  data-testid="button-send"
+                >
+                  {isLoading || isSearching ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                </Button>
+              </div>
+
+              <p className="text-xs text-muted-foreground text-center">
+                LENORY can make mistakes. Verify important info.
+              </p>
             </div>
           </div>
         </div>
