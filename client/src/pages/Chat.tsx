@@ -479,6 +479,16 @@ export default function Chat() {
         sessionId,
         autoLearn: true,
       });
+      if (res.status === 402) {
+        const errData = await res.json();
+        toast({
+          title: "Out of credits",
+          description: errData.message || "You need more credits to send messages. You get 10 free credits daily.",
+          variant: "destructive",
+        });
+        setIsLoading(false);
+        return;
+      }
       await res.json();
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });

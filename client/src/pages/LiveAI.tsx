@@ -10,6 +10,7 @@ import { ChatInterface } from "@/components/live-ai/ChatInterface";
 import { QuickActions } from "@/components/live-ai/QuickActions";
 import { AvatarDisplay } from "@/components/live-ai/AvatarDisplay";
 import { useAuth } from "@/hooks/useAuth";
+import { useVapi } from "@/hooks/useVapi";
 
 interface Message {
   id: string;
@@ -53,6 +54,10 @@ export default function LiveAI() {
   const [showMicSettings, setShowMicSettings] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState("Aoede");
   const [isGeminiConnected, setIsGeminiConnected] = useState(false);
+  const [showVapiPanel, setShowVapiPanel] = useState(false);
+
+  // VAPI Live voice call
+  const vapi = useVapi();
 
   // Note: MediaRecorder refs removed - all audio uses PCM streaming via ScriptProcessor
   const messageCountRef = useRef(0);
@@ -273,7 +278,7 @@ export default function LiveAI() {
         }
         break;
       case "ai_response":
-        const aiMessage = data.text?.replace(/LENORY/g, "Learnory").trim() || "";
+        const aiMessage = (data.text || "").trim();
         if (aiMessage) {
           addMessage("assistant", aiMessage);
           await saveMessageToDatabase("assistant", aiMessage);
@@ -580,7 +585,6 @@ export default function LiveAI() {
   // Clean text for speech (remove all markdown, special characters)
   const cleanTextForSpeech = (text: string): string => {
     return text
-      .replace(/LENORY/g, "Learnory")
       .replace(/\*\*(.+?)\*\*/g, "$1")  // Remove bold markers, keep text
       .replace(/\*(.+?)\*/g, "$1")      // Remove italic markers
       .replace(/`(.+?)`/g, "$1")        // Remove code markers
@@ -664,13 +668,7 @@ export default function LiveAI() {
 
         const data = await response.json();
         console.log("API Response:", data);
-        let aiMessage = data.message || "Got it!";
-        console.log("AI Message to display:", aiMessage);
-        
-        // Clean up display text
-        aiMessage = aiMessage
-          .replace(/LENORY/g, "Learnory")
-          .trim();
+        let aiMessage = (data.message || "Got it!").trim();
         
         if (!aiMessage || aiMessage.trim() === "") {
           throw new Error("Empty response from API");
@@ -844,6 +842,61 @@ export default function LiveAI() {
           <div className="space-y-6">
             {/* Avatar with Action Buttons - Center Stage */}
             <div className="flex flex-col items-center gap-4">
+              {/* VAPI Live Call Panel */}
+              <Card className={`p-4 w-full max-w-sm border-2 ${
+                vapi.status === "active"
+                  ? "border-green-500/50 bg-green-500/5"
+                  : "border-primary/20 bg-primary/5"
+              }`}>
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Phone className={`w-4 h-4 ${vapi.status === "active" ? "text-green-500" : "text-primary"}`} />
+                    <span className="text-sm font-semibold">
+                      {vapi.status === "idle" && "VAPI Live AI Call"}
+                      {vapi.status === "connecting" && "Connecting..."}
+                      {vapi.status === "active" && "Live Call Active"}
+                      {vapi.status === "error" && "Call Error"}
+                    </span>
+                    {vapi.isSpeaking && (
+                      <Badge variant="secondary" className="text-[10px] animate-pulse">Speaking</Badge>
+                    )}
+                  </div>
+                  {vapi.transcript && vapi.status === "active" && (
+                    <p className="text-xs text-muted-foreground text-center italic">"{vapi.transcript}"</p>
+                  )}
+                  {vapi.error && (
+                    <p className="text-xs text-destructive text-center">{vapi.error}</p>
+                  )}
+                  <div className="flex gap-2">
+                    {vapi.status === "idle" || vapi.status === "error" ? (
+                      <Button
+                        size="sm"
+                        onClick={vapi.startCall}
+                        className="gap-1"
+                        data-testid="button-start-vapi-call"
+                      >
+                        <Phone className="w-3 h-3" />
+                        Start Voice Call
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={vapi.stopCall}
+                        className="gap-1"
+                        data-testid="button-stop-vapi-call"
+                      >
+                        <PhoneOff className="w-3 h-3" />
+                        End Call
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground text-center">
+                    Powered by VAPI — real-time voice AI conversation
+                  </p>
+                </div>
+              </Card>
+
               {/* Avatar Display */}
               <Card className={`p-6 w-full max-w-sm ${
                 isDarkMode

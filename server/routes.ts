@@ -346,6 +346,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
 
+      // ── CREDIT CHECK (1 credit per chat message) ──────────────────────────
+      if (user?.email !== ADMIN_EMAIL) {
+        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+        if (credits.balance < 1) {
+          return res.status(402).json({
+            message: "You've run out of credits. You earn 10 free credits each day, or top up for more.",
+            error: "INSUFFICIENT_CREDITS",
+            balance: credits.balance,
+          });
+        }
+        credits.balance -= 1;
+        credits.monthlyUsed += 1;
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       // Verify session exists if provided, otherwise create a new one
       if (sessionId) {
         const session = await storage.getChatSession(sessionId);
@@ -3615,8 +3630,8 @@ KEY_WORDS: [keywords separated by commas]`,
   // ─────────────────────────────────────────────────────────────────────────────
   app.post('/api/video/generate', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const replicateToken = process.env.REPLICATE_API_TOKEN;
-      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured" });
+      const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
+      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add your Replicate token in Replit Secrets." });
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "prompt is required" });
       // Deduct credits (video = 5 credits)
@@ -3659,7 +3674,7 @@ KEY_WORDS: [keywords separated by commas]`,
 
   app.get('/api/video/status/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const replicateToken = process.env.REPLICATE_API_TOKEN;
+      const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
       const { id } = req.params;
       const response = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
         headers: { Authorization: `Bearer ${replicateToken}` },
