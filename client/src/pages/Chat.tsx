@@ -2,6 +2,9 @@ import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -567,21 +570,34 @@ export default function Chat() {
                           : "hover:bg-muted"
                       }`}
                     >
-                      <button
-                        onClick={() => setCurrentSessionId(session.id)}
-                        className="flex-1 text-left text-sm truncate min-w-0"
-                        title={session.title}
-                        data-testid={`button-session-${session.id}`}
-                      >
-                        {session.title}
-                      </button>
+                      <div className="flex-1 min-w-0" onClick={() => setCurrentSessionId(session.id)}>
+                        <div className="flex items-center gap-1 mb-0.5">
+                          {session.mode && session.mode !== "chat" && session.mode !== "standard" && (
+                            <span className={`text-[9px] font-bold px-1 rounded uppercase tracking-wide flex-shrink-0 ${
+                              session.mode === "advanced" ? "bg-purple-500/20 text-purple-400" :
+                              session.mode === "tutor" ? "bg-blue-500/20 text-blue-400" :
+                              session.mode === "exam" ? "bg-orange-500/20 text-orange-400" :
+                              "bg-muted text-muted-foreground"
+                            }`}>
+                              {session.mode}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          className="w-full text-left text-sm truncate block"
+                          title={session.title}
+                          data-testid={`button-session-${session.id}`}
+                        >
+                          {session.title}
+                        </button>
+                      </div>
                       <button
                         onClick={() => {
                           if (window.confirm("Delete " + session.title + "?")) {
                             deleteChat(session.id);
                           }
                         }}
-                        className="p-1 text-destructive hover:bg-destructive/20 rounded transition-colors"
+                        className="p-1 text-destructive hover:bg-destructive/20 rounded transition-colors flex-shrink-0"
                         data-testid={`button-delete-${session.id}`}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -876,7 +892,10 @@ export default function Chat() {
                         <div className="break-words text-sm flex-1 min-w-0">
                           {msg.role === "assistant" ? (
                             <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-code:bg-secondary prose-code:px-1 prose-code:rounded prose-pre:bg-secondary prose-pre:p-3 prose-pre:rounded-lg prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm, remarkMath]}
+                                rehypePlugins={[rehypeKatex]}
+                              >
                                 {msg.content}
                               </ReactMarkdown>
                             </div>

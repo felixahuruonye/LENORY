@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, MicOff, X, Volume2 } from "lucide-react";
+import { Mic, MicOff, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -14,10 +14,11 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [silenceTimer, setSilenceTimer] = useState<NodeJS.Timeout | null>(null);
+  const [useAssemblyAI, setUseAssemblyAI] = useState(true);
   const socketRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<any>(null);
   const { toast } = useToast();
-  const lastTapRef = useRef<number>(0);
 
   const stopListening = useCallback(() => {
     setIsListening(false);
@@ -28,16 +29,18 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
       socketRef.current.close();
       socketRef.current = null;
     }
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
     recorderRef.current = null;
-  }, []);
+    if (silenceTimer) clearTimeout(silenceTimer);
+  }, [silenceTimer]);
 
-  const startListening = useCallback(async () => {
+  const startListeningAssemblyAI = useCallback(async () => {
     try {
       const tokenRes = await apiRequest("POST", "/api/assemblyai/token", {});
-      if (!tokenRes.ok) {
-        toast({ title: "Voice unavailable", description: "Could not start voice input.", variant: "destructive" });
-        return;
-      }
+      if (!tokenRes.ok) throw new Error("Token failed");
       const { token } = await tokenRes.json();
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -61,11 +64,7 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
         if (msg.message_type === "FinalTranscript" && msg.text) {
           setTranscript((prev) => (prev ? prev + " " + msg.text : msg.text));
           if (silenceTimer) clearTimeout(silenceTimer);
-          const t = setTimeout(() => {
-            if (msg.text) {
-              handleSend(msg.text);
-            }
-          }, 3000);
+          const t = setTimeout(() => { if (msg.text) handleSend(msg.text); }, 3000);
           setSilenceTimer(t);
         } else if (msg.message_type === "PartialTranscript" && msg.text) {
           setTranscript(msg.text);
@@ -73,18 +72,51 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
       };
 
       ws.onerror = () => {
-        toast({ title: "Voice error", description: "Connection failed.", variant: "destructive" });
-        stopListening();
+        setUseAssemblyAI(false);
+        startListeningWebSpeech();
       };
 
       ws.onclose = () => {
         stream.getTracks().forEach((t) => t.stop());
         setIsListening(false);
       };
-    } catch (err: any) {
-      toast({ title: "Microphone blocked", description: "Allow microphone access to use voice.", variant: "destructive" });
+    } catch {
+      setUseAssemblyAI(false);
+      startListeningWebSpeech();
     }
-  }, [stopListening, toast]);
+  }, [silenceTimer]);
+
+  const startListeningWebSpeech = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast({ title: "Microphone unavailable", description: "Please allow microphone access and try again.", variant: "destructive" });
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-NG";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.onresult = (e: any) => {
+      const text = Array.from(e.results).map((r: any) => r[0].transcript).join(" ");
+      setTranscript(text);
+      if (e.results[e.results.length - 1].isFinal) {
+        handleSend(text);
+      }
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [toast]);
+
+  const startListening = useCallback(() => {
+    if (useAssemblyAI) {
+      startListeningAssemblyAI();
+    } else {
+      startListeningWebSpeech();
+    }
+  }, [useAssemblyAI, startListeningAssemblyAI, startListeningWebSpeech]);
 
   const handleSend = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -92,17 +124,8 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
     setTranscript("");
     stopListening();
     setIsOpen(false);
-    toast({ title: "Voice message sent", description: text.trim().slice(0, 60) });
+    toast({ title: "Voice sent to LENORY", description: text.trim().slice(0, 60) });
   }, [onTranscript, stopListening, toast]);
-
-  const handleDoubleTap = useCallback(() => {
-    const now = Date.now();
-    const gap = now - lastTapRef.current;
-    lastTapRef.current = now;
-    if (gap < 400) {
-      setIsOpen((prev) => !prev);
-    }
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -133,7 +156,7 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
           </div>
 
           <div className="min-h-16 bg-secondary/30 rounded-lg p-3 mb-3 text-sm text-muted-foreground">
-            {transcript || (isListening ? "Listening…" : "Press the mic to speak")}
+            {transcript || (isListening ? "Listening… speak now" : "Tap the mic and speak")}
           </div>
 
           <div className="flex gap-2">
@@ -144,7 +167,7 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
               data-testid="button-toggle-listen"
             >
               {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-              {isListening ? "Stop" : "Start Listening"}
+              {isListening ? "Stop" : "Start Speaking"}
             </Button>
             {transcript && (
               <Button variant="outline" onClick={() => handleSend(transcript)} data-testid="button-send-transcript">
@@ -153,21 +176,22 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            3 seconds of silence = auto-send
+            3 seconds of silence = auto-send to chat
           </p>
         </div>
       )}
 
       <button
-        onClick={handleDoubleTap}
-        onDoubleClick={() => setIsOpen((p) => !p)}
+        onClick={() => setIsOpen((p) => !p)}
         className={`h-14 w-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 ${
           isOpen
             ? "bg-primary text-primary-foreground ring-4 ring-primary/30"
+            : isListening
+            ? "bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse"
             : "bg-background/90 backdrop-blur text-foreground border border-primary/30 hover:bg-primary hover:text-primary-foreground"
         }`}
         data-testid="button-hey-lenory"
-        title="Hey LENORY — double-tap to open voice"
+        title="Hey LENORY — tap to open voice assistant"
       >
         <Mic className="h-6 w-6" />
       </button>
