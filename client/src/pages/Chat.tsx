@@ -327,6 +327,7 @@ export default function Chat() {
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [showVapiPanel, setShowVapiPanel] = useState(false);
   const [showCreditAlert, setShowCreditAlert] = useState(false);
   const [creditAlertShown, setCreditAlertShown] = useState(false);
@@ -649,6 +650,7 @@ export default function Chat() {
         sessionId,
         autoLearn: true,
         model: selectedModel.id,
+        isAdvanced: advancedMode,
       });
 
       if (res.status === 402) {
@@ -897,7 +899,7 @@ export default function Chat() {
                     {msg.role === "assistant" && (
                       <div className="flex-shrink-0 mt-1">
                         <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
-                          <LenoryStarIcon className="w-5 h-5" />
+                          <Brain className="w-4 h-4 text-primary" />
                         </div>
                       </div>
                     )}
@@ -984,7 +986,7 @@ export default function Chat() {
                   <span className="text-sm font-semibold">Attach or Create</span>
                   <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
                 </div>
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-5 gap-3">
                   {[
                     { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => cameraInputRef.current?.click() },
                     { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
@@ -994,6 +996,8 @@ export default function Chat() {
                     { icon: Sparkles, label: "Image Gen", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
                     { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
                     { icon: Calculator, label: "CBT Mode", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
+                    { icon: Code, label: "Advanced", color: "text-cyan-400 bg-cyan-500/10", action: () => { setAdvancedMode(true); setShowPlusMenu(false); setTimeout(() => textareaRef.current?.focus(), 50); } },
+                    { icon: Brain, label: "Knowledge", color: "text-violet-400 bg-violet-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/knowledge-base"; } },
                   ].map(item => (
                     <button key={item.label} onClick={item.action}
                       className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover-elevate transition-all"
@@ -1004,6 +1008,15 @@ export default function Chat() {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Advanced mode indicator */}
+            {advancedMode && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl">
+                <Code className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                <span className="text-xs text-cyan-300 flex-1">Advanced mode — deep technical & coding responses with DeepSeek</span>
+                <button onClick={() => setAdvancedMode(false)} className="text-cyan-400 hover:text-cyan-200" data-testid="button-close-advanced-mode"><X className="w-3.5 h-3.5" /></button>
               </div>
             )}
 

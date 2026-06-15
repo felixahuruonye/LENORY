@@ -30,6 +30,7 @@ import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest } from "@/lib/queryClient";
+import { supabase } from "@/lib/supabase";
 
 interface TranscriptSegment {
   speaker: string;
@@ -773,6 +774,23 @@ export default function LiveSession() {
     }
   };
 
+  const transcribeWithGroq = async (audioBlob: Blob): Promise<{ text: string; duration_seconds: number; credits_deducted: number; engine: string }> => {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "recording.webm");
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token || "";
+    const response = await fetch("/api/live-session/transcribe", {
+      method: "POST",
+      headers: token ? { "Authorization": `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.message || "Transcription failed");
+    }
+    return response.json();
+  };
+
   const transcribeManually = async () => {
     if (audioChunksRef.current.length === 0) {
       toast({
@@ -786,42 +804,39 @@ export default function LiveSession() {
     setIsTranscribing(true);
     toast({
       title: "Transcribing",
-      description: "Processing your recording with Whisper...",
+      description: "Processing your recording with Whisper AI...",
     });
 
     try {
       const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-      const formData = new FormData();
-      formData.append("file", audioBlob, "recording.webm");
+      const data = await transcribeWithGroq(audioBlob);
 
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Transcription failed");
+      if (data.text) {
+        setTranscript(prev => [
+          ...prev,
+          {
+            speaker: "Transcription",
+            text: data.text,
+            timestamp: Date.now(),
+          },
+        ]);
+        const mins = Math.ceil(data.duration_seconds / 60);
+        toast({
+          title: "Transcription complete",
+          description: `${mins > 0 ? `${mins} min audio` : "Audio"} transcribed via ${data.engine}${data.credits_deducted > 0 ? ` · ${data.credits_deducted} credits used` : ""}`,
+        });
+      } else {
+        toast({
+          title: "No speech detected",
+          description: "The audio did not contain recognizable speech",
+          variant: "destructive",
+        });
       }
-
-      const data = await response.json();
-      setTranscript([
-        ...transcript,
-        {
-          speaker: "Full Recording",
-          text: data.text,
-          timestamp: Date.now(),
-        },
-      ]);
-
-      toast({
-        title: "Transcription complete",
-        description: "Your recording has been transcribed",
-      });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Transcription error:", error);
       toast({
         title: "Transcription failed",
-        description: "Could not transcribe audio",
+        description: error?.message || "Could not transcribe audio. Try again.",
         variant: "destructive",
       });
     } finally {

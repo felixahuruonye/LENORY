@@ -272,10 +272,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.userId;
       const sessionId = req.query.sessionId as string;
       
-      const messages = sessionId 
-        ? await storage.getChatMessagesBySession(sessionId)
-        : await storage.getChatMessagesByUser(userId);
-      res.json(messages);
+      if (sessionId) {
+        // Verify session belongs to this user before returning messages
+        const session = await storage.getChatSession(sessionId);
+        if (!session || session.userId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+        const messages = await storage.getChatMessagesBySession(sessionId);
+        res.json(messages);
+      } else {
+        const messages = await storage.getChatMessagesByUser(userId);
+        res.json(messages);
+      }
     } catch (error) {
       console.error("Error fetching messages:", error);
       res.status(500).json({ message: "Failed to fetch messages" });
@@ -559,6 +567,41 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
       let aiResponse: string;
       if (overrideResponse) {
         aiResponse = overrideResponse;
+      } else if (isAdvanced) {
+        // Advanced mode: DeepSeek Coder via OpenRouter for deep technical responses
+        try {
+          const openRouterKey = process.env.OPENROUTER_API_KEY;
+          if (openRouterKey) {
+            const orRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${openRouterKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://lenory.app",
+                "X-Title": "LENORY AI",
+              },
+              body: JSON.stringify({
+                model: "deepseek/deepseek-coder",
+                messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
+                temperature: 0.3,
+                max_tokens: 4096,
+              }),
+            });
+            if (orRes.ok) {
+              const orData = await orRes.json();
+              aiResponse = orData.choices?.[0]?.message?.content || "";
+              if (!aiResponse.trim()) throw new Error("Empty DeepSeek response");
+              console.log("✓ Advanced mode: DeepSeek Coder responded");
+            } else {
+              throw new Error(`OpenRouter error: ${orRes.status}`);
+            }
+          } else {
+            throw new Error("No OPENROUTER_API_KEY");
+          }
+        } catch (deepseekErr) {
+          console.error("DeepSeek fallback:", deepseekErr);
+          aiResponse = await chatWithAISmartFallback(messages as any);
+        }
       } else {
         // Get AI response with smart fallback (Gemini → OpenRouter → OpenAI)
         try {
@@ -1070,7 +1113,12 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
   app.patch('/api/chat/sessions/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { id } = req.params;
+      const userId = req.userId;
       const updates = req.body;
+      const existing = await storage.getChatSession(id);
+      if (!existing || existing.userId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
       const session = await storage.updateChatSession(id, updates);
       res.json(session);
     } catch (error) {
@@ -2738,6 +2786,93 @@ KEY_WORDS: [keywords separated by commas]`,
         message: error?.message || "Transcription failed",
         text: ""
       });
+    }
+  });
+
+  // ── Groq Whisper transcription for Live Sessions ─────────────────────────
+  app.post('/api/live-session/transcribe', supabaseAuth, upload.single('audio'), async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      if (!req.file) {
+        return res.status(400).json({ message: "No audio file provided" });
+      }
+
+      const audioBuffer = req.file.buffer;
+      const ext = req.file.originalname?.split('.').pop() || 'webm';
+      const tempFile = path.join(os.tmpdir(), `live_${Date.now()}.${ext}`);
+      fs.writeFileSync(tempFile, audioBuffer);
+
+      let transcriptText = "";
+      let durationSeconds = 0;
+      let engineUsed = "gemini";
+
+      try {
+        const OpenAI = (await import("openai")).default;
+        const groqKey = process.env.GROQ_API_KEY;
+        const openaiKey = process.env.OPENAI_API_KEY;
+
+        if (groqKey) {
+          // Use Groq Whisper Large v3 Turbo (OpenAI-compatible SDK)
+          const groq = new OpenAI({ apiKey: groqKey, baseURL: "https://api.groq.com/openai/v1" });
+          const { toFile } = await import("openai");
+          const audioFile = await toFile(fs.createReadStream(tempFile), `audio.${ext}`, { type: req.file.mimetype || "audio/webm" });
+          const result = await groq.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-large-v3-turbo",
+            response_format: "verbose_json",
+            language: "en",
+          } as any);
+          transcriptText = (result as any).text || "";
+          durationSeconds = (result as any).duration || 0;
+          engineUsed = "groq-whisper-large-v3-turbo";
+          console.log(`✓ Groq Whisper transcribed ${durationSeconds.toFixed(1)}s of audio`);
+        } else if (openaiKey) {
+          // Fallback: OpenAI Whisper-1
+          const openai = new OpenAI({ apiKey: openaiKey });
+          const { toFile } = await import("openai");
+          const audioFile = await toFile(fs.createReadStream(tempFile), `audio.${ext}`, { type: req.file.mimetype || "audio/webm" });
+          const result = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-1",
+            response_format: "verbose_json",
+          } as any);
+          transcriptText = (result as any).text || "";
+          durationSeconds = (result as any).duration || 0;
+          engineUsed = "openai-whisper-1";
+          console.log(`✓ OpenAI Whisper transcribed ${durationSeconds.toFixed(1)}s of audio`);
+        } else {
+          // Final fallback: Gemini transcription
+          const result = await transcribeAudio(tempFile);
+          transcriptText = result.text;
+          durationSeconds = result.duration || 0;
+          engineUsed = "gemini-2.5-flash";
+        }
+      } finally {
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      }
+
+      // Credit deduction: round up to nearest minute
+      const user = await storage.getUser(userId);
+      const ADMIN_EMAIL_CHECK = "felixahuruonye@gmail.com";
+      let creditsDeducted = 0;
+      if (user?.email !== ADMIN_EMAIL_CHECK && durationSeconds > 0) {
+        const durationMinutes = Math.ceil(durationSeconds / 60);
+        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+        creditsDeducted = Math.min(durationMinutes, credits.balance);
+        credits.balance -= creditsDeducted;
+        console.log(`💳 Deducted ${creditsDeducted} credits for ${durationMinutes} min transcription`);
+      }
+
+      res.json({
+        text: transcriptText,
+        duration_seconds: durationSeconds,
+        credits_deducted: creditsDeducted,
+        engine: engineUsed,
+        success: true,
+      });
+    } catch (error: any) {
+      console.error("Live session transcription error:", error);
+      res.status(500).json({ message: error?.message || "Transcription failed", text: "" });
     }
   });
 

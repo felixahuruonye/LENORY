@@ -9,7 +9,6 @@ import { Link } from "wouter";
 import {
   Mic,
   Brain,
-  Upload,
   BookOpen,
   TrendingUp,
   Clock,
@@ -302,16 +301,16 @@ export default function Dashboard() {
                   </Card>
                 </a>
 
-                <a href="/upload">
-                  <Card className="hover-elevate active-elevate-2 cursor-pointer" data-testid="card-upload-notes">
+                <a href="/cbt-mode">
+                  <Card className="hover-elevate active-elevate-2 cursor-pointer" data-testid="card-cbt-practice">
                     <div className="block p-6">
                       <div className="flex items-center gap-4">
                         <div className="h-12 w-12 rounded-lg bg-chart-3/10 flex items-center justify-center">
-                          <Upload className="h-6 w-6 text-chart-3" />
+                          <GraduationCap className="h-6 w-6 text-chart-3" />
                         </div>
                         <div>
-                          <h3 className="font-semibold">Upload Notes</h3>
-                          <p className="text-sm text-muted-foreground">Process files</p>
+                          <h3 className="font-semibold">CBT Practice</h3>
+                          <p className="text-sm text-muted-foreground">JAMB, WAEC, NECO</p>
                         </div>
                       </div>
                     </div>
