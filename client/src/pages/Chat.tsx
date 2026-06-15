@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,13 +6,13 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Send,
@@ -21,26 +21,19 @@ import {
   Trash2,
   Menu,
   ChevronLeft,
-  ArrowLeft,
   Loader2,
-  Bot,
   User as UserIcon,
   Volume2,
   VolumeX,
   Settings,
-  Bell,
-  Zap,
-  CheckSquare,
-  Square,
+  ChevronDown,
   Search,
   ExternalLink,
   Sparkles,
   BookOpen,
   Brain,
-  Gauge,
   Image,
   Code,
-  Lightbulb,
   Mic,
   MicOff,
   Camera,
@@ -48,91 +41,367 @@ import {
   Film,
   Calculator,
   X,
+  Copy,
+  Check,
+  CheckSquare,
+  Square,
+  AlertTriangle,
+  Zap,
+  Phone,
+  PhoneOff,
+  Radio,
+  Globe,
+  ArrowLeft,
+  Gauge,
+  Lightbulb,
+  PenLine,
 } from "lucide-react";
-import { Link, useLocation, useSearch, useRoute } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useVoice } from "@/lib/useVoice";
+import { useVapi } from "@/hooks/useVapi";
 import { detectFeatureOpen } from "@/lib/featureRegistry";
 import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shared/schema";
 
+// ─── Models ──────────────────────────────────────────────────────────────────
+const AI_MODELS = [
+  { id: "lenory-ultra", label: "LENORY Ultra", description: "Most capable — GPT-4 class" },
+  { id: "lenory-fast", label: "LENORY Fast", description: "Quick responses — GPT-3.5" },
+  { id: "lenory-vision", label: "LENORY Vision", description: "Images & files — Gemini" },
+  { id: "lenory-search", label: "LENORY Search", description: "Internet-connected" },
+];
+
+// ─── Typing animation ──────────────────────────────────────────────────────────
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-3 py-2 px-1">
+      <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center flex-shrink-0">
+        <PenLine className="w-4 h-4 text-primary animate-pulse" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+        <span className="ml-2 text-sm text-muted-foreground italic">LENORY is writing...</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Code block with copy button ─────────────────────────────────────────────
+function CodeBlock({ children, className }: { children: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const lang = className?.replace("language-", "") || "code";
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(children);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="relative group my-3 rounded-xl overflow-hidden border border-border/50">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/80 border-b border-border/40">
+        <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
+        <button
+          onClick={copy}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="button-copy-code"
+        >
+          {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+          <span>{copied ? "Copied!" : "Copy"}</span>
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-4 text-sm bg-muted/30 font-mono leading-relaxed">
+        <code>{children}</code>
+      </pre>
+    </div>
+  );
+}
+
+// ─── Markdown renderer ────────────────────────────────────────────────────────
+function LenoryMarkdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none
+      prose-p:my-2 prose-p:leading-relaxed
+      prose-headings:my-3 prose-headings:font-semibold
+      prose-ul:my-2 prose-ol:my-2 prose-li:my-1
+      prose-blockquote:border-l-primary prose-blockquote:bg-primary/5 prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r-lg prose-blockquote:not-italic
+      prose-strong:text-foreground prose-strong:font-semibold
+      prose-em:text-muted-foreground
+      prose-table:my-3
+      prose-th:bg-muted/50 prose-th:px-3 prose-th:py-2
+      prose-td:px-3 prose-td:py-2 prose-td:border-border
+    ">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          code({ node, className, children, ...props }: any) {
+            const isBlock = !!(props as any).inline === false || className?.includes("language-");
+            const codeStr = String(children).replace(/\n$/, "");
+            if (isBlock || className) {
+              return <CodeBlock className={className}>{codeStr}</CodeBlock>;
+            }
+            return (
+              <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary" {...props}>
+                {children}
+              </code>
+            );
+          },
+          a({ href, children }) {
+            return (
+              <a href={href} target="_blank" rel="noopener noreferrer"
+                className="text-primary underline underline-offset-2 hover:text-primary/80 inline-flex items-center gap-0.5">
+                {children}
+                <ExternalLink className="w-3 h-3 inline" />
+              </a>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+// ─── Credit alert card ────────────────────────────────────────────────────────
+function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpgrade: () => void; onDismiss: () => void }) {
+  return (
+    <div className="mx-auto max-w-2xl my-4">
+      <div className="relative rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-950/30 via-amber-900/20 to-orange-950/30 p-5 backdrop-blur-sm">
+        <button onClick={onDismiss} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground" data-testid="button-dismiss-credit-alert">
+          <X className="w-4 h-4" />
+        </button>
+        <div className="flex items-start gap-4">
+          <div className="rounded-xl bg-amber-500/15 p-2.5 flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-amber-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-amber-300 mb-1">Low Credit Balance</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              You have <span className="font-bold text-amber-400">{credits} credits</span> remaining. Upgrade to Pro or Premium for unlimited AI access and exclusive features.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={onUpgrade}
+                className="bg-gradient-to-r from-amber-500 to-orange-500 text-white border-0 hover:opacity-90"
+                data-testid="button-upgrade-credits"
+              >
+                <Zap className="w-3.5 h-3.5 mr-1.5" />
+                Upgrade Plan
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onDismiss} data-testid="button-maybe-later">
+                Maybe later
+              </Button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 h-1.5 rounded-full bg-muted/30 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-amber-500 to-red-500 transition-all"
+            style={{ width: `${Math.max(5, Math.min(100, credits))}%` }}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground text-right mt-1">{credits} credits left</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── VAPI Voice Panel ─────────────────────────────────────────────────────────
+function VapiPanel({ onClose }: { onClose: () => void }) {
+  const { status, isSpeaking, transcript, startCall, stopCall, error } = useVapi();
+
+  return (
+    <div className="mx-auto max-w-2xl my-3">
+      <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 via-background to-primary/5 p-5 backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Radio className="w-5 h-5 text-primary" />
+            <span className="font-semibold">Live Voice Session</span>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" data-testid="button-close-vapi">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        <div className="flex flex-col items-center gap-4 py-4">
+          {/* Animated orb */}
+          <div className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
+            status === "active" ? "bg-primary/20 shadow-lg shadow-primary/30" : "bg-muted/30"
+          }`}>
+            {isSpeaking && (
+              <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
+            )}
+            <div className="absolute inset-0 rounded-full overflow-hidden flex items-center justify-center">
+              {status === "active" && (
+                <div className="flex items-end gap-0.5 h-8">
+                  {[...Array(7)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="w-1 bg-primary rounded-full"
+                      style={{
+                        height: isSpeaking ? `${20 + Math.random() * 20}px` : "4px",
+                        transition: "height 0.1s ease",
+                        animationDelay: `${i * 50}ms`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              {status !== "active" && <Mic className={`w-8 h-8 ${status === "connecting" ? "text-primary animate-pulse" : "text-muted-foreground"}`} />}
+            </div>
+          </div>
+
+          <div className="text-center">
+            <p className="font-medium">
+              {status === "idle" && "Ready to talk"}
+              {status === "connecting" && "Connecting..."}
+              {status === "active" && (isSpeaking ? "LENORY is speaking..." : "Listening...")}
+              {status === "error" && "Connection failed"}
+            </p>
+            {transcript && <p className="text-sm text-muted-foreground mt-1 italic">"{transcript}"</p>}
+          </div>
+
+          <div className="flex gap-3">
+            {(status === "idle" || status === "error") && (
+              <Button onClick={startCall} className="bg-primary" data-testid="button-start-voice-call">
+                <Phone className="w-4 h-4 mr-2" />
+                Start Voice Call
+              </Button>
+            )}
+            {(status === "active" || status === "connecting") && (
+              <Button onClick={stopCall} variant="destructive" data-testid="button-end-voice-call">
+                <PhoneOff className="w-4 h-4 mr-2" />
+                End Call
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Star/Asterisk logo (like Claude's) ──────────────────────────────────────
+function LenoryStarIcon({ className = "w-12 h-12" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 100 100" fill="none">
+      <circle cx="50" cy="50" r="48" className="fill-primary/10" />
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => (
+        <line
+          key={i}
+          x1="50" y1="50"
+          x2={50 + 38 * Math.cos((angle * Math.PI) / 180)}
+          y2={50 + 38 * Math.sin((angle * Math.PI) / 180)}
+          stroke="currentColor"
+          strokeWidth={i % 2 === 0 ? "6" : "3.5"}
+          strokeLinecap="round"
+          className="text-primary"
+        />
+      ))}
+    </svg>
+  );
+}
+
+// ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const { speak, stop, isPlaying } = useVoice();
+  const [, setLocation] = useLocation();
+
+  // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
+  const [showVapiPanel, setShowVapiPanel] = useState(false);
+  const [showCreditAlert, setShowCreditAlert] = useState(false);
+  const [creditAlertShown, setCreditAlertShown] = useState(false);
+  const [historyTab, setHistoryTab] = useState("all");
+  const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
+  const [searchResults, setSearchResults] = useState<any>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState(AI_MODELS[0]);
+
+  // Chat state
+  const searchString = useSearch();
+  const urlSessionId = new URLSearchParams(searchString).get("sessionId");
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
+  const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+
   const recognitionRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-
-  // Get sessionId from URL query params
-  const searchString = useSearch();
-  const urlSessionId = new URLSearchParams(searchString).get("sessionId");
-  
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
-  const [message, setMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-  const [historyTab, setHistoryTab] = useState("all"); // "all" or "manage"
-  const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
-  const [searchResults, setSearchResults] = useState<any>(null);
-  const [isSearching, setIsSearching] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-resize textarea to fit content (like Replit / ChatGPT)
+  // ─── Credit status ────────────────────────────────────────────────────────
+  const { data: creditsData } = useQuery<{ credits: number; used: number; limit: number }>({
+    queryKey: ["/api/user/credits"],
+    enabled: !!user,
+    refetchInterval: 30000,
+  });
+
+  useEffect(() => {
+    if (creditsData && creditsData.credits <= 5 && !creditAlertShown) {
+      setShowCreditAlert(true);
+      setCreditAlertShown(true);
+    }
+  }, [creditsData]);
+
+  // ─── Auto-resize textarea ─────────────────────────────────────────────────
   const autoResize = () => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    el.style.height = Math.min(el.scrollHeight, 220) + "px";
   };
 
-  // Activate video mode — pre-fills prompt hint in input
+  // ─── Activate video mode ──────────────────────────────────────────────────
   const activateVideoMode = () => {
     setVideoMode(true);
     setShowPlusMenu(false);
     setMessage("Generate a short video about: ");
-    setTimeout(() => {
-      textareaRef.current?.focus();
-      autoResize();
-    }, 50);
+    setTimeout(() => { textareaRef.current?.focus(); autoResize(); }, 50);
   };
 
-  // Handle file selection for Gemini vision analysis
+  // ─── File analyze ─────────────────────────────────────────────────────────
   const handleFileAnalyze = async (file: File) => {
     setShowPlusMenu(false);
     if (!file) return;
-    const MAX_MB = 20;
-    if (file.size > MAX_MB * 1024 * 1024) {
-      toast({ title: "File too large", description: `Max file size is ${MAX_MB}MB`, variant: "destructive" });
+    if (file.size > 20 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Max file size is 20MB", variant: "destructive" });
       return;
     }
-    // Read as base64
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
       const mimeType = file.type || "application/octet-stream";
       const fileName = file.name;
-      const userMsg = file.type.startsWith("image/")
-        ? `[Image: ${fileName}]`
-        : `[File: ${fileName}]`;
-      setMessage(`Analyze this file: ${fileName}`);
-      toast({ title: "Analyzing file…", description: `Sending ${fileName} to LENORY AI` });
+      const userMsg = file.type.startsWith("image/") ? `[Image: ${fileName}]` : `[File: ${fileName}]`;
+      toast({ title: "Analyzing file...", description: `Sending ${fileName} to LENORY AI` });
       try {
-        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions the student might have about it." });
+        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions." });
         const data = await res.json();
         if (data.analysis) {
-          // Send the analysis as if LENORY responded
           setMessage("");
-          // We inject it as a chat message by calling send with special context
-          const analysisMsg = `I analyzed the file **${fileName}**:\n\n${data.analysis}`;
-          // Send user message first then inject assistant response
-          await handleSendMessageWithContent(`Analyze this file: ${fileName}`, analysisMsg);
+          await handleSendMessageWithContent(`Analyze this file: ${fileName}`, `I analyzed **${fileName}**:\n\n${data.analysis}`);
         }
       } catch {
         toast({ title: "Analysis failed", description: "Could not analyze file. Try again.", variant: "destructive" });
@@ -153,83 +422,36 @@ export default function Chat() {
         queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       } catch { return; }
     }
-    // Create user message
     await apiRequest("POST", "/api/chat/messages", { sessionId, role: "user", content: userContent });
-    // Create assistant message with the analysis
     await apiRequest("POST", "/api/chat/messages", { sessionId, role: "assistant", content: assistantContent });
     queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sessionId] });
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
   };
 
-  // Load chat sessions
+  // ─── Sessions ─────────────────────────────────────────────────────────────
   const { data: sessions = [] } = useQuery<ChatSession[]>({
     queryKey: ["/api/chat/sessions"],
     enabled: !!user,
   });
 
-  // Load messages for current session
   const { data: messages = [], refetch: refetchMessages } = useQuery<ChatMessageWithAttachments[]>({
     queryKey: ["/api/chat/messages", currentSessionId],
     enabled: !!user && !!currentSessionId,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/chat/messages?sessionId=${currentSessionId}`);
       const data = await res.json();
-      return data.sort((a: ChatMessageWithAttachments, b: ChatMessageWithAttachments) => {
-        const timeA = new Date(a.createdAt || 0).getTime();
-        const timeB = new Date(b.createdAt || 0).getTime();
-        return timeA - timeB;
-      });
+      return data.sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
     },
   });
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isLoading]);
 
-  // Sync speaker state — when speech ends naturally, clear playingMessageId
   useEffect(() => {
     if (!isPlaying) setPlayingMessageId(null);
   }, [isPlaying]);
 
-  // Mic voice input handler
-  const handleMicToggle = () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      return;
-    }
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      toast({ title: "Not supported", description: "Voice input is not supported in this browser", variant: "destructive" });
-      return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-NG";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      setMessage(prev => prev ? prev + " " + transcript : transcript);
-      setIsListening(false);
-    };
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
-  };
-
-  // Auto-fill voice message from URL param
-  const searchParams = new URLSearchParams(searchString);
-  const voiceParam = searchParams.get("voice");
-  useEffect(() => {
-    if (voiceParam) {
-      setMessage(decodeURIComponent(voiceParam));
-    }
-  }, [voiceParam]);
-
-  // Set session from URL — no empty session creation on load
   useEffect(() => {
     if (user) {
       if (urlSessionId && sessions.some(s => s.id === urlSessionId)) {
@@ -237,113 +459,75 @@ export default function Chat() {
       } else if (!currentSessionId && sessions.length > 0) {
         setCurrentSessionId(sessions[0].id);
       }
-      // Do NOT auto-create a session — wait for first message
     }
   }, [user, sessions, urlSessionId]);
 
-  // Create new chat
+  // Auto-fill from URL
+  const searchParams = new URLSearchParams(searchString);
+  const voiceParam = searchParams.get("voice");
+  useEffect(() => {
+    if (voiceParam) setMessage(decodeURIComponent(voiceParam));
+  }, [voiceParam]);
+
+  // ─── Session management ───────────────────────────────────────────────────
   const createNewChat = async () => {
     try {
-      const res = await apiRequest("POST", "/api/chat/sessions", {
-        title: "New Chat",
-        mode: "chat",
-      });
+      const res = await apiRequest("POST", "/api/chat/sessions", { title: "New Chat", mode: "chat" });
       const session = await res.json();
       setCurrentSessionId(session.id);
       setMessage("");
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      toast({ title: "New chat created" });
-    } catch (error) {
+    } catch {
       toast({ title: "Error", description: "Failed to create chat", variant: "destructive" });
     }
   };
 
-  // Delete single chat
   const deleteChat = async (sessionId: string) => {
     try {
       await apiRequest("DELETE", `/api/chat/sessions/${sessionId}`, {});
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      if (currentSessionId === sessionId) {
-        setCurrentSessionId(null);
-      }
+      if (currentSessionId === sessionId) setCurrentSessionId(null);
       toast({ title: "Chat deleted" });
-    } catch (error) {
+    } catch {
       toast({ title: "Error", description: "Failed to delete chat", variant: "destructive" });
     }
   };
 
-  // Bulk delete chats
   const bulkDeleteChats = async () => {
-    if (selectedChatsForDelete.size === 0) {
-      toast({ title: "No chats selected", variant: "destructive" });
-      return;
-    }
-
+    if (selectedChatsForDelete.size === 0) return;
     try {
-      await apiRequest("POST", "/api/chat/sessions/bulk-delete", {
-        sessionIds: Array.from(selectedChatsForDelete),
-      });
+      await apiRequest("POST", "/api/chat/sessions/bulk-delete", { sessionIds: Array.from(selectedChatsForDelete) });
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+      if (selectedChatsForDelete.has(currentSessionId || "")) setCurrentSessionId(null);
       setSelectedChatsForDelete(new Set());
-      if (selectedChatsForDelete.has(currentSessionId || "")) {
-        setCurrentSessionId(null);
-      }
       toast({ title: `Deleted ${selectedChatsForDelete.size} chats` });
-    } catch (error) {
+    } catch {
       toast({ title: "Error", description: "Failed to delete chats", variant: "destructive" });
     }
   };
 
-  // Toggle select all
   const toggleSelectAll = () => {
-    if (selectedChatsForDelete.size === sessions.length) {
-      setSelectedChatsForDelete(new Set());
-    } else {
-      setSelectedChatsForDelete(new Set(sessions.map(s => s.id)));
-    }
+    setSelectedChatsForDelete(
+      selectedChatsForDelete.size === sessions.length ? new Set() : new Set(sessions.map(s => s.id))
+    );
   };
 
-  // Toggle individual chat selection
-  const toggleChatSelection = (sessionId: string) => {
-    const newSelected = new Set(selectedChatsForDelete);
-    if (newSelected.has(sessionId)) {
-      newSelected.delete(sessionId);
-    } else {
-      newSelected.add(sessionId);
-    }
-    setSelectedChatsForDelete(newSelected);
+  const toggleChatSelection = (id: string) => {
+    const next = new Set(selectedChatsForDelete);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedChatsForDelete(next);
   };
 
-  // Detect if user is asking for internet search
+  // ─── Internet search ──────────────────────────────────────────────────────
   const detectSearchQuery = (text: string): string | null => {
-    const searchKeywords = [
-      "search for",
-      "find",
-      "look up",
-      "what is",
-      "who is",
-      "latest",
-      "current",
-      "today",
-      "news about",
-      "recent",
-      "internet search",
-      "google",
-      "web search",
-      "who are you",
-      "about you"
-    ];
-
-    const lowerText = text.toLowerCase();
-    for (const keyword of searchKeywords) {
-      if (lowerText.includes(keyword)) {
-        return text.replace(new RegExp(keyword, "gi"), "").trim();
-      }
+    const keywords = ["search for", "find", "look up", "latest", "current", "today", "news about", "recent", "internet search", "google", "web search"];
+    const lower = text.toLowerCase();
+    for (const kw of keywords) {
+      if (lower.includes(kw)) return text.replace(new RegExp(kw, "gi"), "").trim();
     }
     return null;
   };
 
-  // Perform internet search
   const performSearch = async (query: string) => {
     try {
       setIsSearching(true);
@@ -351,53 +535,53 @@ export default function Chat() {
       const res = await apiRequest("POST", "/api/chat/search", { query });
       const data = await res.json();
       setSearchResults(data);
-      toast({ title: "Search complete", description: `Found ${data.results?.length || 0} results` });
-    } catch (error) {
-      toast({
-        title: "Search failed",
-        description: "Could not search the internet",
-        variant: "destructive",
-      });
+    } catch {
+      toast({ title: "Search failed", description: "Could not search the internet", variant: "destructive" });
     } finally {
       setIsSearching(false);
     }
   };
 
-  // Send message — creates session on first message if needed
+  // ─── Voice input ──────────────────────────────────────────────────────────
+  const handleMicToggle = () => {
+    if (isListening) { recognitionRef.current?.stop(); setIsListening(false); return; }
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { toast({ title: "Not supported", description: "Voice input not supported in this browser", variant: "destructive" }); return; }
+    const recognition = new SR();
+    recognition.lang = "en-NG";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (e: any) => { setMessage(prev => prev ? prev + " " + e.results[0][0].transcript : e.results[0][0].transcript); setIsListening(false); };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
+
+  // ─── Send message ─────────────────────────────────────────────────────────
   const resetInput = () => {
     setMessage("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "36px";
-    }
+    if (textareaRef.current) textareaRef.current.style.height = "44px";
   };
 
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading) return;
 
-    // Check if user is asking to open a feature
+    // Feature navigation
     const featureRoute = detectFeatureOpen(message);
-    if (featureRoute) {
-      window.location.href = featureRoute;
-      return;
-    }
+    if (featureRoute) { window.location.href = featureRoute; return; }
 
-    // Video mode — call video generation API instead of chat
+    // Video mode
     if (videoMode) {
       const prompt = message.trim();
-      const userName = (user as any)?.firstName || (user as any)?.email?.split("@")[0] || "there";
+      const userName = (user as any)?.firstName || "there";
       setIsLoading(true);
       resetInput();
       try {
         const res = await apiRequest("POST", "/api/video/generate", { prompt });
         const data = await res.json();
-
-        if (data.error) {
-          toast({ title: "Video generation failed", description: data.error, variant: "destructive" });
-          setIsLoading(false);
-          return;
-        }
-
-        // Poll for completion if not done yet
+        if (data.error) { toast({ title: "Video generation failed", description: data.error, variant: "destructive" }); return; }
         let output = data.output;
         let pollId = data.id;
         let attempts = 0;
@@ -406,17 +590,10 @@ export default function Chat() {
           const pollRes = await apiRequest("GET", `/api/video/status/${pollId}`);
           const pollData = await pollRes.json();
           if (pollData.output) { output = pollData.output; break; }
-          if (pollData.status === "failed") {
-            toast({ title: "Video failed", description: "Generation failed. Try again.", variant: "destructive" });
-            setIsLoading(false);
-            return;
-          }
+          if (pollData.status === "failed") { toast({ title: "Video failed", variant: "destructive" }); return; }
           attempts++;
         }
-
         const videoUrl = Array.isArray(output) ? output[0] : output;
-
-        // Save the exchange as chat messages so it appears in the conversation
         let sessionId = currentSessionId;
         if (!sessionId) {
           const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
@@ -425,43 +602,36 @@ export default function Chat() {
           setCurrentSessionId(sData.id);
           queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
         }
-
         await apiRequest("POST", "/api/chat/send", {
-          content: prompt,
-          sessionId,
-          autoLearn: false,
-          skipAi: false,
+          content: prompt, sessionId, autoLearn: false, skipAi: false,
           overrideResponse: videoUrl
-            ? `Great choice, ${userName}! Here's your generated video:\n\n**Prompt:** ${prompt}\n\n[Watch Video ↗](${videoUrl})\n\n\`\`\`\n${videoUrl}\n\`\`\`\n\n*Download the link or right-click → Save video. Video expires after 24 hours.*`
-            : `Sorry ${userName}, the video could not be generated right now. Please try again.`,
+            ? `Here's your generated video:\n\n**Prompt:** ${prompt}\n\n[Watch Video](${videoUrl})\n\n\`\`\`\n${videoUrl}\n\`\`\`\n\n*Right-click → Save video. Link expires after 24 hours.*`
+            : `Sorry, the video could not be generated right now. Please try again.`,
         });
-
         await refetchMessages();
         setVideoMode(false);
-      } catch (err) {
-        toast({ title: "Video error", description: "Failed to generate video. Make sure REPLICATE_API_TOKEN is set.", variant: "destructive" });
+      } catch {
+        toast({ title: "Video error", description: "Failed to generate video.", variant: "destructive" });
       } finally {
         setIsLoading(false);
       }
       return;
     }
 
-    // Check if user is asking for internet search
-    const searchQuery = detectSearchQuery(message);
-    if (searchQuery) {
-      await performSearch(searchQuery);
+    // Internet search detection
+    if (selectedModel.id === "lenory-search") {
+      await performSearch(message.trim());
       resetInput();
       return;
     }
+    const searchQuery = detectSearchQuery(message);
+    if (searchQuery) { await performSearch(searchQuery); resetInput(); return; }
 
-    // Create session on first message if we don't have one
+    // Normal AI chat
     let sessionId = currentSessionId;
     if (!sessionId) {
       try {
-        const res = await apiRequest("POST", "/api/chat/sessions", {
-          title: message.trim().slice(0, 60),
-          mode: "chat",
-        });
+        const res = await apiRequest("POST", "/api/chat/sessions", { title: message.trim().slice(0, 60), mode: "chat" });
         const session = await res.json();
         sessionId = session.id;
         setCurrentSessionId(session.id);
@@ -478,634 +648,501 @@ export default function Chat() {
         content: message.trim(),
         sessionId,
         autoLearn: true,
+        model: selectedModel.id,
       });
+
       if (res.status === 402) {
         const errData = await res.json();
-        toast({
-          title: "Out of credits",
-          description: errData.message || "You need more credits to send messages. You get 10 free credits daily.",
-          variant: "destructive",
-        });
+        setShowCreditAlert(true);
+        toast({ title: "Out of credits", description: errData.message || "You need more credits. Upgrade your plan.", variant: "destructive" });
         setIsLoading(false);
         return;
       }
+      resetInput();
       await res.json();
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      resetInput();
-    } catch (error) {
+      queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
+    } catch {
       toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Handle Enter key
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
   };
 
+  const copyMessage = async (content: string, msgId: string) => {
+    await navigator.clipboard.writeText(content);
+    setCopiedMsgId(msgId);
+    setTimeout(() => setCopiedMsgId(null), 2000);
+  };
+
+  // ─── Auth guard ───────────────────────────────────────────────────────────
   if (authLoading || !user) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <div className="flex flex-col items-center gap-4">
+          <LenoryStarIcon className="w-12 h-12 animate-pulse" />
+          <Loader2 className="w-6 h-6 animate-spin text-primary" />
+        </div>
       </div>
     );
   }
 
+  const userName = (user as any)?.firstName || (user as any)?.email?.split("@")[0] || "there";
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
+  const credits = creditsData?.credits ?? 20;
+
+  const quickSuggestions = [
+    { icon: Code, label: "Code", prompt: "Help me write code for " },
+    { icon: BookOpen, label: "Learn", prompt: "Teach me about " },
+    { icon: Globe, label: "Research", prompt: "Research and explain " },
+    { icon: Lightbulb, label: "Ideas", prompt: "Give me creative ideas for " },
+  ];
+
+  // ─── JSX ──────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background transition-all duration-700 ease-in-out animate-in fade-in zoom-in-95">
-      <div className="flex h-screen glassmorphism shadow-2xl relative z-10">
-        {/* Sidebar */}
-        <div
-          className={`${
-            sidebarOpen ? "w-64" : "w-0"
-          } transition-all duration-300 border-r border-border flex flex-col overflow-hidden bg-slate-900/50 backdrop-blur-xl`}
-        >
-          {/* New Chat Button */}
-          <div className="p-4 border-b border-border">
-            <Button
-              onClick={createNewChat}
-              className="w-full"
-              data-testid="button-new-chat"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New Chat
-            </Button>
-          </div>
-
-          {/* History Tabs */}
-          <div className="flex gap-1 p-3 border-b border-border">
-            <button
-              onClick={() => setHistoryTab("all")}
-              className={`flex-1 text-xs font-semibold py-2 rounded transition-colors ${
-                historyTab === "all"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-              data-testid="tab-history-all"
-            >
-              All
-            </button>
-            <button
-              onClick={() => setHistoryTab("manage")}
-              className={`flex-1 text-xs font-semibold py-2 rounded transition-colors ${
-                historyTab === "manage"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-              data-testid="tab-history-manage"
-            >
-              Manage
-            </button>
-          </div>
-
-          {/* Chat History */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            {historyTab === "all" ? (
-              // All chats view
-              <>
-                {sessions.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-4">No chats yet</p>
-                ) : (
-                  sessions.map((session) => (
-                    <div
-                      key={session.id}
-                      className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
-                        currentSessionId === session.id
-                          ? "bg-primary/20 text-primary"
-                          : "hover:bg-muted"
-                      }`}
-                    >
-                      <div className="flex-1 min-w-0" onClick={() => setCurrentSessionId(session.id)}>
-                        <div className="flex items-center gap-1 mb-0.5">
-                          {session.mode && session.mode !== "chat" && session.mode !== "standard" && (
-                            <span className={`text-[9px] font-bold px-1 rounded uppercase tracking-wide flex-shrink-0 ${
-                              session.mode === "advanced" ? "bg-purple-500/20 text-purple-400" :
-                              session.mode === "tutor" ? "bg-blue-500/20 text-blue-400" :
-                              session.mode === "exam" ? "bg-orange-500/20 text-orange-400" :
-                              "bg-muted text-muted-foreground"
-                            }`}>
-                              {session.mode}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          className="w-full text-left text-sm truncate block"
-                          title={session.title}
-                          data-testid={`button-session-${session.id}`}
-                        >
-                          {session.title}
-                        </button>
-                      </div>
-                      <button
-                        onClick={() => {
-                          if (window.confirm("Delete " + session.title + "?")) {
-                            deleteChat(session.id);
-                          }
-                        }}
-                        className="p-1 text-destructive hover:bg-destructive/20 rounded transition-colors flex-shrink-0"
-                        data-testid={`button-delete-${session.id}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </>
-            ) : (
-              // Manage chats view with checkboxes
-              <>
-                {sessions.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-4">No chats to manage</p>
-                ) : (
-                  <>
-                    {/* Select All Button */}
-                    <button
-                      onClick={toggleSelectAll}
-                      className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted transition-colors mb-2 text-sm font-semibold"
-                      data-testid="button-select-all-chats"
-                    >
-                      {selectedChatsForDelete.size === sessions.length ? (
-                        <CheckSquare className="w-4 h-4 text-primary" />
-                      ) : (
-                        <Square className="w-4 h-4 text-muted-foreground" />
-                      )}
-                      <span className="text-xs">
-                        {selectedChatsForDelete.size > 0 ? `${selectedChatsForDelete.size} selected` : "Select All"}
-                      </span>
-                    </button>
-
-                    {/* Chat List with Checkboxes */}
-                    {sessions.map((session) => (
-                      <div
-                        key={session.id}
-                        className="flex items-center gap-2 p-2 rounded hover:bg-muted transition-colors"
-                      >
-                        <button
-                          onClick={() => toggleChatSelection(session.id)}
-                          className="flex-shrink-0"
-                          data-testid={`checkbox-session-${session.id}`}
-                        >
-                          {selectedChatsForDelete.has(session.id) ? (
-                            <CheckSquare className="w-4 h-4 text-primary" />
-                          ) : (
-                            <Square className="w-4 h-4 text-muted-foreground" />
-                          )}
-                        </button>
-                        <span className="flex-1 text-sm truncate">{session.title}</span>
-                      </div>
-                    ))}
-
-                    {/* Bulk Delete Button */}
-                    {selectedChatsForDelete.size > 0 && (
-                      <button
-                        onClick={bulkDeleteChats}
-                        className="w-full mt-4 flex items-center justify-center gap-2 p-2 rounded bg-destructive/20 text-destructive hover:bg-destructive/30 transition-colors text-sm font-semibold"
-                        data-testid="button-bulk-delete-chats"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Delete {selectedChatsForDelete.size}
-                      </button>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </div>
+    <div className="h-screen bg-background flex overflow-hidden">
+      {/* ── Sidebar ── */}
+      <div className={`${sidebarOpen ? "w-64" : "w-0"} flex-shrink-0 transition-all duration-300 border-r border-border flex flex-col overflow-hidden bg-background/80 backdrop-blur-xl`}>
+        <div className="p-3 border-b border-border flex-shrink-0">
+          <Button onClick={createNewChat} className="w-full" size="sm" data-testid="button-new-chat">
+            <Plus className="w-4 h-4 mr-2" />
+            New Chat
+          </Button>
         </div>
 
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0 bg-slate-950/20">
-          {/* Header - Mobile responsive */}
-          <header className="border-b border-border bg-background/80 backdrop-blur-sm">
-            <div className="flex items-center justify-between h-14 px-2 sm:px-4">
-              <div className="flex items-center gap-1 sm:gap-3">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSidebarOpen(!sidebarOpen)}
-                  data-testid="button-toggle-sidebar"
-                >
-                  {sidebarOpen ? (
-                    <ChevronLeft className="w-5 h-5" />
-                  ) : (
-                    <Menu className="w-5 h-5" />
-                  )}
-                </Button>
-                <h1 className="font-semibold text-base sm:text-lg">LENORY</h1>
+        <div className="flex gap-1 p-2 border-b border-border flex-shrink-0">
+          {["all", "manage"].map(tab => (
+            <button key={tab} onClick={() => setHistoryTab(tab)}
+              className={`flex-1 text-xs font-medium py-1.5 rounded transition-colors capitalize ${historyTab === tab ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid={`tab-history-${tab}`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
 
-                {/* Quick Action Menu */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="hover-elevate ml-1 sm:ml-2 px-2 sm:px-3"
-                      data-testid="button-quick-actions"
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {historyTab === "all" ? (
+            sessions.length === 0
+              ? <p className="text-xs text-muted-foreground text-center py-6">No chats yet</p>
+              : sessions.map(session => (
+                  <div key={session.id} className={`flex items-center gap-1.5 p-2 rounded-lg cursor-pointer transition-colors group ${currentSessionId === session.id ? "bg-primary/15 text-primary" : "hover:bg-muted/60"}`}>
+                    <div className="flex-1 min-w-0" onClick={() => setCurrentSessionId(session.id)}>
+                      <p className="text-xs truncate font-medium" data-testid={`button-session-${session.id}`}>{session.title}</p>
+                    </div>
+                    <button onClick={() => { if (window.confirm("Delete " + session.title + "?")) deleteChat(session.id); }}
+                      className="opacity-0 group-hover:opacity-100 p-1 text-destructive hover:bg-destructive/15 rounded transition-all flex-shrink-0"
+                      data-testid={`button-delete-${session.id}`}
                     >
-                      <Sparkles className="w-4 h-4 sm:mr-2" />
-                      <span className="hidden sm:inline">Quick Actions</span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56 z-50">
-                    <DropdownMenuItem asChild data-testid="action-open-cbt">
-                      <Link href="/cbt-mode" className="flex items-center cursor-pointer">
-                        <Lightbulb className="w-4 h-4 mr-2" />
-                        <span>Open CBT Mode</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-show-memory">
-                      <Link href="/memory" className="flex items-center cursor-pointer">
-                        <Brain className="w-4 h-4 mr-2" />
-                        <span>Show my Memory</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-dashboard">
-                      <Link href="/dashboard" className="flex items-center cursor-pointer">
-                        <Gauge className="w-4 h-4 mr-2" />
-                        <span>Take me to Dashboard</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-live-ai">
-                      <Link href="/live-ai" className="flex items-center cursor-pointer">
-                        <Zap className="w-4 h-4 mr-2" />
-                        <span>Launch Live AI</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-settings">
-                      <Link href="/settings" className="flex items-center cursor-pointer">
-                        <Settings className="w-4 h-4 mr-2" />
-                        <span>View my Settings</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-gallery">
-                      <Link href="/image-gallery" className="flex items-center cursor-pointer">
-                        <Image className="w-4 h-4 mr-2" />
-                        <span>Go to Image Gallery</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={activateVideoMode} data-testid="action-video-gen" className="cursor-pointer">
-                      <Film className="w-4 h-4 mr-2" />
-                      <span>Generate Video</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild data-testid="action-courses">
-                      <Link href="/courses" className="flex items-center cursor-pointer">
-                        <BookOpen className="w-4 h-4 mr-2" />
-                        <span>Start a Course</span>
-                      </Link>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+          ) : (
+            <>
+              {sessions.length > 0 && (
+                <button onClick={toggleSelectAll} className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted text-xs font-semibold mb-1" data-testid="button-select-all-chats">
+                  {selectedChatsForDelete.size === sessions.length ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4 text-muted-foreground" />}
+                  {selectedChatsForDelete.size > 0 ? `${selectedChatsForDelete.size} selected` : "Select All"}
+                </button>
+              )}
+              {sessions.map(session => (
+                <div key={session.id} className="flex items-center gap-2 p-2 rounded hover:bg-muted cursor-pointer" onClick={() => toggleChatSelection(session.id)}>
+                  {selectedChatsForDelete.has(session.id) ? <CheckSquare className="w-4 h-4 text-primary flex-shrink-0" /> : <Square className="w-4 h-4 text-muted-foreground flex-shrink-0" />}
+                  <span className="text-xs truncate">{session.title}</span>
+                </div>
+              ))}
+              {selectedChatsForDelete.size > 0 && (
+                <button onClick={bulkDeleteChats} className="w-full mt-2 flex items-center justify-center gap-2 p-2 rounded bg-destructive/15 text-destructive hover:bg-destructive/25 text-xs font-semibold" data-testid="button-bulk-delete-chats">
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete {selectedChatsForDelete.size}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Credits in sidebar */}
+        {creditsData && (
+          <div className="p-3 border-t border-border flex-shrink-0">
+            <div className="rounded-lg bg-muted/40 p-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs text-muted-foreground">AI Credits</span>
+                <span className={`text-xs font-bold ${credits <= 5 ? "text-amber-400" : "text-primary"}`}>{credits}</span>
               </div>
-              <div className="flex items-center gap-1 sm:gap-2">
-                <Link href="/settings">
-                  <Button variant="ghost" size="icon" data-testid="link-settings" className="hidden sm:flex">
-                    <Settings className="w-5 h-5" />
-                  </Button>
-                </Link>
-                <Link href="/live-ai">
-                  <Button variant="ghost" size="icon" data-testid="link-live-ai" className="text-purple-400 hover:text-purple-300">
-                    <Zap className="w-5 h-5" />
-                  </Button>
-                </Link>
-                <Link href="/dashboard">
-                  <Button variant="ghost" size="icon" data-testid="link-back">
-                    <ArrowLeft className="w-5 h-5" />
-                  </Button>
-                </Link>
-                <ThemeToggle />
+              <div className="h-1 rounded-full bg-muted overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${credits <= 5 ? "bg-amber-500" : "bg-primary"}`} style={{ width: `${Math.min(100, credits)}%` }} />
               </div>
             </div>
-          </header>
+          </div>
+        )}
+      </div>
 
-          {/* Messages Container */}
-          <div className="flex-1 overflow-y-auto p-4">
-            {/* Search Results Display */}
-            {searchResults && (
-              <div className="max-w-4xl mx-auto mb-6">
-                <div className="bg-gradient-to-br from-blue-900/30 to-purple-900/30 border border-blue-700/50 rounded-lg p-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Search className="w-5 h-5 text-blue-400" />
-                    <h3 className="text-lg font-semibold text-white">Search Results</h3>
-                    <span className="ml-auto text-sm text-blue-300">{searchResults.results?.length || 0} results</span>
-                  </div>
+      {/* ── Main area ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Header */}
+        <header className="h-14 flex items-center justify-between px-3 border-b border-border bg-background/80 backdrop-blur-sm flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} data-testid="button-toggle-sidebar">
+              {sidebarOpen ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </Button>
+            <div className="flex items-center gap-1.5">
+              <LenoryStarIcon className="w-6 h-6" />
+              <span className="font-bold text-sm">LENORY</span>
+              {isAdmin && <span className="text-[9px] font-bold bg-primary/20 text-primary px-1.5 py-0.5 rounded uppercase">Admin</span>}
+            </div>
+          </div>
 
-                  {searchResults.summary && (
-                    <p className="text-sm text-slate-300 mb-4 p-3 bg-slate-800/50 rounded">
-                      <strong>Summary:</strong> {searchResults.summary}
-                    </p>
-                  )}
+          <div className="flex items-center gap-1.5">
+            <Link href="/dashboard">
+              <Button variant="ghost" size="icon" data-testid="link-dashboard"><Gauge className="w-4 h-4" /></Button>
+            </Link>
+            <Link href="/settings">
+              <Button variant="ghost" size="icon" data-testid="link-settings"><Settings className="w-4 h-4" /></Button>
+            </Link>
+            <ThemeToggle />
+          </div>
+        </header>
 
-                  {searchResults.results && searchResults.results.length > 0 ? (
-                    <div className="space-y-3">
-                      {searchResults.results.map((result: any, idx: number) => (
-                        <a
-                          key={idx}
-                          href={result.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded border border-slate-700 transition-colors group"
-                          data-testid={`search-result-${idx}`}
-                        >
-                          <div className="flex items-start gap-2">
-                            <ExternalLink className="w-4 h-4 text-blue-400 flex-shrink-0 mt-1" />
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-white group-hover:text-blue-300 truncate">
-                                {result.title}
-                              </h4>
-                              <p className="text-xs text-blue-400 mb-1">{result.source}</p>
-                              <p className="text-sm text-slate-300 line-clamp-2">
-                                {result.snippet}
-                              </p>
-                              <p className="text-xs text-slate-500 mt-2 truncate">
-                                {result.link}
-                              </p>
-                            </div>
-                          </div>
-                        </a>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-slate-400 text-sm">No results found</p>
-                  )}
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto px-4 py-6 min-h-full flex flex-col">
 
-                  <button
-                    onClick={() => setSearchResults(null)}
-                    className="mt-4 text-xs text-slate-400 hover:text-slate-200 transition-colors"
-                    data-testid="button-close-search"
-                  >
-                    Clear search
-                  </button>
+            {/* Empty state — Claude-like */}
+            {messages.length === 0 && !searchResults && !isLoading && (
+              <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 py-12">
+                <LenoryStarIcon className="w-16 h-16" />
+                <div>
+                  <h1 className="text-3xl font-bold mb-2">
+                    Hello, {userName}
+                  </h1>
+                  <p className="text-muted-foreground text-base">
+                    I'm LENORY — your advanced AI. What can I help you with?
+                  </p>
+                </div>
+
+                {/* Quick suggestion pills */}
+                <div className="flex flex-wrap items-center justify-center gap-2 max-w-sm">
+                  {quickSuggestions.map(s => (
+                    <button
+                      key={s.label}
+                      onClick={() => { setMessage(s.prompt); setTimeout(() => textareaRef.current?.focus(), 50); }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-full border border-border bg-card hover-elevate text-sm font-medium transition-all"
+                      data-testid={`suggestion-${s.label.toLowerCase()}`}
+                    >
+                      <s.icon className="w-4 h-4 text-muted-foreground" />
+                      {s.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
 
-            {messages.length === 0 && !searchResults ? (
-              <div className="flex flex-col items-center justify-center h-full text-center">
-                <Bot className="w-16 h-16 text-muted-foreground/30 mb-4" />
-                <h2 className="text-2xl font-semibold mb-2">Start a conversation</h2>
-                <p className="text-muted-foreground max-w-md mb-4">
-                  Ask me anything about your studies. I can help with explanations, problem-solving, exam prep, and more.
-                </p>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  💡 Try saying "search for..." to find information on the internet!
-                </p>
+            {/* Search results */}
+            {searchResults && (
+              <div className="mb-6 rounded-xl border border-blue-500/30 bg-blue-950/20 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Search className="w-4 h-4 text-blue-400" />
+                    <h3 className="font-semibold text-sm">Search Results</h3>
+                    <span className="text-xs text-blue-400">{searchResults.results?.length || 0} results</span>
+                  </div>
+                  <button onClick={() => setSearchResults(null)} className="text-muted-foreground hover:text-foreground" data-testid="button-close-search">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {searchResults.summary && (
+                  <p className="text-sm mb-4 p-3 bg-muted/30 rounded-lg"><strong>Summary:</strong> {searchResults.summary}</p>
+                )}
+                <div className="space-y-2">
+                  {(searchResults.results || []).map((r: any, i: number) => (
+                    <a key={i} href={r.link} target="_blank" rel="noopener noreferrer"
+                      className="flex items-start gap-3 p-3 rounded-lg bg-muted/20 hover:bg-muted/40 transition-colors group"
+                      data-testid={`search-result-${i}`}
+                    >
+                      <ExternalLink className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate group-hover:text-blue-400 transition-colors">{r.title}</p>
+                        <p className="text-xs text-blue-400 mb-0.5">{r.source}</p>
+                        <p className="text-xs text-muted-foreground line-clamp-2">{r.snippet}</p>
+                      </div>
+                    </a>
+                  ))}
+                </div>
               </div>
-            ) : searchResults ? null : (
-              <div className="space-y-4 max-w-4xl mx-auto">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex gap-3 ${
-                      msg.role === "user" ? "justify-end" : "justify-start"
-                    }`}
-                    data-testid={`message-${msg.role}-${msg.id}`}
-                  >
+            )}
+
+            {/* Credit alert in chat */}
+            {showCreditAlert && (
+              <CreditAlert
+                credits={credits}
+                onUpgrade={() => { setShowCreditAlert(false); setLocation("/pricing"); }}
+                onDismiss={() => setShowCreditAlert(false)}
+              />
+            )}
+
+            {/* VAPI panel in chat */}
+            {showVapiPanel && <VapiPanel onClose={() => setShowVapiPanel(false)} />}
+
+            {/* Messages */}
+            {messages.length > 0 && (
+              <div className="flex-1 space-y-6">
+                {messages.map(msg => (
+                  <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`} data-testid={`message-${msg.role}-${msg.id}`}>
                     {msg.role === "assistant" && (
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                          <Bot className="w-5 h-5 text-primary" />
+                      <div className="flex-shrink-0 mt-1">
+                        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                          <LenoryStarIcon className="w-5 h-5" />
                         </div>
                       </div>
                     )}
-
-                    <div
-                      className={`max-w-2xl rounded-lg p-4 backdrop-blur-md transition-all duration-300 ${
-                        msg.role === "user"
-                          ? "bg-gradient-to-br from-primary/90 to-primary/70 text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-primary/40"
-                          : "bg-gradient-to-br from-muted/80 to-muted/60 text-foreground border border-border/50 shadow-lg shadow-black/10 dark:shadow-black/30 hover:shadow-black/20 dark:hover:shadow-black/40"
-                      }`}
-                      data-testid={`card-message-${msg.id}`}
-                    >
-                      {msg.attachments?.images && msg.attachments.images.length > 0 && (
-                        <div className="mb-3 space-y-2">
-                          {msg.attachments.images.map((img: any, idx: number) => (
-                            <div key={idx} className="rounded-lg overflow-hidden" data-testid={`image-${msg.id}-${idx}`}>
-                              <img
-                                src={img.url}
-                                alt={img.title || "Generated image"}
-                                className="w-full h-auto max-h-64 object-cover rounded-lg"
-                                loading="lazy"
-                              />
-                              {img.title && (
-                                <p className="text-xs text-muted-foreground mt-1 italic">{img.title}</p>
-                              )}
+                    <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1"}`} data-testid={`card-message-${msg.id}`}>
+                      {msg.role === "user" ? (
+                        <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-3 text-sm">
+                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                            <div key={idx} className="mb-3 rounded-lg overflow-hidden">
+                              <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-48 object-cover rounded-lg" loading="lazy" />
                             </div>
                           ))}
+                          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                        </div>
+                      ) : (
+                        <div className="text-sm">
+                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                            <div key={idx} className="mb-3 rounded-lg overflow-hidden">
+                              <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-64 object-cover rounded-lg" loading="lazy" />
+                            </div>
+                          ))}
+                          <LenoryMarkdown content={msg.content} />
+                          {/* Message actions */}
+                          <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => copyMessage(msg.content, msg.id)}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-muted transition-colors"
+                              data-testid={`button-copy-msg-${msg.id}`}
+                            >
+                              {copiedMsgId === msg.id ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedMsgId === msg.id ? "Copied" : "Copy"}</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (playingMessageId === msg.id) { stop(); setPlayingMessageId(null); }
+                                else { if (playingMessageId) stop(); setPlayingMessageId(msg.id); speak(msg.content); }
+                              }}
+                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${
+                                playingMessageId === msg.id ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                              }`}
+                              data-testid={`button-speak-${msg.id}`}
+                            >
+                              {playingMessageId === msg.id ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                              <span>{playingMessageId === msg.id ? "Stop" : "Read"}</span>
+                            </button>
+                          </div>
                         </div>
                       )}
-                      <div className="flex justify-between items-start gap-3">
-                        <div className="break-words text-sm flex-1 min-w-0">
-                          {msg.role === "assistant" ? (
-                            <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-code:bg-secondary prose-code:px-1 prose-code:rounded prose-pre:bg-secondary prose-pre:p-3 prose-pre:rounded-lg prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground">
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm, remarkMath]}
-                                rehypePlugins={[rehypeKatex]}
-                              >
-                                {msg.content}
-                              </ReactMarkdown>
-                            </div>
-                          ) : (
-                            <div className="whitespace-pre-wrap">{msg.content}</div>
-                          )}
-                        </div>
-                        {msg.role === "assistant" && (
-                          <button
-                            onClick={() => {
-                              if (playingMessageId === msg.id) {
-                                stop();
-                                setPlayingMessageId(null);
-                              } else {
-                                if (playingMessageId) stop();
-                                setPlayingMessageId(msg.id);
-                                speak(msg.content);
-                              }
-                            }}
-                            className={`flex-shrink-0 p-2 rounded-lg transition-all duration-200 ${
-                              playingMessageId === msg.id
-                                ? "bg-primary text-primary-foreground animate-pulse"
-                                : "hover:bg-primary/20 text-muted-foreground hover:text-foreground"
-                            }`}
-                            title={playingMessageId === msg.id ? "Stop reading" : "Read aloud"}
-                            data-testid={`button-speak-${msg.id}`}
-                          >
-                            {playingMessageId === msg.id ? (
-                              <VolumeX className="w-4 h-4" />
-                            ) : (
-                              <Volume2 className="w-4 h-4" />
-                            )}
-                          </button>
-                        )}
-                      </div>
                     </div>
-
                     {msg.role === "user" && (
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-                          <UserIcon className="w-5 h-5 text-primary-foreground" />
+                      <div className="flex-shrink-0 mt-1">
+                        <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center">
+                          <UserIcon className="w-4 h-4 text-primary-foreground" />
                         </div>
                       </div>
                     )}
                   </div>
                 ))}
+
+                {/* Writing / typing indicator */}
+                {isLoading && <TypingIndicator />}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+
+            {/* Loading when no messages yet */}
+            {messages.length === 0 && isLoading && (
+              <div className="flex-1 flex flex-col gap-6">
+                <TypingIndicator />
                 <div ref={messagesEndRef} />
               </div>
             )}
           </div>
+        </div>
 
-          {/* Input Area */}
-          <div className="border-t border-border bg-background/95 backdrop-blur-sm p-3">
-            <div className="max-w-4xl mx-auto space-y-2">
-              {/* Plus Menu Popup */}
-              {showPlusMenu && (
-                <div className="p-3 bg-card rounded-xl border border-border shadow-lg">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-semibold">Attach or Create</span>
-                    <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground">
-                      <X className="w-4 h-4" />
+        {/* ── Input Area ── */}
+        <div className="flex-shrink-0 px-4 pb-4 pt-2 bg-background/90 backdrop-blur-sm">
+          <div className="max-w-3xl mx-auto">
+
+            {/* Plus menu popup */}
+            {showPlusMenu && (
+              <div className="mb-3 p-4 bg-card rounded-2xl border border-border shadow-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold">Attach or Create</span>
+                  <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => cameraInputRef.current?.click() },
+                    { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
+                    { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
+                    { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
+                    { icon: Radio, label: "Live AI", color: "text-primary bg-primary/10", action: () => { setShowVapiPanel(true); setShowPlusMenu(false); } },
+                    { icon: Sparkles, label: "Image Gen", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
+                    { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
+                    { icon: Calculator, label: "CBT Mode", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
+                  ].map(item => (
+                    <button key={item.label} onClick={item.action}
+                      className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover-elevate transition-all"
+                      data-testid={`plus-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                    >
+                      <div className={`p-2.5 rounded-xl ${item.color}`}><item.icon className="w-5 h-5" /></div>
+                      <span className="text-xs text-muted-foreground font-medium leading-tight text-center">{item.label}</span>
                     </button>
-                  </div>
-                  <div className="grid grid-cols-4 gap-3">
-                    {[
-                      { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => { cameraInputRef.current?.click(); } },
-                      { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
-                      { icon: Film, label: "Videos", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
-                      { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
-                      { icon: Calculator, label: "Math Scanner", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
-                      { icon: Sparkles, label: "Create Image", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
-                      { icon: Film, label: "Create Video", color: "text-cyan-400 bg-cyan-500/10", action: activateVideoMode },
-                      { icon: BookOpen, label: "Start Course", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
-                    ].map((item) => (
-                      <button
-                        key={item.label}
-                        onClick={item.action}
-                        className="flex flex-col items-center gap-1.5 p-2 rounded-lg hover-elevate transition-all"
-                        data-testid={`plus-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
-                      >
-                        <div className={`p-2.5 rounded-xl ${item.color}`}>
-                          <item.icon className="w-5 h-5" />
-                        </div>
-                        <span className="text-xs text-muted-foreground font-medium">{item.label}</span>
-                      </button>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Video mode indicator */}
-              {videoMode && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-                  <Film className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                  <span className="text-xs text-purple-300 flex-1">Video generation mode — describe what you want to see</span>
-                  <button onClick={() => { setVideoMode(false); setMessage(""); }} className="text-purple-400 hover:text-purple-200">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
+            {/* Video mode indicator */}
+            {videoMode && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-purple-500/10 border border-purple-500/30 rounded-xl">
+                <Film className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                <span className="text-xs text-purple-300 flex-1">Video generation mode — describe what you want to see</span>
+                <button onClick={() => { setVideoMode(false); setMessage(""); }} className="text-purple-400 hover:text-purple-200"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
 
-              {/* Input Row */}
-              <div className={`flex items-end gap-2 rounded-2xl border transition-colors ${
-                isListening ? "border-red-500/60 bg-red-500/5" : videoMode ? "border-purple-500/40 bg-purple-500/5" : "border-border bg-card"
-              } px-3 py-2`}>
-                {/* Plus Button */}
-                <button
-                  onClick={() => setShowPlusMenu(!showPlusMenu)}
-                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${showPlusMenu ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}
-                  title="Attach or create"
-                  data-testid="button-plus-menu"
-                >
-                  <Plus className="w-5 h-5" />
-                </button>
+            {/* Main input card — Claude style */}
+            <div className={`rounded-2xl border transition-all ${
+              isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
+              videoMode ? "border-purple-500/40 bg-purple-500/5" :
+              "border-border bg-card shadow-sm hover:shadow-md"
+            }`}>
 
-                {/* Native auto-expanding textarea */}
+              {/* Textarea */}
+              <div className="px-4 pt-4 pb-2">
                 <textarea
                   ref={textareaRef}
                   value={message}
-                  onChange={(e) => { setMessage(e.target.value); autoResize(); }}
+                  onChange={e => { setMessage(e.target.value); autoResize(); }}
                   onKeyDown={handleKeyDown}
-                  placeholder={videoMode ? "Describe your video... e.g. 'A river flowing through a Nigerian forest at sunset'" : "Message LENORY..."}
-                  className="flex-1 resize-none bg-transparent text-foreground placeholder:text-muted-foreground text-sm leading-relaxed outline-none border-none py-1.5 min-h-[36px] max-h-[200px] overflow-y-auto"
+                  placeholder={
+                    isListening ? "Listening..." :
+                    videoMode ? "Describe your video..." :
+                    "How can I help you today?"
+                  }
+                  className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground/60 text-sm leading-relaxed outline-none border-none min-h-[44px] max-h-[220px] overflow-y-auto"
                   rows={1}
-                  style={{ height: "36px" }}
+                  style={{ height: "44px" }}
                   disabled={isLoading}
                   data-testid="input-message"
                 />
-
-                {/* Mic button */}
-                <button
-                  onClick={handleMicToggle}
-                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${
-                    isListening
-                      ? "bg-red-500 text-white animate-pulse"
-                      : "text-muted-foreground hover:text-primary hover:bg-primary/10"
-                  }`}
-                  title={isListening ? "Stop listening" : "Voice input"}
-                  data-testid="button-mic"
-                >
-                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                </button>
-
-                {/* Send Button */}
-                <button
-                  onClick={handleSendMessage}
-                  disabled={!message.trim() || isLoading || isSearching}
-                  className={`flex-shrink-0 p-1.5 rounded-lg transition-all mb-0.5 ${
-                    !message.trim() || isLoading || isSearching
-                      ? "text-muted-foreground/40 cursor-not-allowed"
-                      : videoMode
-                        ? "bg-purple-600 text-white hover:bg-purple-500"
-                        : "bg-primary text-primary-foreground hover:bg-primary/90"
-                  }`}
-                  data-testid="button-send"
-                >
-                  {isLoading || isSearching ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : videoMode ? (
-                    <Film className="w-4 h-4" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                </button>
               </div>
 
-              <p className="text-xs text-muted-foreground text-center">
-                LENORY · AI tutor for Nigerian students · Verify important info
-              </p>
+              {/* Bottom toolbar */}
+              <div className="flex items-center justify-between px-3 pb-3 pt-1">
+                <div className="flex items-center gap-1">
+                  {/* Plus button */}
+                  <button
+                    onClick={() => setShowPlusMenu(!showPlusMenu)}
+                    className={`p-2 rounded-xl transition-all ${showPlusMenu ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title="Attach or create"
+                    data-testid="button-plus-menu"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+
+                  {/* Model selector */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all" data-testid="button-model-selector">
+                        <span>{selectedModel.label}</span>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {AI_MODELS.map(model => (
+                        <DropdownMenuItem key={model.id} onClick={() => setSelectedModel(model)}
+                          className={`flex flex-col items-start gap-0.5 cursor-pointer ${selectedModel.id === model.id ? "bg-primary/10" : ""}`}
+                          data-testid={`model-option-${model.id}`}
+                        >
+                          <span className="font-medium text-sm">{model.label}</span>
+                          <span className="text-xs text-muted-foreground">{model.description}</span>
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
+                        Model controls AI capabilities
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  {/* Live AI / VAPI wave button */}
+                  <button
+                    onClick={() => { setShowVapiPanel(!showVapiPanel); setShowPlusMenu(false); }}
+                    className={`p-2 rounded-xl transition-all ${showVapiPanel ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title="Live Voice AI"
+                    data-testid="button-live-ai"
+                  >
+                    {/* Wave icon */}
+                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M2 12s2-4 4-4 4 8 4 8 2-8 4-8 4 4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+
+                  {/* Mic */}
+                  <button
+                    onClick={handleMicToggle}
+                    className={`p-2 rounded-xl transition-all ${isListening ? "bg-red-500 text-white animate-pulse" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title={isListening ? "Stop listening" : "Voice input"}
+                    data-testid="button-mic"
+                  >
+                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+
+                  {/* Send */}
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!message.trim() || isLoading || isSearching}
+                    className={`p-2 rounded-xl transition-all ${
+                      !message.trim() || isLoading || isSearching
+                        ? "text-muted-foreground/30 cursor-not-allowed"
+                        : videoMode
+                          ? "bg-purple-600 text-white"
+                          : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+                    }`}
+                    data-testid="button-send"
+                  >
+                    {isLoading || isSearching ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : videoMode ? (
+                      <Film className="w-5 h-5" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
+
+            <p className="text-xs text-muted-foreground text-center mt-2">
+              LENORY AI · Advanced intelligence for everyone · Always verify critical information
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Hidden file inputs for Camera, Photos, Files */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        data-testid="input-file-upload"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFileAnalyze(file);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={cameraInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        data-testid="input-camera-upload"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFileAnalyze(file);
-          e.target.value = "";
-        }}
-      />
+      {/* Hidden file inputs */}
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" data-testid="input-file-upload"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleFileAnalyze(f); e.target.value = ""; }} />
+      <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" data-testid="input-camera-upload"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleFileAnalyze(f); e.target.value = ""; }} />
     </div>
   );
 }

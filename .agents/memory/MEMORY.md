@@ -1,0 +1,4 @@
+- [Chat UI redesign](chat-ui-redesign.md) — Chat.tsx fully rewritten as Claude-like UI; model selector, pen animation, code copy buttons, VAPI panel, credit alert all embedded in chat
+- [LENORY identity update](lenory-identity.md) — AI is no longer a "tutor only"; admin mode for felixahuruonye@gmail.com, general AI for all users
+- [Auth security pattern](auth-security.md) — No service role key on frontend; all admin ops via backend; ADMIN_EMAIL constant in routes.ts credit system
+- [Credits API](credits-api.md) — /api/user/credits (chat UI alias) + /api/credits (original); getOrCreateCredits() in routes.ts; in-memory, not Supabase

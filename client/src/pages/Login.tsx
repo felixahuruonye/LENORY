@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
 import { signInWithGoogle, signInWithEmailPassword, supabase } from "@/lib/supabase";
-import { Loader2, Zap, LogIn, Eye, EyeOff, Smartphone, ArrowRight, ArrowLeft, CheckCircle2, Mail } from "lucide-react";
+import { Loader2, Zap, LogIn, Eye, EyeOff, Smartphone, ArrowRight, ArrowLeft, CheckCircle2, Mail, KeyRound } from "lucide-react";
 import { SiGoogle } from "react-icons/si";
 import { Link } from "wouter";
 
@@ -43,7 +43,7 @@ async function saveDeviceInBackground(accessToken: string) {
   } catch {}
 }
 
-type LoginView = "checking" | "trusted-device" | "active-session" | "email-login" | "lernory-id" | "confirm-email";
+type LoginView = "checking" | "trusted-device" | "active-session" | "email-login" | "lernory-id" | "confirm-email" | "forgot-password" | "forgot-password-sent";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -63,6 +63,28 @@ export default function Login() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<{ maskedEmail: string; firstName?: string } | null>(null);
   const [lernoryPassword, setLenoryPassword] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [isForgotLoading, setIsForgotLoading] = useState(false);
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setIsForgotLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      });
+      if (error) {
+        toast({ title: "Error", description: error.message, variant: "destructive" });
+      } else {
+        setView("forgot-password-sent");
+      }
+    } catch {
+      toast({ title: "Error", description: "Could not send reset email. Try again.", variant: "destructive" });
+    } finally {
+      setIsForgotLoading(false);
+    }
+  };
 
   useEffect(() => {
     checkAuth();
@@ -464,6 +486,17 @@ export default function Login() {
                 </Button>
               </form>
 
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setForgotEmail(email); setView("forgot-password"); }}
+                  className="text-xs text-primary hover:underline"
+                  data-testid="button-forgot-password"
+                >
+                  Forgot password?
+                </button>
+              </div>
+
               <div className="relative">
                 <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
                 <div className="relative flex justify-center text-xs uppercase">
@@ -487,6 +520,80 @@ export default function Login() {
                   Create an account
                 </Link>
               </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── FORGOT PASSWORD ── */}
+        {view === "forgot-password" && (
+          <Card className="w-full max-w-md">
+            <CardHeader className="relative">
+              <Button variant="ghost" size="icon" className="absolute left-2 top-2"
+                onClick={() => setView("email-login")} data-testid="button-back-forgot">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div className="text-center pt-2">
+                <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
+                  <KeyRound className="h-7 w-7 text-primary-foreground" />
+                </div>
+                <CardTitle className="text-2xl font-display">Reset Password</CardTitle>
+                <CardDescription>Enter your email and we'll send a reset link</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="forgot-email">Email address</Label>
+                  <Input
+                    id="forgot-email"
+                    type="email"
+                    placeholder="Enter your email"
+                    value={forgotEmail}
+                    onChange={e => setForgotEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                    data-testid="input-forgot-email"
+                  />
+                </div>
+                <Button type="submit" size="lg" className="w-full bg-gradient-to-r from-primary to-chart-2 border-primary"
+                  disabled={isForgotLoading} data-testid="button-send-reset">
+                  {isForgotLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <Mail className="h-5 w-5 mr-2" />}
+                  Send Reset Link
+                </Button>
+                <Button variant="ghost" className="w-full" onClick={() => setView("email-login")} data-testid="button-back-to-login">
+                  Back to login
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── FORGOT PASSWORD SENT ── */}
+        {view === "forgot-password-sent" && (
+          <Card className="w-full max-w-md text-center">
+            <CardHeader>
+              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center">
+                <CheckCircle2 className="h-8 w-8 text-green-500" />
+              </div>
+              <CardTitle className="text-2xl font-display">Check Your Email</CardTitle>
+              <CardDescription className="text-base mt-1">
+                We sent a password reset link to{" "}
+                <span className="font-semibold text-foreground">{forgotEmail}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Click the link in the email to reset your password. The link expires in 1 hour.
+              </p>
+              <Button size="lg" className="w-full bg-gradient-to-r from-primary to-chart-2 border-primary"
+                onClick={() => setView("email-login")} data-testid="button-back-to-login-after-reset">
+                Back to Login
+              </Button>
+              <Button variant="ghost" size="sm" className="w-full text-xs"
+                onClick={() => handleForgotPassword({ preventDefault: () => {} } as any)}
+                data-testid="button-resend-reset">
+                Resend reset email
+              </Button>
             </CardContent>
           </Card>
         )}

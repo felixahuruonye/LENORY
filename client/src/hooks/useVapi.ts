@@ -55,8 +55,8 @@ export function useVapi(): UseVapiReturn {
       });
 
       await vapi.start({
-        name: "LENORY Voice Assistant",
-        firstMessage: "Hello! I'm LENORY, your AI learning assistant. How can I help you today?",
+        name: "LENORY Voice AI",
+        firstMessage: "Hello! I'm LENORY, your advanced AI assistant. What can I help you with today?",
         transcriber: { provider: "deepgram", model: "nova-2", language: "en" },
         voice: { provider: "playht", voiceId: "jennifer" },
         model: {
@@ -64,7 +64,7 @@ export function useVapi(): UseVapiReturn {
           model: "gpt-3.5-turbo",
           messages: [{
             role: "system",
-            content: `You are LENORY, an advanced AI tutor designed for Nigerian students preparing for JAMB, WAEC, and NECO exams. You help with all academic subjects. You are warm, encouraging, and adapt explanations to the student's level. Keep voice responses concise — 2-3 sentences unless asked to elaborate.`,
+            content: `You are LENORY — a powerful, advanced AI system built in Nigeria by Alaoma Obinna Felix. You are NOT just a tutor — you are a fully capable AI that can help with coding, research, writing, mathematics, science, cybersecurity, Nigerian exams (JAMB, WAEC, NECO), creative tasks, and much more. You understand Nigerian culture and context. Keep voice responses concise — 2-3 sentences max unless asked to elaborate. Be warm, direct, and genuinely helpful.`,
           }],
         },
       });
