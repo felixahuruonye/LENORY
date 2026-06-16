@@ -269,7 +269,7 @@ export default function WebsiteGenerator() {
                     Generating...
                   </>
                 ) : (
-                  "Generate Website"
+                  "Build App"
                 )}
               </Button>
             </Card>

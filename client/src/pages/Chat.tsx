@@ -39,7 +39,7 @@ import {
   Camera,
   FileText,
   Film,
-  Calculator,
+  Lock,
   X,
   Copy,
   Check,
@@ -294,26 +294,6 @@ function VapiPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ─── Star/Asterisk logo (like Claude's) ──────────────────────────────────────
-function LenoryStarIcon({ className = "w-12 h-12" }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 100 100" fill="none">
-      <circle cx="50" cy="50" r="48" className="fill-primary/10" />
-      {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => (
-        <line
-          key={i}
-          x1="50" y1="50"
-          x2={50 + 38 * Math.cos((angle * Math.PI) / 180)}
-          y2={50 + 38 * Math.sin((angle * Math.PI) / 180)}
-          stroke="currentColor"
-          strokeWidth={i % 2 === 0 ? "6" : "3.5"}
-          strokeLinecap="round"
-          className="text-primary"
-        />
-      ))}
-    </svg>
-  );
-}
 
 // ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
@@ -687,7 +667,9 @@ export default function Chat() {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex flex-col items-center gap-4">
-          <LenoryStarIcon className="w-12 h-12 animate-pulse" />
+          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center animate-pulse">
+            <Brain className="w-7 h-7 text-primary" />
+          </div>
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
         </div>
       </div>
@@ -697,6 +679,16 @@ export default function Chat() {
   const userName = (user as any)?.firstName || (user as any)?.email?.split("@")[0] || "there";
   const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const credits = creditsData?.credits ?? 20;
+  const userPlan: "free" | "pro" | "premium" = isAdmin ? "premium" : ((user as any)?.subscriptionTier || "free");
+
+  const getModelLock = (modelId: string): string | null => {
+    if (isAdmin || userPlan === "premium") return null;
+    if (userPlan === "pro" && modelId === "lenory-ultra") return "Requires Premium";
+    if (userPlan === "free" && (modelId === "lenory-ultra" || modelId === "lenory-fast")) {
+      return modelId === "lenory-ultra" ? "Requires Premium" : "Requires Pro";
+    }
+    return null;
+  };
 
   const quickSuggestions = [
     { icon: Code, label: "Code", prompt: "Help me write code for " },
@@ -794,13 +786,18 @@ export default function Chat() {
               {sidebarOpen ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </Button>
             <div className="flex items-center gap-1.5">
-              <LenoryStarIcon className="w-6 h-6" />
+              <Brain className="w-6 h-6 text-primary" />
               <span className="font-bold text-sm">LENORY</span>
               {isAdmin && <span className="text-[9px] font-bold bg-primary/20 text-primary px-1.5 py-0.5 rounded uppercase">Admin</span>}
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
+            <Link href="/live-session">
+              <Button variant="ghost" size="icon" title="Write My Note" data-testid="link-write-note">
+                <Mic className="w-4 h-4" />
+              </Button>
+            </Link>
             <Link href="/dashboard">
               <Button variant="ghost" size="icon" data-testid="link-dashboard"><Gauge className="w-4 h-4" /></Button>
             </Link>
@@ -818,7 +815,9 @@ export default function Chat() {
             {/* Empty state — Claude-like */}
             {messages.length === 0 && !searchResults && !isLoading && (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 py-12">
-                <LenoryStarIcon className="w-16 h-16" />
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Brain className="w-9 h-9 text-primary" />
+                </div>
                 <div>
                   <h1 className="text-3xl font-bold mb-2">
                     Hello, {userName}
@@ -986,18 +985,14 @@ export default function Chat() {
                   <span className="text-sm font-semibold">Attach or Create</span>
                   <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
                 </div>
-                <div className="grid grid-cols-5 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   {[
                     { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => cameraInputRef.current?.click() },
                     { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
                     { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
                     { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
-                    { icon: Radio, label: "Live AI", color: "text-primary bg-primary/10", action: () => { setShowVapiPanel(true); setShowPlusMenu(false); } },
                     { icon: Sparkles, label: "Image Gen", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
                     { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
-                    { icon: Calculator, label: "CBT Mode", color: "text-red-400 bg-red-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/cbt-mode"; } },
-                    { icon: Code, label: "Advanced", color: "text-cyan-400 bg-cyan-500/10", action: () => { setAdvancedMode(true); setShowPlusMenu(false); setTimeout(() => textareaRef.current?.focus(), 50); } },
-                    { icon: Brain, label: "Knowledge", color: "text-violet-400 bg-violet-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/knowledge-base"; } },
                   ].map(item => (
                     <button key={item.label} onClick={item.action}
                       className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover-elevate transition-all"
@@ -1077,19 +1072,33 @@ export default function Chat() {
                         <ChevronDown className="w-3.5 h-3.5" />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56">
-                      {AI_MODELS.map(model => (
-                        <DropdownMenuItem key={model.id} onClick={() => setSelectedModel(model)}
-                          className={`flex flex-col items-start gap-0.5 cursor-pointer ${selectedModel.id === model.id ? "bg-primary/10" : ""}`}
-                          data-testid={`model-option-${model.id}`}
-                        >
-                          <span className="font-medium text-sm">{model.label}</span>
-                          <span className="text-xs text-muted-foreground">{model.description}</span>
-                        </DropdownMenuItem>
-                      ))}
+                    <DropdownMenuContent align="start" className="w-60">
+                      {AI_MODELS.map(model => {
+                        const lockMsg = getModelLock(model.id);
+                        return (
+                          <DropdownMenuItem
+                            key={model.id}
+                            onClick={() => {
+                              if (lockMsg) {
+                                toast({ title: `${model.label} locked`, description: `${lockMsg} to use this model.`, variant: "destructive" });
+                              } else {
+                                setSelectedModel(model);
+                              }
+                            }}
+                            className={`flex items-start gap-2 cursor-pointer ${selectedModel.id === model.id ? "bg-primary/10" : ""} ${lockMsg ? "opacity-60" : ""}`}
+                            data-testid={`model-option-${model.id}`}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <span className="font-medium text-sm block">{model.label}</span>
+                              <span className="text-xs text-muted-foreground block">{model.description}</span>
+                            </div>
+                            {lockMsg && <Lock className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />}
+                          </DropdownMenuItem>
+                        );
+                      })}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
-                        Model controls AI capabilities
+                        {userPlan === "free" ? "Upgrade to Pro/Premium to unlock all models" : "Model controls AI capabilities"}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

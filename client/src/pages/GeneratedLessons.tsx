@@ -326,7 +326,7 @@ export default function GeneratedLessons() {
             <p className="mb-4">No generated lessons yet</p>
             <p className="text-sm mb-4">Generate your first lesson by recording a session and clicking "Save as Lesson"</p>
             <Button onClick={() => setLocation("/live-session")}>
-              Go to Live Session
+              Go to Write My Note
             </Button>
           </Card>
         ) : (

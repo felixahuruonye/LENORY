@@ -3880,6 +3880,103 @@ KEY_WORDS: [keywords separated by commas]`,
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // GROQ WHISPER – Transcribe audio (record-first strategy)
+  // ─────────────────────────────────────────────────────────────────────────────
+  const groqUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 26 * 1024 * 1024 },
+  });
+
+  app.post('/api/groq/transcribe', supabaseAuth, groqUpload.single('audio'), async (req: any, res: Response) => {
+    try {
+      const apiKey = process.env.GROQ_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "Groq not configured. Add GROQ_API_KEY to Replit Secrets." });
+      if (!req.file) return res.status(400).json({ error: "No audio file provided." });
+
+      const { language = 'en' } = req.body;
+
+      // Node 18+ has native FormData/Blob; write buffer to a temp file so Groq can read it
+      const tmpFile = path.join(os.tmpdir(), `groq_audio_${Date.now()}_${req.file.originalname || 'audio.webm'}`);
+      fs.writeFileSync(tmpFile, req.file.buffer);
+
+      let groqResData: any;
+      try {
+        const { default: OpenAI } = await import('openai');
+        const groqClient = new OpenAI({
+          apiKey,
+          baseURL: 'https://api.groq.com/openai/v1',
+        });
+        const transcription = await groqClient.audio.transcriptions.create({
+          file: fs.createReadStream(tmpFile) as any,
+          model: 'whisper-large-v3-turbo',
+          response_format: 'verbose_json',
+          ...(language && language !== 'auto' ? { language } : {}),
+        } as any);
+        groqResData = transcription;
+      } finally {
+        try { fs.unlinkSync(tmpFile); } catch {}
+      }
+
+      // Deduct 1 credit per 5 minutes (rounded up)
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const data = groqResData as any;
+      if (user?.email !== ADMIN_EMAIL && data.duration) {
+        const minutes = Math.ceil(data.duration / 60 / 5);
+        const credits = getOrCreateCredits(userId, user?.email || '');
+        credits.balance = Math.max(0, credits.balance - minutes);
+      }
+
+      res.json({
+        text: data.text || '',
+        segments: (data.segments || []).map((s: any) => ({
+          text: s.text,
+          start: s.start,
+          end: s.end,
+          speaker: 'Speaker',
+        })),
+        language: data.language,
+        duration: data.duration,
+      });
+    } catch (error: any) {
+      console.error('Groq transcribe error:', error);
+      res.status(500).json({ error: 'Transcription failed', detail: error?.message });
+    }
+  });
+
+  // Write My Note – format transcript into structured notes via Gemini
+  app.post('/api/groq/format-notes', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { transcript, subject } = req.body;
+      if (!transcript) return res.status(400).json({ error: 'transcript required' });
+
+      const prompt = `You are an expert note-taker. Convert this lecture/audio transcript into clear, well-structured study notes.
+${subject ? `Subject: ${subject}` : ''}
+
+Transcript:
+"""
+${transcript.slice(0, 8000)}
+"""
+
+Format as markdown with:
+- A clear title
+- Key objectives (bullet points)
+- Main content sections with headers
+- Key terms bolded
+- Summary at the end
+- Action items / things to study further`;
+
+      const { chatWithGemini } = await import('./gemini');
+      const notes = await chatWithGemini([{ role: 'user', content: prompt }]);
+
+      res.json({ notes: notes || transcript });
+    } catch (error) {
+      console.error('Format notes error:', error);
+      res.status(500).json({ error: 'Failed to format notes' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // LOGOUT
   // ─────────────────────────────────────────────────────────────────────────────
   app.get('/api/logout', (req: Request, res: Response) => {

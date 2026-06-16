@@ -93,7 +93,7 @@ export default function Dashboard() {
               </a>
               <nav className="hidden md:flex items-center gap-4">
                 <Button variant="ghost" asChild>
-                  <a href="/live-session" data-testid="link-live-session">Live Sessions</a>
+                  <a href="/live-session" data-testid="link-live-session">Write My Note</a>
                 </Button>
                 <Button variant="ghost" asChild>
                   <a href="/chat" data-testid="link-chat">AI Tutor</a>
@@ -142,7 +142,7 @@ export default function Dashboard() {
             {/* Quick Actions */}
             <ScrollReveal delay={100}>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                <a href="/live-session/new">
+                <a href="/live-session">
                   <Card className="hover-elevate active-elevate-2 cursor-pointer" data-testid="card-start-session">
                     <div className="block p-6">
                       <div className="flex items-center gap-4">
@@ -150,8 +150,8 @@ export default function Dashboard() {
                           <Mic className="h-6 w-6 text-primary" />
                         </div>
                         <div>
-                          <h3 className="font-semibold">Start Live Session</h3>
-                          <p className="text-sm text-muted-foreground">Record a lecture</p>
+                          <h3 className="font-semibold">Write My Note</h3>
+                          <p className="text-sm text-muted-foreground">Record &amp; transcribe</p>
                         </div>
                       </div>
                     </div>
@@ -223,7 +223,7 @@ export default function Dashboard() {
               <ScrollReveal delay={300}>
                 <Card data-testid="card-stat-sessions">
                   <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Live Sessions</CardTitle>
+                    <CardTitle className="text-sm font-medium">Write My Note</CardTitle>
                     <Mic className="h-4 w-4 text-muted-foreground" />
                   </CardHeader>
                   <CardContent>
@@ -277,8 +277,8 @@ export default function Dashboard() {
                           <Mic className="h-6 w-6 text-primary" />
                         </div>
                         <div>
-                          <h3 className="font-semibold">Join Live Session</h3>
-                          <p className="text-sm text-muted-foreground">Attend a lecture</p>
+                          <h3 className="font-semibold">Write My Note</h3>
+                          <p className="text-sm text-muted-foreground">Record &amp; transcribe</p>
                         </div>
                       </div>
                     </div>

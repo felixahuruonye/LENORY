@@ -71,9 +71,9 @@ export default function AdvancedDashboard() {
   const categoryScrollRef = useRef<HTMLDivElement>(null);
 
   const aiTools = [
-    { id: "chat", name: "Advanced Chat", icon: MessageSquare, description: "Multi-mode conversational AI", color: "from-blue-500 to-cyan-500", href: "/advanced-chat", keywords: ["chat", "ask", "ai", "tutor", "help"] },
-    { id: "website", name: "Website Generator", icon: Code2, description: "AI-powered code generation", color: "from-green-500 to-emerald-500", href: "/website-generator", keywords: ["website", "code", "generate", "build", "web"] },
-    { id: "live", name: "Live Session", icon: Mic, description: "Real-time transcription & recording", color: "from-rose-500 to-pink-500", href: "/live-session", keywords: ["live", "session", "voice", "record", "transcribe"] },
+    { id: "chat", name: "LENORY Chat", icon: MessageSquare, description: "Multi-mode conversational AI", color: "from-blue-500 to-cyan-500", href: "/chat", keywords: ["chat", "ask", "ai", "tutor", "help"] },
+    { id: "website", name: "Build|Learn App", icon: Code2, description: "AI-powered code & web generation", color: "from-green-500 to-emerald-500", href: "/website-generator", keywords: ["website", "code", "generate", "build", "web", "app"] },
+    { id: "live", name: "Write My Note", icon: Mic, description: "Record, transcribe & format notes", color: "from-rose-500 to-pink-500", href: "/live-session", keywords: ["live", "session", "voice", "record", "transcribe", "note", "write"] },
     { id: "image", name: "Image Generation", icon: ImageIcon, description: "DALL-E & image tools", color: "from-orange-500 to-red-500", href: "/image-gen", keywords: ["image", "generate", "photo", "visual", "art"] },
     { id: "memory", name: "Memory Panel", icon: Brain, description: "Learning memory system", color: "from-teal-500 to-cyan-500", href: "/memory", keywords: ["memory", "learn", "remember", "notes", "history"] },
     { id: "cbt", name: "CBT Mode", icon: Monitor, description: "Exam simulation (JAMB/WAEC/NECO)", color: "from-amber-500 to-yellow-500", href: "/cbt-mode", keywords: ["exam", "test", "cbt", "jamb", "waec", "practice"] },
@@ -83,9 +83,9 @@ export default function AdvancedDashboard() {
 
   const quickActions = [
     { label: "Ask LENORY", icon: MessageSquare, href: "/chat", color: "bg-blue-500/10" },
-    { label: "Advanced Chat", icon: Sparkles, href: "/advanced-chat", color: "bg-purple-500/10" },
-    { label: "Generate Website", icon: Code2, href: "/website-generator", color: "bg-emerald-500/10" },
-    { label: "Live Session", icon: Mic, href: "/live-session", color: "bg-rose-500/10" },
+    { label: "Write My Note", icon: Mic, href: "/live-session", color: "bg-rose-500/10" },
+    { label: "Build|Learn App", icon: Code2, href: "/website-generator", color: "bg-emerald-500/10" },
+    { label: "CBT Practice", icon: Sparkles, href: "/cbt-mode", color: "bg-amber-500/10" },
   ];
 
   const searchCategories = [
@@ -443,12 +443,12 @@ export default function AdvancedDashboard() {
               if (cat.value !== 'all' && !showAllCategories) return null;
               const CatIcon = cat.icon;
               const categoryLinks: Record<string, string> = {
-                all: "/advanced-chat", chat: "/advanced-chat", memory: "/memory",
+                all: "/chat", chat: "/chat", memory: "/memory",
                 study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-generator",
-                image: "/image-gen", project: "/project-workspace", lesson: "/advanced-chat",
+                image: "/image-gen", project: "/project-workspace", lesson: "/chat",
               };
               return (
-                <Link key={cat.value} href={categoryLinks[cat.value] || "/advanced-chat"}>
+                <Link key={cat.value} href={categoryLinks[cat.value] || "/chat"}>
                   <button
                     className="flex items-center gap-2 px-4 py-2 bg-secondary/50 hover:bg-secondary border border-primary/20 rounded-full whitespace-nowrap hover-elevate transition-all"
                     data-testid={`button-category-${cat.value}`}
@@ -474,7 +474,7 @@ export default function AdvancedDashboard() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {aiTools.map((tool) => (
-              <Link key={tool.id} href={tool.href || "/advanced-chat"} className="block">
+              <Link key={tool.id} href={tool.href || "/chat"} className="block">
                 <Card
                   className="hover-elevate cursor-pointer h-full transition-all group relative overflow-hidden glassmorphism border-primary/10 hover:border-primary/30 shadow-lg hover:shadow-primary/20 hover:-translate-y-2"
                   onMouseEnter={() => setHoveredCard(tool.id)}
@@ -503,7 +503,7 @@ export default function AdvancedDashboard() {
         </div>
 
         <div className="mt-12">
-          <Link href="/advanced-chat">
+          <Link href="/chat">
             <Button className="gap-2" size="lg" data-testid="button-get-started">
               <Sparkles className="h-5 w-5" />
               Start Learning Now
@@ -566,7 +566,7 @@ export default function AdvancedDashboard() {
           </div>
           <div className="flex gap-2 mt-4">
             <Link href="/chat" className="flex-1"><Button className="w-full gap-2" data-testid="button-new-chat"><MessageSquare className="h-4 w-4" />New Chat</Button></Link>
-            <Link href="/advanced-chat" className="flex-1"><Button variant="outline" className="w-full gap-2" data-testid="button-advanced-chat"><Sparkles className="h-4 w-4" />Advanced</Button></Link>
+            <Link href="/cbt-mode" className="flex-1"><Button variant="outline" className="w-full gap-2" data-testid="button-advanced-chat"><Sparkles className="h-4 w-4" />CBT Practice</Button></Link>
           </div>
         </DialogContent>
       </Dialog>

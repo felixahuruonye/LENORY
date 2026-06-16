@@ -15,10 +15,72 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
   const [transcript, setTranscript] = useState("");
   const [silenceTimer, setSilenceTimer] = useState<NodeJS.Timeout | null>(null);
   const [useAssemblyAI, setUseAssemblyAI] = useState(true);
+
+  // Drag state
+  const [position, setPosition] = useState({ x: -1, y: -1 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const socketRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recognitionRef = useRef<any>(null);
   const { toast } = useToast();
+
+  // Initialize position to bottom-right on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("heylenory-pos");
+    if (saved) {
+      try {
+        setPosition(JSON.parse(saved));
+      } catch {
+        setPosition({ x: window.innerWidth - 80, y: window.innerHeight - 80 });
+      }
+    } else {
+      setPosition({ x: window.innerWidth - 80, y: window.innerHeight - 80 });
+    }
+  }, []);
+
+  // Clamp position to viewport
+  const clampPos = useCallback((x: number, y: number) => {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    return {
+      x: Math.max(8, Math.min(x, W - 72)),
+      y: Math.max(8, Math.min(y, H - 72)),
+    };
+  }, []);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { mx: e.clientX, my: e.clientY, px: position.x, py: position.y };
+    setIsDragging(false);
+  }, [position]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.mx;
+    const dy = e.clientY - dragStartRef.current.my;
+    if (!isDragging && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+    setIsDragging(true);
+    const newPos = clampPos(dragStartRef.current.px + dx, dragStartRef.current.py + dy);
+    setPosition(newPos);
+  }, [isDragging, clampPos]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.mx;
+    const dy = e.clientY - dragStartRef.current.my;
+    const wasDrag = Math.abs(dx) > 5 || Math.abs(dy) > 5;
+    dragStartRef.current = null;
+    if (wasDrag) {
+      localStorage.setItem("heylenory-pos", JSON.stringify(position));
+    } else {
+      setIsOpen(prev => !prev);
+    }
+    setTimeout(() => setIsDragging(false), 50);
+  }, [position]);
 
   const stopListening = useCallback(() => {
     setIsListening(false);
@@ -36,6 +98,15 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
     recorderRef.current = null;
     if (silenceTimer) clearTimeout(silenceTimer);
   }, [silenceTimer]);
+
+  const handleSend = useCallback((text: string) => {
+    if (!text.trim()) return;
+    if (onTranscript) onTranscript(text.trim());
+    setTranscript("");
+    stopListening();
+    setIsOpen(false);
+    toast({ title: "Voice sent to LENORY", description: text.trim().slice(0, 60) });
+  }, [onTranscript, stopListening, toast]);
 
   const startListeningAssemblyAI = useCallback(async () => {
     try {
@@ -84,7 +155,7 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
       setUseAssemblyAI(false);
       startListeningWebSpeech();
     }
-  }, [silenceTimer]);
+  }, [silenceTimer, handleSend]);
 
   const startListeningWebSpeech = useCallback(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -108,7 +179,7 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
     recognitionRef.current = recognition;
     recognition.start();
     setIsListening(true);
-  }, [toast]);
+  }, [toast, handleSend]);
 
   const startListening = useCallback(() => {
     if (useAssemblyAI) {
@@ -117,15 +188,6 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
       startListeningWebSpeech();
     }
   }, [useAssemblyAI, startListeningAssemblyAI, startListeningWebSpeech]);
-
-  const handleSend = useCallback((text: string) => {
-    if (!text.trim()) return;
-    if (onTranscript) onTranscript(text.trim());
-    setTranscript("");
-    stopListening();
-    setIsOpen(false);
-    toast({ title: "Voice sent to LENORY", description: text.trim().slice(0, 60) });
-  }, [onTranscript, stopListening, toast]);
 
   useEffect(() => {
     return () => {
@@ -141,10 +203,21 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
     }
   }, [isOpen]);
 
+  if (position.x < 0) return null;
+
+  const panelLeft = position.x > window.innerWidth / 2;
+
   return (
-    <div className={`fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 ${className || ""}`}>
+    <div
+      ref={containerRef}
+      className={`fixed z-50 flex flex-col items-end gap-3 ${className || ""}`}
+      style={{ left: position.x, top: position.y }}
+    >
       {isOpen && (
-        <div className="bg-background/95 backdrop-blur-xl border border-primary/30 rounded-2xl p-4 shadow-2xl w-72 animate-in fade-in slide-in-from-bottom-3">
+        <div
+          className={`absolute bottom-16 ${panelLeft ? "right-0" : "left-0"} bg-background/95 backdrop-blur-xl border border-primary/30 rounded-2xl p-4 shadow-2xl w-72 animate-in fade-in slide-in-from-bottom-3`}
+          onPointerDown={e => e.stopPropagation()}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <div className={`h-2 w-2 rounded-full ${isListening ? "bg-red-500 animate-pulse" : "bg-muted-foreground"}`} />
@@ -182,18 +255,21 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
       )}
 
       <button
-        onClick={() => setIsOpen((p) => !p)}
-        className={`h-14 w-14 rounded-full flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 ${
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        className={`h-14 w-14 rounded-full flex items-center justify-center shadow-2xl transition-all select-none touch-none ${
+          isDragging ? "cursor-grabbing scale-110 shadow-primary/30 shadow-2xl" :
           isOpen
-            ? "bg-primary text-primary-foreground ring-4 ring-primary/30"
+            ? "bg-primary text-primary-foreground ring-4 ring-primary/30 cursor-grab"
             : isListening
-            ? "bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse"
-            : "bg-background/90 backdrop-blur text-foreground border border-primary/30 hover:bg-primary hover:text-primary-foreground"
+            ? "bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse cursor-grab"
+            : "bg-background/90 backdrop-blur text-foreground border border-primary/30 hover:bg-primary hover:text-primary-foreground cursor-grab"
         }`}
         data-testid="button-hey-lenory"
-        title="Hey LENORY — tap to open voice assistant"
+        title="Hey LENORY — drag to move, tap to open voice assistant"
       >
-        <Mic className="h-6 w-6" />
+        <Mic className="h-6 w-6 pointer-events-none" />
       </button>
     </div>
   );
