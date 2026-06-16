@@ -1,0 +1,99 @@
+I did not tell to remove quick action feature in ask lenory page, and I stated it on my last prompt that the wave icon should be live ai which it should show on the chat box not inside the plus icon page button, and when you click it is not even working, remove it from plus page button. I told you to create offline pages so user can access their pervious chat history on ask lenory page, access their site generated on website generator, access cbt exam history in either cbt page or notification page, access live session history. All offline and you haven't built it. That is only available for people who install the PWA app. When user select any model it should respond based on that model brain provider, apart from the search engine model which uses all models, add locks based on plan like pro and premium so user can't select anyone they want, only felixahuruonye@gmail.com is allowed to use all models, when user ask a difficult question or want a hard and faster solution process, if they are not in the pro to use its model or premium to use its model, ask them to upgrade, free model which is lenory vision uses the credit system in supabase. All models uses credit based on how they are charged and used I explain to you how it should work.  Remove that star icon to avoid copyright issues and replace it with our own brain icon which I uploaded the picture last time. The cbt model is not a button user should click it automatic when the ai wants to test the user because it still a tutor ai technology app, so Remove cbt mode in plus button page. Make sure you read and understand my prompt very well, so you don't break anything. 
+
+This was what I asked you to build in the knowledge base, not inside plus button page, remove it from plus page button:
+Now remove the advanced chat page from dashboard because is now part of the models which should host lenory fast and ultra allowing user to use it for free for some like 5 minutes and it locked for and open again after 14days {2 weeks) replace it position with cbt button page, CBT page should take its position now in dashboard.
+Now this are the new features I want to add in every new chat been created: I want to add a brain icon button on top of the page between quick action button and live ai, this is a knowledge base memory bank page, this is how it should work.
+set up a pipeline often called a RAG (Retrieval-Augmented Generation) system, but  make it simpler and faster by using Gemini's massive built-in memory (Context Window).
+Here is how the data flows when a student attaches files to a specific chat room:
+
+1. The Upload: The user creates a new chat or their current chat on the supabase database and, click on the brain icon, then click either: uploads a snapped photo, a PDF, recording file which uses Groq whisper to transcribe it text, when they upload a recording file, small or large files, it automatically sent to wisper, when wisper credit is deducted from the user credit balance, large files takes more credits, user must have enough credit to allow whisper to transcribe, user waits for lenory (whisper) to transcribe every texts exactly, text shows on the page or they paste a URL link, gemini can analyze any url links even websites, videos (uses our video setup feature below), pages anything that has link.
+2. The Storage: The file goes straight into Supabase Storage Bucket. Replit creates a row in a `chat_knowledge` table that links that file to that specific `chat_id`, that's why we need real data on the new supabase tables to be saved always. 
+3. The Extraction (The Brain Work):
+For Snapped Notes/Images: Replit passes the image to Gemini's vision model to extract all the text (OCR).
+For PDFs/URLs: Replit uses a lightweight npm package (like `pdf-parse` or a web scraper) to read the text, or gemini to analyze the video (using our video setup).
+For recording replit passes to Groq whisper to transcribe it text. 
+In all Large files and uploades uses more and extra credits, and space limits too in the app memory storage page system (make sure to redesign that page). We also charge for storage using the credit system depending on files saved to supabase. (this generate revenue to pay supabase for storage). 
+4. The Injection: The extracted text is saved directly into Supabase database for that chat room, meaning anytime user ask questions, the ai model been selected uses that saved data to answer without generating a new text ideas, it must use the user's own knowledge base to answer exactly. When the user type a question in that chat, Replit pulls the saved knowledge text from Supabase and glues it *inside* the backend prompt before sending it to Gemini. But if there is no knowledge base data been saved it sends to the model directly. 
+Implement a Chat-Specific Knowledge Base feature utilizing Supabase Storage and the Gemini API. 
+
+1. Create a backend route that accepts document uploads (PDFs, images of snapped notes, recording files or URLs) for a specific chat_id.
+2. If it's an image, parse it using Gemini's multimodal vision capabilities to extract all text contents. If it's a PDF/URL, extract the raw text on the server. If it a recording files, use Groq whisper to transcribe all text. Store this consolidated text string into a 'chat_context' column in the Supabase 'chats' table for that specific chat_id. Create all supabase tables. 
+3. Modify the main chat endpoint: Whenever a user sends a message in a chat UI (Ask lenory page), check if 'chat_context' has data (knowledge base).
+4. If context exists, inject it directly into the Gemini system instructions using this precise prompt engineering structure:
+   "You are an elite academic and professional research advanced assistant analyzing a specific user or meeting note context: [INJECT_CHAT_CONTEXT_HERE]. 
+   The user will ask a question: [INJECT_USER_MESSAGE_HERE]. Which is the prompt. 
+   CRITICAL DIRECTION: You must formulate your entire answer using ONLY the facts, definitions, and structural flow found within the provided knowledge base context. Do NOT use external generic AI examples or high-level robotic terminology. Write your output mimicking an intelligent human student rewriting these exact concepts in their own organic words, with varied sentence structures. If the user asks you to explain it differently, change the wording but strictly anchor the core points to this exact knowledge base so a lecturer or user recognizes the material." also add delete icon buttons so they can delete any knowledge files from supabase and the app or upload new ones. 
+5. Return the humanized text to the frontend layout and save the message interaction to Supabase.
+
+Fix this, is not displaying on the app : Session mode labels in chat sidebar — Advanced sessions show purple "ADVANCED" badge, tutor shows blue, exam shows orange.
+
+Remove the things you put that doesn't have meaning.
+Change this features names: Generate website rename it to Build|Learn App. Live session rename it to Write My Note.
+
+I have uploaded my Groq api which is in replit secret env. And this is what I asked you to build in live session which is now officially Write My Note and make it to use the last supabase sql you generated that ran successfully on supabase sql editor, so it starts saving it history to supabase. Cause when the app reloads everything wiped out not to show fix that problem. 
+This was what I asked you to use the Groq api and OpenAI sdk in to do in live session. 
+Live session - remove the live stream transcription from live session, let user only record, or upload records, this is how it should work. Use Groq's Whisper API (specifically whisper-large-v3-turbo model via api.groq.com) — it is a drop-in replacement for OpenAI Whisper, same code structure, same accuracy, but 89% cheaper and 228x faster. Make it robust against background chatter, low volume, and thick Nigerian accents. Even if the lecturer mumbles, Whisper matches the fragments to proper sentences. Shift the Strategy to work this way: "Record First, Generate and process Notes and lessons Next"
+Do not try to stream real-time text transcription again on this feature, in a crowded hall of 1,000 students. If the Wi-Fi or 4G drops for a second, the stream breaks and the student loses the note, so best, they record or upload a raw file.
+The Capture: The user enters the title or topic just as usual on the app and hits start recording button on your Lenory PWA. The app quietly captures the raw audio as a lightweight file (.mp3 or .m4a) directly in the phone's cache storage. Or user drag or upload a recording small or large file, sent to Groq Whisper to transcribe it.
+IMPORTANT — File Size Splitting: Groq Whisper has a 25MB file size limit per request, same as OpenAI. Before sending to Groq, the backend must automatically check the file size. If the file exceeds 25MB, split it into chunks of 20MB max using ffmpeg on the backend, transcribe each chunk separately, then concatenate all transcription results into one complete text before saving to Supabase. This must be invisible to the user.
+The Upload: When the lecture ends, the user hits "Stop." The Brain (Replit + Groq): Replit sends that audio file straight to the Groq Whisper API using this exact code pattern:
+javascriptconst Groq = require("groq-sdk");
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const transcription = await groq.audio.transcriptions.create({
+  file: fs.createReadStream(audioFilePath),
+  model: "whisper-large-v3-turbo",
+  language: "en",
+  response_format: "verbose_json"
+});
+Use response_format: "verbose_json" so we get word timestamps and audio duration back from Groq — we need the duration to calculate exact credit deduction.
+The Output: Whisper returns the exact texts of that recording on "show text" button page in history (already built), then user can play, pause and stop the recording in play button, which plays, pause and stop the recording (this feature is not working well — fix it), in pdf button user can click Download Original button to download the full transcribed text and Download Formatted Version button, to download the clean version of the note. Add Format Text button page among those listed features, which loads the whole transcribed text to Gemini Flash, to generate and instantly formats it into clear, beautiful academic headers, definitions, and key takeaways before generating a clean designed PDF. It must only generate according to the transcribed texts, it only arranges those texts clearly, it must look like how normal humans write their notes. Also add an audio speaker icon so user can play those texts. Read and stop button reads the whole transcribed text. Now this whole history saves on Supabase real-time, so when the app is refreshed or later visited the whole history is updated real-time data from Supabase backend data, wire all the logics. Remember that long recording or large files takes more user credit balance instantly than what api charges, we must never go bankrupt. If user credit is low or finished stop the Recording and do not allow recording or uploads, prompt user to Top up their credit balance using the notification card page.
+How live session credit works:
+Free user gets 20 credits, but can use everything when recording is long or file size is large, can also request for more credits.
+When they top up for:
+₦1000 = gets 10 credits
+₦2500 = gets 25 credits
+₦5000 = gets 50 credits (pro plan) - Max Free Hours (5)
+₦10,000 = gets 100 credits
+₦15000 = gets 300 credits (premium plan) Max Free Hours (20)
+Credit deduction formula using Groq verbose_json response:
+Use the duration field returned by Groq's verbose_json response to get exact audio duration in seconds. Convert to minutes: duration_minutes = duration_seconds / 60. Deduct that exact amount from the user's allocated_credits column in Supabase. Round up to nearest whole minute to protect against API cost.
+Implement an automatic client-side and server-side timer for the Lecture Recorder.
+
+For Pro tier users, stop the HTML5 MediaRecorder automatically at exactly 60 minutes. For Premium users, stop it at 150 minutes. Which refreshes everyday when they revisit the app.
+Before processing the audio upload on the backend, query the user's allocated_credits column in the Supabase profiles table.
+If the audio length (in minutes) is greater than their available credits, stop the process and alert the user to upgrade or buy an extra credit pack.
+After Groq Whisper successfully transcribes the file, use the duration from the verbose_json response, deduct that exact amount from their Supabase allocated_credits column, and then trigger the PDF note generation step.
+
+Now if many users are using this live session page, update the admin page to show the total number of users active on this page.
+Then if 1000 people or more are recording or uploading, add a Queue with a Rate-Limiter.
+How it should work:
+The Safe Holding Area: When a student finishes recording or uploading, their audio is instantly uploaded to a secure folder in Supabase Storage Bucket. The app tells the student: "Lenory is Processing your notes... analyzing acoustics, please check your Show Text button in History Tab in a few seconds or minutes."
+The Orderly Line: On Replit, the backend uses a simple background queue (BullMQ). It picks up the files from Supabase and sends them to Groq Whisper in steady, small batches (e.g., 5 files every few seconds), remaining perfectly beneath the API rate limit.
+The Credit Verification: The credit deduction happens before the file enters the line. If a user has 0 credits, they can't even upload to the bucket.
+[1,000 Student Audio Uploads or more]
+             │
+             ▼
+   [Supabase Storage Bucket]
+(Files sit safely here first)
+             │
+             ▼
+   [Replit Background Queue - BullMQ]
+(Processes 5 files at a time)
+             │
+             ▼
+    [Groq Whisper API - whisper-large-v3-turbo]
+             │
+             ▼
+[Transcribed text → Show Text page in History]
+[Also available on Format Text page]
+
+It should stop showing that error message is currently showing. 
+
+It must run in accordance with the last sql you created so it saves to supabase.
+
+Make that hey lenory mic icon button to be moveable, so user can place it anywhere to there screen, is blocking some view so it must be moveable not static and standby.
+
+This ai system should be very smart, it must learn from it user account, remember every thing done any part of the app so far it saved to supabase, it must scan supabase before calling main brain. Any model selected in ask lenory page is what runs the whole features on the app, apart from those that runs automatically.
+
+After making sure you build everything I have asked, tell me how to make VAPI in live ai under the wave icon start working so I can talk with it. Should I create a new assistants and give you the ID or will you create those agents your self and add it to the voice settings in settings page, to update the male and female ai responsers, create them in VAPI yourself. So when I talk with it ask lenory page, but the transcript which uses Groq whisper api not VAPI's own whisper, use my own Groq api whisper. To show the full transcribed conversations on ask lenory on that chat page which stored on supabase automatically, after user end the call with live ai. Make this work like I dream. When I snap a picture and ask lenory to help me out using my current selected model is not helping me, which gemini show see and tell the selected model what it saw, and it responds accurately. Is not generating images or videos according to my prompt, even is not editing images as I ask it to (it must add the blue brain icon it generated).
