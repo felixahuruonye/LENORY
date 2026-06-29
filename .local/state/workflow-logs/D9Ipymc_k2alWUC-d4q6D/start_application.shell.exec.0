@@ -1,0 +1,236 @@
+[1G[0K⠙[1G[0K⠹[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠹[1G[0K✅ Database layer initialized (Supabase)
+✅ Storage initialized (Supabase + in-memory hybrid)
+Supabase Auth Config: {
+  hasUrl: [33mtrue[39m,
+  urlPrefix: [32m'https://almrajoumwliddtmppsm.s'[39m,
+  hasServiceKey: [33mtrue[39m,
+  hasAnonKey: [33mtrue[39m,
+  expectedIssuer: [32m'https://almrajoumwliddtmppsm.supabase.co/auth/v1'[39m
+}
+Gemini API initialized with GOOGLE_API_KEY (key length: 39 chars)
+✅ Supabase database connected and users table exists
+⚠️ Static build not found, using Vite dev server
+11:26:06 AM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+11:28:24 AM [express] GET /api/auth/user 200 in 1359ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48…
+11:28:24 AM [express] GET /api/credits 200 in 730ms :: {"balance":20,"monthlyUsed":0,"maxMonthly":50,…
+11:28:24 AM [express] GET /api/auth/user 200 in 501ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:27 AM [express] GET /api/auth/user 200 in 346ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:28 AM [express] GET /api/auth/user 200 in 300ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:28 AM [express] GET /api/auth/user 200 in 302ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:29 AM [express] GET /api/auth/user 200 in 301ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:29 AM [express] GET /api/auth/user 200 in 300ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:31 AM [express] GET /api/auth/user 200 in 332ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:37 AM [express] GET /api/auth/user 200 in 577ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:28:50 AM [express] GET /api/auth/user 200 in 518ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:24 AM [express] GET /api/auth/user 200 in 411ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:24 AM [express] GET /api/credits 304 in 332ms :: {"balance":20,"monthlyUsed":0,"maxMonthly":50,…
+11:29:25 AM [express] GET /api/auth/user 200 in 328ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:26 AM [express] GET /api/auth/user 200 in 335ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:26 AM [express] GET /api/auth/user 200 in 299ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:27 AM [express] GET /api/auth/user 200 in 313ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:40 AM [express] GET /api/auth/user 200 in 372ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:40 AM [express] GET /api/chat/sessions 304 in 327ms :: []
+11:29:40 AM [express] GET /api/user/credits 304 in 340ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:29:55 AM [express] GET /api/auth/user 200 in 560ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:56 AM [express] GET /api/auth/user 200 in 323ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:29:59 AM [express] GET /api/credits 401 in 0ms :: {"message":"Unauthorized - No token provided"}
+11:30:00 AM [express] GET /api/auth/user 200 in 324ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:30:00 AM [express] GET /api/auth/user 200 in 341ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:30:01 AM [express] GET /api/auth/user 200 in 324ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:30:05 AM [express] GET /api/auth/user 200 in 364ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:05 AM [express] POST /api/auth/save-device 200 in 343ms :: {"deviceToken":"eyJ1c2VySWQiOiJmODVh…
+11:30:06 AM [express] GET /api/auth/user 200 in 320ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:06 AM [express] GET /api/credits 200 in 322ms :: {"balance":9999,"monthlyUsed":0,"maxMonthly":5…
+11:30:07 AM [express] GET /api/auth/user 200 in 319ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:08 AM [express] GET /api/auth/user 200 in 320ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:10 AM [express] GET /api/auth/user 200 in 326ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:11 AM [express] GET /api/auth/user 200 in 330ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:12 AM [express] GET /api/auth/user 200 in 326ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:30:42 AM [express] GET /api/auth/user 200 in 1011ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f…
+11:31:03 AM [express] GET /api/credits 304 in 1308ms :: {"balance":9999,"monthlyUsed":0,"maxMonthly":…
+11:31:03 AM [express] GET /api/auth/user 200 in 1628ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f…
+11:31:04 AM [express] GET /api/auth/user 200 in 359ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:31:05 AM [express] GET /api/auth/user 200 in 332ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:31:05 AM [express] GET /api/auth/user 200 in 333ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:31:09 AM [express] GET /api/auth/user 200 in 380ms :: {"id":"f85adfb3-b9ee-450d-b9ba-9a3759796f5f"…
+11:31:22 AM [express] GET /api/credits 401 in 1ms :: {"message":"Unauthorized - No token provided"}
+11:31:37 AM [express] POST /api/auth/save-device 200 in 349ms :: {"deviceToken":"eyJ1c2VySWQiOiIyZGM0…
+11:31:38 AM [express] GET /api/credits 200 in 477ms :: {"balance":20,"monthlyUsed":0,"maxMonthly":50,…
+11:31:39 AM [express] GET /api/auth/user 200 in 1888ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48…
+11:31:39 AM [express] GET /api/auth/user 200 in 320ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:40 AM [express] GET /api/auth/user 200 in 325ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:40 AM [express] GET /api/auth/user 200 in 310ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:41 AM [express] GET /api/chat/sessions 304 in 372ms :: []
+11:31:41 AM [express] GET /api/auth/user 200 in 314ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:41 AM [express] GET /api/user/credits 304 in 487ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:31:42 AM [express] GET /api/auth/user 200 in 341ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:42 AM [express] GET /api/auth/user 200 in 416ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:31:43 AM [express] GET /api/auth/user 200 in 322ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:12 AM [express] GET /api/user/credits 304 in 655ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:32:25 AM [express] GET /api/auth/user 200 in 416ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:25 AM [express] GET /api/credits 304 in 345ms :: {"balance":20,"monthlyUsed":0,"maxMonthly":50,…
+11:32:26 AM [express] GET /api/auth/user 200 in 312ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:26 AM [express] GET /api/auth/user 200 in 300ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:28 AM [express] GET /api/auth/user 200 in 314ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:29 AM [express] GET /api/auth/user 200 in 299ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:32:29 AM [express] GET /api/auth/user 200 in 303ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:33:32 AM [express] GET /api/auth/user 200 in 598ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:33:33 AM [express] GET /api/auth/user 200 in 348ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:33:34 AM [express] GET /api/auth/user 200 in 352ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:33:57 AM [express] GET /api/user/credits 304 in 577ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:34:31 AM [express] GET /api/user/credits 304 in 402ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:35:03 AM [express] GET /api/user/credits 304 in 575ms :: {"credits":20,"used":0,"limit":50,"tier":…
+11:35:14 AM [express] POST /api/chat/sessions 200 in 670ms :: {"id":"session_1","userId":"2dc4e199-f9…
+Received message: Who own lenory the company, and can you write Java
+11:35:17 AM [express] GET /api/chat/sessions 200 in 608ms :: [{"id":"session_1","userId":"2dc4e199-f9…
+11:35:17 AM [express] GET /api/chat/messages 304 in 621ms :: [{"id":"msg_1","userId":"f85adfb3-b9ee-4…
+Getting AI response with [33m9[39m messages (including user context)
+🧠 CROSS-SESSION MEMORY SYSTEM: {
+  [32m'Session ID'[39m: [32m'session_1'[39m,
+  [32m'Current session messages'[39m: [33m8[39m,
+  User: [32m'Friend'[39m,
+  [32m'All previous questions available'[39m: [33m0[39m,
+  [32m'Subjects previously studied'[39m: [32m'None yet'[39m,
+  [32m'Topics covered in previous sessions'[39m: [32m'None'[39m,
+  [32m'Identified weak areas across all sessions'[39m: [32m'None identified'[39m,
+  [32m'AI will reference'[39m: [32m'Only current session'[39m
+}
+Using Gemini API for chat...
+✓ Gemini succeeded with response: 
+
+**Tell me, what specific task or challenge do you have in mind today?** I'm eager to show you what
+Got AI response: 
+
+**Tell me, what specific task or challenge do you have in mind today?** I'm eager to show you what I can do.
+✓ Memory auto-updated from chat interaction
+Error analyzing message for learning: TypeError: storage.createUserProgress is not a function
+    at analyzeMessageForLearning [90m(/home/runner/workspace/[39mserver/tutorSystem.ts:309:21[90m)[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)[39m
+    at async <anonymous> [90m(/home/runner/workspace/[39mserver/routes.ts:683:11[90m)[39m
+✓ Auto-learning: User profile updated from conversation
+11:35:19 AM [express] POST /api/chat/send 200 in 2449ms :: {"success":true,"message":"\n\n**Tell me, …
+11:35:20 AM [express] GET /api/chat/messages 304 in 503ms :: [{"id":"msg_1","userId":"f85adfb3-b9ee-4…
+11:35:21 AM [express] GET /api/chat/sessions 304 in 317ms :: [{"id":"session_1","userId":"2dc4e199-f9…
+11:35:21 AM [express] GET /api/user/credits 200 in 357ms :: {"credits":19,"used":1,"limit":50,"tier":…
+11:35:52 AM [express] GET /api/user/credits 304 in 433ms :: {"credits":19,"used":1,"limit":50,"tier":…
+11:36:02 AM [express] POST /api/chat/sessions 200 in 430ms :: {"id":"session_2","userId":"2dc4e199-f9…
+11:36:04 AM [express] GET /api/chat/sessions 200 in 379ms :: [{"id":"session_2","userId":"2dc4e199-f9…
+11:36:04 AM [express] GET /api/chat/messages 200 in 433ms :: []
+11:36:23 AM [express] GET /api/user/credits 304 in 398ms :: {"credits":19,"used":1,"limit":50,"tier":…
+11:36:54 AM [express] GET /api/user/credits 304 in 453ms :: {"credits":19,"used":1,"limit":50,"tier":…
+Received message: Who own lenory company, and can you write a progra
+Getting AI response with [33m2[39m messages (including user context)
+🧠 CROSS-SESSION MEMORY SYSTEM: {
+  [32m'Session ID'[39m: [32m'session_2'[39m,
+  [32m'Current session messages'[39m: [33m1[39m,
+  User: [32m'Friend'[39m,
+  [32m'All previous questions available'[39m: [33m1[39m,
+  [32m'Subjects previously studied'[39m: [32m'None yet'[39m,
+  [32m'Topics covered in previous sessions'[39m: [32m'None'[39m,
+  [32m'Identified weak areas across all sessions'[39m: [32m'None identified'[39m,
+  [32m'AI will reference'[39m: [32m'✓ Past questions from other sessions'[39m
+}
+Using Gemini API for chat...
+Error chatting with Gemini: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+✗ Gemini failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+Got AI response: I'm having trouble connecting to my AI services right now. Please try again.
+✓ Memory auto-updated from chat interaction
+Error analyzing message for learning: TypeError: storage.createUserProgress is not a function
+    at analyzeMessageForLearning [90m(/home/runner/workspace/[39mserver/tutorSystem.ts:309:21[90m)[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)[39m
+    at async <anonymous> [90m(/home/runner/workspace/[39mserver/routes.ts:683:11[90m)[39m
+✓ Auto-learning: User profile updated from conversation
+11:37:24 AM [express] GET /api/user/credits 200 in 358ms :: {"credits":18,"used":2,"limit":50,"tier":…
+Updated chat session title to: Info & Java Query, AI Error
+11:37:27 AM [express] POST /api/chat/send 200 in 8889ms :: {"success":true,"message":"I'm having trou…
+11:37:27 AM [express] GET /api/chat/messages 200 in 416ms :: [{"id":"msg_5","userId":"2dc4e199-f9ad-4…
+11:37:28 AM [express] GET /api/chat/sessions 200 in 320ms :: [{"id":"session_2","userId":"2dc4e199-f9…
+11:37:28 AM [express] GET /api/user/credits 304 in 341ms :: {"credits":18,"used":2,"limit":50,"tier":…
+11:38:13 AM [express] GET /api/auth/user 200 in 512ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:38:14 AM [express] GET /api/auth/user 200 in 339ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:38:15 AM [express] GET /api/auth/user 200 in 338ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+Received message: Who own lenory company, and can you write a progra
+Getting AI response with [33m4[39m messages (including user context)
+🧠 CROSS-SESSION MEMORY SYSTEM: {
+  [32m'Session ID'[39m: [32m'session_2'[39m,
+  [32m'Current session messages'[39m: [33m3[39m,
+  User: [32m'Friend'[39m,
+  [32m'All previous questions available'[39m: [33m1[39m,
+  [32m'Subjects previously studied'[39m: [32m'None yet'[39m,
+  [32m'Topics covered in previous sessions'[39m: [32m'None'[39m,
+  [32m'Identified weak areas across all sessions'[39m: [32m'None identified'[39m,
+  [32m'AI will reference'[39m: [32m'✓ Past questions from other sessions'[39m
+}
+Using Gemini API for chat...
+✓ Gemini succeeded with response: Sannu, Friend! It's good to connect with you. I can definitely help with both of your questions.
+
+##
+Got AI response: Sannu, Friend! It's good to connect with you. I can definitely help with both of your questions.
+
+### 1. Who Owns Lenory?
+
+I am **LENORY**, an advance
+✓ Memory auto-updated from chat interaction
+Error analyzing message for learning: TypeError: storage.createUserProgress is not a function
+    at analyzeMessageForLearning [90m(/home/runner/workspace/[39mserver/tutorSystem.ts:309:21[90m)[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)[39m
+    at async <anonymous> [90m(/home/runner/workspace/[39mserver/routes.ts:683:11[90m)[39m
+✓ Auto-learning: User profile updated from conversation
+11:38:22 AM [express] POST /api/chat/send 200 in 6666ms :: {"success":true,"message":"Sannu, Friend! …
+11:38:23 AM [express] GET /api/chat/messages 200 in 455ms :: [{"id":"msg_5","userId":"2dc4e199-f9ad-4…
+11:38:24 AM [express] GET /api/chat/sessions 304 in 319ms :: [{"id":"session_2","userId":"2dc4e199-f9…
+11:38:24 AM [express] GET /api/user/credits 200 in 354ms :: {"credits":17,"used":3,"limit":50,"tier":…
+11:39:02 AM [express] GET /api/user/credits 304 in 436ms :: {"credits":17,"used":3,"limit":50,"tier":…
+11:39:33 AM [express] GET /api/user/credits 304 in 423ms :: {"credits":17,"used":3,"limit":50,"tier":…
+11:40:05 AM [express] GET /api/user/credits 304 in 400ms :: {"credits":17,"used":3,"limit":50,"tier":…
+11:42:05 AM [express] GET /api/auth/user 200 in 499ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:42:06 AM [express] GET /api/user/credits 304 in 347ms :: {"credits":17,"used":3,"limit":50,"tier":…
+11:42:16 AM [express] GET /api/auth/user 200 in 424ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:42:16 AM [express] GET /api/auth/user 200 in 341ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:42:36 AM [express] GET /api/user/credits 304 in 423ms :: {"credits":17,"used":3,"limit":50,"tier":…
+Received message: This is the question: Write a program to explain a
+Getting AI response with [33m6[39m messages (including user context)
+🧠 CROSS-SESSION MEMORY SYSTEM: {
+  [32m'Session ID'[39m: [32m'session_2'[39m,
+  [32m'Current session messages'[39m: [33m5[39m,
+  User: [32m'Friend'[39m,
+  [32m'All previous questions available'[39m: [33m1[39m,
+  [32m'Subjects previously studied'[39m: [32m'None yet'[39m,
+  [32m'Topics covered in previous sessions'[39m: [32m'None'[39m,
+  [32m'Identified weak areas across all sessions'[39m: [32m'None identified'[39m,
+  [32m'AI will reference'[39m: [32m'✓ Past questions from other sessions'[39m
+}
+Using Gemini API for chat...
+11:43:08 AM [express] GET /api/user/credits 200 in 498ms :: {"credits":16,"used":4,"limit":50,"tier":…
+✓ Gemini succeeded with response: Ah, this is a fascinating assignment, Friend! It asks me to explain my "personal experience in this 
+Got AI response: Ah, this is a fascinating assignment, Friend! It asks me to explain my "personal experience in this university." As an AI, I don't have human-like per
+✓ Memory auto-updated from chat interaction
+Error analyzing message for learning: TypeError: storage.createUserProgress is not a function
+    at analyzeMessageForLearning [90m(/home/runner/workspace/[39mserver/tutorSystem.ts:309:21[90m)[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)[39m
+    at async <anonymous> [90m(/home/runner/workspace/[39mserver/routes.ts:683:11[90m)[39m
+✓ Auto-learning: User profile updated from conversation
+11:43:16 AM [express] POST /api/chat/send 200 in 19412ms :: {"success":true,"message":"Ah, this is a …
+11:43:22 AM [express] GET /api/chat/messages 200 in 556ms :: [{"id":"msg_5","userId":"2dc4e199-f9ad-4…
+11:43:24 AM [express] GET /api/chat/sessions 304 in 371ms :: [{"id":"session_2","userId":"2dc4e199-f9…
+11:43:26 AM [express] GET /api/user/credits 304 in 352ms :: {"credits":16,"used":4,"limit":50,"tier":…
+11:43:57 AM [express] GET /api/user/credits 304 in 458ms :: {"credits":16,"used":4,"limit":50,"tier":…
+11:44:28 AM [express] GET /api/user/credits 304 in 438ms :: {"credits":16,"used":4,"limit":50,"tier":…
+11:44:59 AM [express] GET /api/user/credits 304 in 534ms :: {"credits":16,"used":4,"limit":50,"tier":…
+11:45:30 AM [express] GET /api/user/credits 304 in 406ms :: {"credits":16,"used":4,"limit":50,"tier":…
+11:45:54 AM [express] GET /api/auth/user 200 in 418ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:45:54 AM [express] GET /api/credits 200 in 323ms :: {"balance":16,"monthlyUsed":4,"maxMonthly":50,…
+11:45:55 AM [express] GET /api/auth/user 200 in 342ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:45:55 AM [express] GET /api/auth/user 200 in 296ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:45:56 AM [express] GET /api/auth/user 200 in 294ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:45:57 AM [express] GET /api/auth/user 200 in 296ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+11:47:35 AM [express] GET /api/credits 304 in 470ms :: {"balance":16,"monthlyUsed":4,"maxMonthly":50,…

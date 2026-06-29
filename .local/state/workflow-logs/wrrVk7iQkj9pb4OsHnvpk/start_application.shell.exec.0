@@ -1,0 +1,46 @@
+[1G[0K⠙[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠙[1G[0K✅ Database layer initialized (Supabase)
+✅ Storage initialized (Supabase + in-memory hybrid)
+Supabase Auth Config: {
+  hasUrl: [33mtrue[39m,
+  urlPrefix: [32m'https://almrajoumwliddtmppsm.s'[39m,
+  hasServiceKey: [33mtrue[39m,
+  hasAnonKey: [33mtrue[39m,
+  expectedIssuer: [32m'https://almrajoumwliddtmppsm.supabase.co/auth/v1'[39m
+}
+Gemini API initialized with GOOGLE_API_KEY (key length: 39 chars)
+✅ Supabase database connected and users table exists
+⚠️ Static build not found, using Vite dev server
+3:10:48 PM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+3:13:48 PM [express] GET /api/auth/user 200 in 1038ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48…
+3:13:48 PM [express] GET /api/credits 200 in 350ms :: {"balance":20,"monthlyUsed":0,"maxMonthly":50,…
+3:13:49 PM [express] GET /api/auth/user 200 in 346ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:49 PM [express] GET /api/auth/user 200 in 346ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:51 PM [express] GET /api/auth/user 200 in 275ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:53 PM [express] GET /api/auth/user 200 in 321ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:53 PM [express] GET /api/auth/user 200 in 265ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:54 PM [express] GET /api/auth/user 200 in 283ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:55 PM [express] GET /api/auth/user 200 in 268ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:13:55 PM [express] GET /api/auth/user 200 in 285ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:35 PM [express] GET /api/auth/user 200 in 791ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:36 PM [express] GET /api/auth/user 200 in 306ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:36 PM [express] GET /api/auth/user 200 in 279ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:37 PM [express] GET /api/auth/user 200 in 295ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:38 PM [express] GET /api/auth/user 200 in 273ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:38 PM [express] GET /api/auth/user 200 in 306ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:15:39 PM [express] GET /api/auth/user 200 in 308ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:17 PM [express] GET /api/auth/user 200 in 1061ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48…
+3:23:18 PM [express] GET /api/auth/user 200 in 328ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:19 PM [express] GET /api/auth/user 200 in 284ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:20 PM [express] GET /api/auth/user 200 in 308ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:21 PM [express] GET /api/auth/user 200 in 282ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:21 PM [express] GET /api/auth/user 200 in 310ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
+3:23:22 PM [express] GET /api/auth/user 200 in 280ms :: {"id":"2dc4e199-f9ad-4606-aa27-d0243b5b4b48"…
