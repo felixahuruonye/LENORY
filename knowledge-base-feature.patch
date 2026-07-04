@@ -1,0 +1,765 @@
+From 709657f5f3b47baf5cbcaf030d2597a656aadeab Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Sat, 4 Jul 2026 21:08:17 +0000
+Subject: [PATCH] Add Knowledge Base: notes upload + quiz/flashcard/chat
+ practice modes; fix note persistence to Supabase
+
+---
+ client/src/App.tsx                     |   2 +
+ client/src/pages/AdvancedDashboard.tsx |   5 +-
+ client/src/pages/Notes.tsx             | 344 +++++++++++++++++++++++++
+ server/gemini.ts                       |  35 +++
+ server/index.ts                        |   2 +-
+ server/routes.ts                       | 146 +++++++++++
+ server/storage.ts                      |  97 +++++++
+ 7 files changed, 628 insertions(+), 3 deletions(-)
+ create mode 100644 client/src/pages/Notes.tsx
+
+diff --git a/client/src/App.tsx b/client/src/App.tsx
+index 229be15..6c8342c 100644
+--- a/client/src/App.tsx
++++ b/client/src/App.tsx
+@@ -36,6 +36,7 @@ import GeneratedLessons from "@/pages/GeneratedLessons";
+ import AdminDashboard from "@/pages/AdminDashboard";
+ import VideoGeneration from "@/pages/VideoGeneration";
+ import AuthCallback from "@/pages/AuthCallback";
++import Notes from "@/pages/Notes";
+ import Login from "@/pages/Login";
+ import Signup from "@/pages/Signup";
+ 
+@@ -92,6 +93,7 @@ function Router() {
+       <Route path="/project-workspace" component={ProjectWorkspace} />
+       <Route path="/memory" component={MemoryPanel} />
+       <Route path="/study-plans" component={StudyPlans} />
++      <Route path="/notes" component={Notes} />
+       <Route path="/pricing" component={Pricing} />
+       <Route path="/settings" component={SettingsPanel} />
+       <Route path="/audio" component={AudioSystem} />
+diff --git a/client/src/pages/AdvancedDashboard.tsx b/client/src/pages/AdvancedDashboard.tsx
+index c2d85c8..9f16bb9 100644
+--- a/client/src/pages/AdvancedDashboard.tsx
++++ b/client/src/pages/AdvancedDashboard.tsx
+@@ -12,7 +12,7 @@ import { Link, useLocation } from "wouter";
+ import {
+   Search, Sparkles, MessageSquare, Code2, Mic, ImageIcon, Brain, Zap, Clock,
+   FolderOpen, Settings, LogOut, Monitor, Bell, X, History, ArrowRight,
+-  BookOpen, Crown, TrendingUp, Coins, ChevronRight,
++  BookOpen, Crown, TrendingUp, Coins, ChevronRight, FileText,
+ } from "lucide-react";
+ 
+ function getGreeting(name: string): { greeting: string; subtitle: string } {
+@@ -91,6 +91,7 @@ export default function AdvancedDashboard() {
+   const searchCategories = [
+     { label: "All", value: "all", icon: Search },
+     { label: "Chat History", value: "chat", icon: MessageSquare },
++    { label: "Notes", value: "notes", icon: FileText },
+     { label: "Memory", value: "memory", icon: Brain },
+     { label: "Study Plans", value: "study_plan", icon: BookOpen },
+     { label: "Exams", value: "exam", icon: Monitor },
+@@ -443,7 +444,7 @@ export default function AdvancedDashboard() {
+               if (cat.value !== 'all' && !showAllCategories) return null;
+               const CatIcon = cat.icon;
+               const categoryLinks: Record<string, string> = {
+-                all: "/chat", chat: "/chat", memory: "/memory",
++                all: "/chat", chat: "/chat", memory: "/memory", notes: "/notes",
+                 study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-generator",
+                 image: "/image-gen", project: "/project-workspace", lesson: "/chat",
+               };
+diff --git a/client/src/pages/Notes.tsx b/client/src/pages/Notes.tsx
+new file mode 100644
+index 0000000..95b9c71
+--- /dev/null
++++ b/client/src/pages/Notes.tsx
+@@ -0,0 +1,344 @@
++import { useState, useRef, useEffect } from "react";
++import { useQuery, useMutation } from "@tanstack/react-query";
++import { queryClient, apiRequest } from "@/lib/queryClient";
++import { supabase } from "@/lib/supabase";
++import { useLocation } from "wouter";
++import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
++import { Button } from "@/components/ui/button";
++import { Badge } from "@/components/ui/badge";
++import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
++import { Label } from "@/components/ui/label";
++import { ScrollArea } from "@/components/ui/scroll-area";
++import { useToast } from "@/hooks/use-toast";
++import {
++  BookOpen, Upload, Trash2, Loader2, FileText, Brain,
++  MessageCircle, Layers, ChevronLeft, ChevronRight, RotateCw, CheckCircle2, XCircle,
++} from "lucide-react";
++
++interface Note {
++  id: string;
++  fileName: string;
++  fileType: string;
++  extractedText: string | null;
++  processingStatus: string;
++  createdAt: string;
++}
++
++interface QuizQuestion {
++  questionText: string;
++  options: string[];
++  correctAnswer: string;
++  explanation: string;
++  difficulty: string;
++}
++
++interface Flashcard {
++  front: string;
++  back: string;
++}
++
++async function authHeaders(): Promise<Record<string, string>> {
++  const { data: { session } } = await supabase.auth.getSession();
++  return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
++}
++
++export default function Notes() {
++  const { toast } = useToast();
++  const [, setLocation] = useLocation();
++  const fileInputRef = useRef<HTMLInputElement>(null);
++
++  const [quizNote, setQuizNote] = useState<Note | null>(null);
++  const [flashcardNote, setFlashcardNote] = useState<Note | null>(null);
++
++  const { data: notes = [], isLoading } = useQuery<Note[]>({
++    queryKey: ["/api/notes"],
++    queryFn: async () => {
++      const res = await apiRequest("GET", "/api/notes");
++      return res.json();
++    },
++  });
++
++  const uploadMutation = useMutation({
++    mutationFn: async (file: File) => {
++      const formData = new FormData();
++      formData.append("file", file);
++      const headers = await authHeaders();
++      const res = await fetch("/api/notes/upload", {
++        method: "POST",
++        credentials: "include",
++        headers,
++        body: formData,
++      });
++      if (!res.ok) {
++        const err = await res.json().catch(() => ({}));
++        throw new Error(err.message || "Upload failed");
++      }
++      return res.json();
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
++      toast({ title: "Note uploaded", description: "Your note is ready to practice." });
++    },
++    onError: (err: any) => {
++      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
++    },
++  });
++
++  const deleteMutation = useMutation({
++    mutationFn: async (id: string) => {
++      await apiRequest("DELETE", `/api/notes/${id}`);
++    },
++    onSuccess: () => {
++      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
++    },
++  });
++
++  const startChatPractice = useMutation({
++    mutationFn: async (id: string) => {
++      const res = await apiRequest("POST", `/api/notes/${id}/chat`);
++      return res.json();
++    },
++    onSuccess: (data) => {
++      setLocation(`/chat?sessionId=${data.sessionId}`);
++    },
++    onError: (err: any) => {
++      toast({ title: "Couldn't start practice chat", description: err.message, variant: "destructive" });
++    },
++  });
++
++  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
++    const file = e.target.files?.[0];
++    if (file) uploadMutation.mutate(file);
++    if (fileInputRef.current) fileInputRef.current.value = "";
++  };
++
++  return (
++    <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
++      <div className="flex items-center justify-between">
++        <div>
++          <h1 className="text-2xl font-bold flex items-center gap-2">
++            <BookOpen className="w-6 h-6 text-purple-500" />
++            Knowledge Base
++          </h1>
++          <p className="text-muted-foreground text-sm">Upload your notes, then quiz yourself before exams.</p>
++        </div>
++        <div>
++          <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt,.doc,.docx" className="hidden" onChange={handleFileSelect} />
++          <Button onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
++            {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
++            Upload Note
++          </Button>
++        </div>
++      </div>
++
++      {isLoading ? (
++        <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
++      ) : notes.length === 0 ? (
++        <Card>
++          <CardContent className="py-12 text-center text-muted-foreground">
++            <FileText className="w-10 h-10 mx-auto mb-3 opacity-50" />
++            <p>No notes yet. Upload a photo of your handwritten notes, a PDF, or a document to get started.</p>
++          </CardContent>
++        </Card>
++      ) : (
++        <div className="grid gap-3">
++          {notes.map((note) => (
++            <Card key={note.id}>
++              <CardHeader className="pb-3">
++                <div className="flex items-start justify-between gap-2">
++                  <div className="flex items-center gap-2 min-w-0">
++                    <FileText className="w-4 h-4 shrink-0 text-purple-500" />
++                    <CardTitle className="text-base truncate">{note.fileName}</CardTitle>
++                  </div>
++                  <div className="flex items-center gap-2 shrink-0">
++                    <Badge variant="secondary">{new Date(note.createdAt).toLocaleDateString()}</Badge>
++                    <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(note.id)}>
++                      <Trash2 className="w-4 h-4 text-destructive" />
++                    </Button>
++                  </div>
++                </div>
++              </CardHeader>
++              <CardContent>
++                <div className="flex flex-wrap gap-2">
++                  <Button size="sm" variant="outline" onClick={() => setQuizNote(note)}>
++                    <Brain className="w-4 h-4 mr-1" /> Quiz
++                  </Button>
++                  <Button size="sm" variant="outline" onClick={() => setFlashcardNote(note)}>
++                    <Layers className="w-4 h-4 mr-1" /> Flashcards
++                  </Button>
++                  <Button
++                    size="sm"
++                    variant="outline"
++                    disabled={startChatPractice.isPending}
++                    onClick={() => startChatPractice.mutate(note.id)}
++                  >
++                    {startChatPractice.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <MessageCircle className="w-4 h-4 mr-1" />}
++                    Chat Practice
++                  </Button>
++                </div>
++              </CardContent>
++            </Card>
++          ))}
++        </div>
++      )}
++
++      {quizNote && <QuizDialog note={quizNote} onClose={() => setQuizNote(null)} />}
++      {flashcardNote && <FlashcardDialog note={flashcardNote} onClose={() => setFlashcardNote(null)} />}
++    </div>
++  );
++}
++
++function QuizDialog({ note, onClose }: { note: Note; onClose: () => void }) {
++  const { toast } = useToast();
++  const [questions, setQuestions] = useState<QuizQuestion[] | null>(null);
++  const [answers, setAnswers] = useState<Record<number, string>>({});
++  const [submitted, setSubmitted] = useState(false);
++
++  const generateQuiz = useMutation({
++    mutationFn: async () => {
++      const res = await apiRequest("POST", `/api/notes/${note.id}/quiz`, { questionCount: 5 });
++      return res.json();
++    },
++    onSuccess: (data) => setQuestions(data.questions || []),
++    onError: (err: any) => toast({ title: "Couldn't generate quiz", description: err.message, variant: "destructive" }),
++  });
++
++  useEffect(() => { generateQuiz.mutate(); }, [note.id]);
++
++  const score = questions ? questions.filter((q, i) => answers[i] === q.correctAnswer).length : 0;
++
++  return (
++    <Dialog open onOpenChange={onClose}>
++      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
++        <DialogHeader>
++          <DialogTitle className="flex items-center gap-2"><Brain className="w-5 h-5" /> Quiz: {note.fileName}</DialogTitle>
++        </DialogHeader>
++        <ScrollArea className="flex-1 pr-2">
++          {generateQuiz.isPending && (
++            <div className="flex flex-col items-center py-10 gap-2 text-muted-foreground">
++              <Loader2 className="w-6 h-6 animate-spin" />
++              <p className="text-sm">Generating questions from your note...</p>
++            </div>
++          )}
++          {questions && questions.length === 0 && !generateQuiz.isPending && (
++            <p className="text-center text-muted-foreground py-8">Couldn't generate questions from this note.</p>
++          )}
++          {questions && questions.length > 0 && (
++            <div className="space-y-5">
++              {questions.map((q, i) => (
++                <div key={i} className="space-y-2">
++                  <p className="font-medium text-sm">{i + 1}. {q.questionText}</p>
++                  <RadioGroup
++                    value={answers[i] || ""}
++                    onValueChange={(v) => !submitted && setAnswers((a) => ({ ...a, [i]: v }))}
++                  >
++                    {q.options.map((opt, oi) => {
++                      const isCorrect = submitted && opt === q.correctAnswer;
++                      const isWrongPick = submitted && answers[i] === opt && opt !== q.correctAnswer;
++                      return (
++                        <div key={oi} className={`flex items-center gap-2 rounded-md px-2 py-1 ${isCorrect ? "bg-green-500/10" : isWrongPick ? "bg-red-500/10" : ""}`}>
++                          <RadioGroupItem value={opt} id={`q${i}o${oi}`} disabled={submitted} />
++                          <Label htmlFor={`q${i}o${oi}`} className="text-sm flex-1 cursor-pointer">{opt}</Label>
++                          {isCorrect && <CheckCircle2 className="w-4 h-4 text-green-500" />}
++                          {isWrongPick && <XCircle className="w-4 h-4 text-red-500" />}
++                        </div>
++                      );
++                    })}
++                  </RadioGroup>
++                  {submitted && <p className="text-xs text-muted-foreground pl-2">{q.explanation}</p>}
++                </div>
++              ))}
++            </div>
++          )}
++        </ScrollArea>
++        {questions && questions.length > 0 && (
++          <div className="pt-3 border-t flex items-center justify-between">
++            {submitted ? (
++              <p className="font-medium">Score: {score} / {questions.length}</p>
++            ) : <div />}
++            <Button
++              onClick={() => submitted ? onClose() : setSubmitted(true)}
++              disabled={!submitted && Object.keys(answers).length < questions.length}
++            >
++              {submitted ? "Done" : "Submit Answers"}
++            </Button>
++          </div>
++        )}
++      </DialogContent>
++    </Dialog>
++  );
++}
++
++function FlashcardDialog({ note, onClose }: { note: Note; onClose: () => void }) {
++  const { toast } = useToast();
++  const [cards, setCards] = useState<Flashcard[] | null>(null);
++  const [index, setIndex] = useState(0);
++  const [flipped, setFlipped] = useState(false);
++
++  const generate = useMutation({
++    mutationFn: async () => {
++      const res = await apiRequest("POST", `/api/notes/${note.id}/flashcards`);
++      return res.json();
++    },
++    onSuccess: (data) => setCards(data.flashcards || []),
++    onError: (err: any) => toast({ title: "Couldn't generate flashcards", description: err.message, variant: "destructive" }),
++  });
++
++  useEffect(() => { generate.mutate(); }, [note.id]);
++
++  const current = cards?.[index];
++
++  return (
++    <Dialog open onOpenChange={onClose}>
++      <DialogContent className="max-w-md">
++        <DialogHeader>
++          <DialogTitle className="flex items-center gap-2"><Layers className="w-5 h-5" /> Flashcards: {note.fileName}</DialogTitle>
++        </DialogHeader>
++        {generate.isPending && (
++          <div className="flex flex-col items-center py-10 gap-2 text-muted-foreground">
++            <Loader2 className="w-6 h-6 animate-spin" />
++            <p className="text-sm">Generating flashcards from your note...</p>
++          </div>
++        )}
++        {cards && cards.length === 0 && !generate.isPending && (
++          <p className="text-center text-muted-foreground py-8">Couldn't generate flashcards from this note.</p>
++        )}
++        {current && (
++          <div className="space-y-4">
++            <button
++              onClick={() => setFlipped((f) => !f)}
++              className="w-full min-h-[160px] rounded-lg border bg-card p-6 flex items-center justify-center text-center hover:bg-accent/50 transition"
++            >
++              <div>
++                <p className="text-xs text-muted-foreground mb-2 flex items-center justify-center gap-1">
++                  <RotateCw className="w-3 h-3" /> {flipped ? "Answer" : "Question"} — tap to flip
++                </p>
++                <p className="font-medium">{flipped ? current.back : current.front}</p>
++              </div>
++            </button>
++            <div className="flex items-center justify-between">
++              <Button
++                variant="outline"
++                size="sm"
++                disabled={index === 0}
++                onClick={() => { setIndex((i) => i - 1); setFlipped(false); }}
++              >
++                <ChevronLeft className="w-4 h-4" /> Prev
++              </Button>
++              <span className="text-sm text-muted-foreground">{index + 1} / {cards!.length}</span>
++              <Button
++                variant="outline"
++                size="sm"
++                disabled={index === cards!.length - 1}
++                onClick={() => { setIndex((i) => i + 1); setFlipped(false); }}
++              >
++                Next <ChevronRight className="w-4 h-4" />
++              </Button>
++            </div>
++          </div>
++        )}
++      </DialogContent>
++    </Dialog>
++  );
++}
+diff --git a/server/gemini.ts b/server/gemini.ts
+index 719b1c9..afc8468 100644
+--- a/server/gemini.ts
++++ b/server/gemini.ts
+@@ -1127,6 +1127,41 @@ export async function summarizeText(text: string, length: 'short' | 'medium' | '
+ }
+ 
+ // Generate flashcards
++export async function generateQuizFromText(text: string, questionCount: number = 5): Promise<any> {
++  try {
++    const prompt = `You are an expert exam-setter helping a Nigerian student practice their own study notes. Generate exactly ${questionCount} multiple-choice questions based ONLY on the text provided. Vary the difficulty (easy, medium, hard).
++
++Text:
++${text}
++
++Respond with ONLY valid JSON, no markdown fences:
++{
++  "questions": [
++    {
++      "questionText": "...",
++      "options": ["A", "B", "C", "D"],
++      "correctAnswer": "the exact matching option text",
++      "explanation": "brief explanation of why this is correct",
++      "difficulty": "easy"
++    }
++  ]
++}`;
++
++    const response = await ai.models.generateContent({
++      model: "gemini-2.5-flash",
++      contents: prompt,
++    });
++
++    const responseText = response.text || "";
++    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
++    if (!jsonMatch) return { questions: [] };
++    return JSON.parse(jsonMatch[0]);
++  } catch (error) {
++    console.error("Error generating quiz:", error);
++    throw error;
++  }
++}
++
+ export async function generateFlashcards(text: string): Promise<any> {
+   try {
+     const prompt = `You are an expert at creating study flashcards. Generate flashcards from the provided text.
+diff --git a/server/index.ts b/server/index.ts
+index 684d29f..17de0b9 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -62,7 +62,7 @@ app.use((req, res, next) => {
+   });
+ 
+   // Always use static build files if they exist (avoids HMR issues)
+-  const distPath = path.resolve(import.meta.dirname, "dist/public");
++  const distPath = path.resolve(import.meta.dirname, "public");
+   const hasStaticBuild = fs.existsSync(path.join(distPath, "index.html"));
+   
+   if (hasStaticBuild) {
+diff --git a/server/routes.ts b/server/routes.ts
+index 7e3818f..8e5a606 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -20,6 +20,7 @@ import {
+   generateSpeech,
+   summarizeText,
+   generateFlashcards,
++  generateQuizFromText,
+   generateWebsiteWithGemini,
+   explainCodeForBeginners,
+   debugCodeWithLENORY,
+@@ -1284,6 +1285,151 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+     }
+   });
+ 
++  // ─────────────────────────────────────────────────────────────────────────────
++  // NOTES / KNOWLEDGE BASE
++  // ─────────────────────────────────────────────────────────────────────────────
++
++  // List all notes for the logged-in user
++  app.get('/api/notes', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const userId = req.userId;
++      const notes = await storage.getFileUploadsByUser(userId);
++      res.json(notes);
++    } catch (error) {
++      console.error("Error fetching notes:", error);
++      res.status(500).json({ message: "Failed to fetch notes" });
++    }
++  });
++
++  // Upload a note (image/PDF/text) — extracts text with Gemini Vision and saves it
++  app.post('/api/notes/upload', supabaseAuth, uploadMulter.single('file'), async (req: any, res: Response) => {
++    try {
++      if (!req.file) {
++        return res.status(400).json({ message: "No file uploaded" });
++      }
++      const userId = req.userId;
++      const { originalname, mimetype, buffer } = req.file;
++
++      console.log(`📚 Uploading note: ${originalname} (${mimetype})`);
++
++      let extractedText = "";
++      try {
++        const visionResult = await analyzeFileWithGeminiVision(buffer, mimetype, originalname);
++        extractedText = visionResult.extractedText;
++      } catch (visionErr) {
++        console.error("Note text extraction failed:", visionErr);
++        return res.status(500).json({ message: "Could not read this file. Try a clearer photo or a different format." });
++      }
++
++      const note = await storage.createFileUpload({
++        userId,
++        fileName: originalname,
++        fileType: mimetype,
++        fileSize: buffer.length,
++        fileUrl: `/api/uploads/${userId}/${nanoid()}`,
++        processingStatus: "completed",
++        extractedText,
++      });
++
++      res.json(note);
++    } catch (error) {
++      console.error("Note upload error:", error);
++      res.status(500).json({ message: "Failed to upload note" });
++    }
++  });
++
++  // Delete a note
++  app.delete('/api/notes/:id', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const userId = req.userId;
++      const note = await storage.getFileUpload(req.params.id);
++      if (!note || note.userId !== userId) {
++        return res.status(404).json({ message: "Note not found" });
++      }
++      await storage.deleteFileUpload(req.params.id);
++      res.json({ success: true });
++    } catch (error) {
++      console.error("Error deleting note:", error);
++      res.status(500).json({ message: "Failed to delete note" });
++    }
++  });
++
++  // Practice mode 1: MCQ quiz generated from a note
++  app.post('/api/notes/:id/quiz', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const userId = req.userId;
++      const note = await storage.getFileUpload(req.params.id);
++      if (!note || note.userId !== userId) {
++        return res.status(404).json({ message: "Note not found" });
++      }
++      if (!note.extractedText || note.extractedText.trim().length < 20) {
++        return res.status(400).json({ message: "This note doesn't have enough text to generate a quiz from" });
++      }
++      const questionCount = Math.min(Math.max(parseInt(req.body?.questionCount) || 5, 1), 15);
++      const quiz = await generateQuizFromText(note.extractedText, questionCount);
++      res.json(quiz);
++    } catch (error) {
++      console.error("Error generating quiz from note:", error);
++      res.status(500).json({ message: "Failed to generate quiz" });
++    }
++  });
++
++  // Practice mode 2: Flashcards generated from a note
++  app.post('/api/notes/:id/flashcards', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const userId = req.userId;
++      const note = await storage.getFileUpload(req.params.id);
++      if (!note || note.userId !== userId) {
++        return res.status(404).json({ message: "Note not found" });
++      }
++      if (!note.extractedText || note.extractedText.trim().length < 20) {
++        return res.status(400).json({ message: "This note doesn't have enough text to generate flashcards from" });
++      }
++      const flashcards = await generateFlashcards(note.extractedText);
++      res.json(flashcards);
++    } catch (error) {
++      console.error("Error generating flashcards from note:", error);
++      res.status(500).json({ message: "Failed to generate flashcards" });
++    }
++  });
++
++  // Practice mode 3: Conversational quiz — starts a real chat session seeded with the note
++  app.post('/api/notes/:id/chat', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const userId = req.userId;
++      const note = await storage.getFileUpload(req.params.id);
++      if (!note || note.userId !== userId) {
++        return res.status(404).json({ message: "Note not found" });
++      }
++      if (!note.extractedText || note.extractedText.trim().length < 20) {
++        return res.status(400).json({ message: "This note doesn't have enough text to practice with" });
++      }
++
++      const session = await storage.createChatSession({
++        userId,
++        title: `Practice: ${note.fileName}`,
++        mode: "chat",
++        summary: "",
++      });
++
++      const kickoffPrompt = `You are LENORY, a friendly Nigerian exam tutor. A student uploaded these notes titled "${note.fileName}". Quiz them on it one question at a time — ask a question, wait for their answer, then tell them if they're right, explain briefly, and ask the next one. Start now with your first question. Keep questions based only on this content:\n\n${note.extractedText.substring(0, 6000)}`;
++
++      const firstQuestion = await chatWithAI([{ role: "user", content: kickoffPrompt }]);
++
++      await storage.createChatMessage({
++        sessionId: session.id,
++        userId,
++        role: "assistant",
++        content: firstQuestion || "Let's begin! What's the first thing you remember from this note?",
++      });
++
++      res.json({ sessionId: session.id, firstMessage: firstQuestion });
++    } catch (error) {
++      console.error("Error starting note practice chat:", error);
++      res.status(500).json({ message: "Failed to start practice session" });
++    }
++  });
++
+   // Website Generator routes
+   app.get('/api/websites', supabaseAuth, async (req: any, res: Response) => {
+     try {
+diff --git a/server/storage.ts b/server/storage.ts
+index 77de5d2..c0b346d 100644
+--- a/server/storage.ts
++++ b/server/storage.ts
+@@ -182,6 +182,7 @@ export interface IStorage {
+   getFileUploadsByUser(userId: string): Promise<FileUpload[]>;
+   createFileUpload(upload: InsertFileUpload): Promise<FileUpload>;
+   updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined>;
++  deleteFileUpload(id: string): Promise<void>;
+ 
+   // Study plan operations
+   getStudyPlan(id: string): Promise<StudyPlan | undefined>;
+@@ -1244,6 +1245,7 @@ class MemoryStorage implements IStorage {
+   async createPurchase(p: any) { return p as Purchase; }
+   async getFileUploadsByUser() { return []; }
+   async createFileUpload(f: any) { return f as FileUpload; }
++  async deleteFileUpload() { return; }
+   async getStudentProfileByUser() { return undefined; }
+   async upsertStudentProfile(p: any) { return p as StudentProfile; }
+   async getSchool() { return undefined; }
+@@ -1762,6 +1764,101 @@ class SupabaseStorage extends MemoryStorage {
+     }
+     return super.getMemoryEntriesByUser(userId);
+   }
++
++  // Notes / Knowledge Base file uploads — backed by document_uploads table
++  async createFileUpload(upload: InsertFileUpload): Promise<FileUpload> {
++    const memUpload = await super.createFileUpload(upload);
++    if (supabaseDb) {
++      try {
++        const { data, error } = await supabaseDb.from('document_uploads').insert({
++          id: memUpload.id,
++          user_id: upload.userId,
++          file_name: upload.fileName,
++          file_type: upload.fileType,
++          file_size: upload.fileSize,
++          file_url: upload.fileUrl,
++          extracted_text: upload.extractedText || null,
++          is_processing: upload.processingStatus === 'pending',
++          created_at: new Date().toISOString(),
++        }).select().single();
++        if (!error && data) {
++          return mapDocumentUploadRow(data);
++        }
++      } catch {}
++    }
++    return memUpload;
++  }
++
++  async getFileUploadsByUser(userId: string): Promise<FileUpload[]> {
++    if (supabaseDb) {
++      try {
++        const { data, error } = await supabaseDb
++          .from('document_uploads')
++          .select('*')
++          .eq('user_id', userId)
++          .order('created_at', { ascending: false });
++        if (!error && data) {
++          return data.map(mapDocumentUploadRow);
++        }
++      } catch {}
++    }
++    return super.getFileUploadsByUser(userId);
++  }
++
++  async getFileUpload(id: string): Promise<FileUpload | undefined> {
++    if (supabaseDb) {
++      try {
++        const { data, error } = await supabaseDb.from('document_uploads').select('*').eq('id', id).single();
++        if (!error && data) {
++          return mapDocumentUploadRow(data);
++        }
++      } catch {}
++    }
++    return super.getFileUpload(id);
++  }
++
++  async updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined> {
++    if (supabaseDb) {
++      try {
++        const updateData: any = { is_processing: status === 'pending' };
++        if (extractedText) updateData.extracted_text = extractedText;
++        const { data, error } = await supabaseDb
++          .from('document_uploads')
++          .update(updateData)
++          .eq('id', id)
++          .select()
++          .single();
++        if (!error && data) {
++          return mapDocumentUploadRow(data);
++        }
++      } catch {}
++    }
++    return super.updateFileUploadStatus(id, status, extractedText);
++  }
++
++  async deleteFileUpload(id: string): Promise<void> {
++    if (supabaseDb) {
++      try {
++        await supabaseDb.from('document_uploads').delete().eq('id', id);
++        return;
++      } catch {}
++    }
++    return super.deleteFileUpload(id);
++  }
++}
++
++function mapDocumentUploadRow(data: any): FileUpload {
++  return {
++    id: data.id,
++    userId: data.user_id,
++    fileName: data.file_name,
++    fileType: data.file_type,
++    fileSize: data.file_size,
++    fileUrl: data.file_url,
++    extractedText: data.extracted_text || null,
++    processingStatus: data.is_processing ? 'pending' : 'completed',
++    createdAt: data.created_at ? new Date(data.created_at) : new Date(),
++  } as FileUpload;
+ }
+ 
+ function mapSupabaseUser(data: any): User {
+-- 
+2.43.0
+

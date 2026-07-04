@@ -20,6 +20,7 @@ import {
   generateSpeech,
   summarizeText,
   generateFlashcards,
+  generateQuizFromText,
   generateWebsiteWithGemini,
   explainCodeForBeginners,
   debugCodeWithLENORY,
@@ -1281,6 +1282,151 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
     } catch (error) {
       console.error("File upload error:", error);
       res.status(500).json({ message: "Failed to process file" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // NOTES / KNOWLEDGE BASE
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // List all notes for the logged-in user
+  app.get('/api/notes', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const notes = await storage.getFileUploadsByUser(userId);
+      res.json(notes);
+    } catch (error) {
+      console.error("Error fetching notes:", error);
+      res.status(500).json({ message: "Failed to fetch notes" });
+    }
+  });
+
+  // Upload a note (image/PDF/text) — extracts text with Gemini Vision and saves it
+  app.post('/api/notes/upload', supabaseAuth, uploadMulter.single('file'), async (req: any, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      const userId = req.userId;
+      const { originalname, mimetype, buffer } = req.file;
+
+      console.log(`📚 Uploading note: ${originalname} (${mimetype})`);
+
+      let extractedText = "";
+      try {
+        const visionResult = await analyzeFileWithGeminiVision(buffer, mimetype, originalname);
+        extractedText = visionResult.extractedText;
+      } catch (visionErr) {
+        console.error("Note text extraction failed:", visionErr);
+        return res.status(500).json({ message: "Could not read this file. Try a clearer photo or a different format." });
+      }
+
+      const note = await storage.createFileUpload({
+        userId,
+        fileName: originalname,
+        fileType: mimetype,
+        fileSize: buffer.length,
+        fileUrl: `/api/uploads/${userId}/${nanoid()}`,
+        processingStatus: "completed",
+        extractedText,
+      });
+
+      res.json(note);
+    } catch (error) {
+      console.error("Note upload error:", error);
+      res.status(500).json({ message: "Failed to upload note" });
+    }
+  });
+
+  // Delete a note
+  app.delete('/api/notes/:id', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const note = await storage.getFileUpload(req.params.id);
+      if (!note || note.userId !== userId) {
+        return res.status(404).json({ message: "Note not found" });
+      }
+      await storage.deleteFileUpload(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting note:", error);
+      res.status(500).json({ message: "Failed to delete note" });
+    }
+  });
+
+  // Practice mode 1: MCQ quiz generated from a note
+  app.post('/api/notes/:id/quiz', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const note = await storage.getFileUpload(req.params.id);
+      if (!note || note.userId !== userId) {
+        return res.status(404).json({ message: "Note not found" });
+      }
+      if (!note.extractedText || note.extractedText.trim().length < 20) {
+        return res.status(400).json({ message: "This note doesn't have enough text to generate a quiz from" });
+      }
+      const questionCount = Math.min(Math.max(parseInt(req.body?.questionCount) || 5, 1), 15);
+      const quiz = await generateQuizFromText(note.extractedText, questionCount);
+      res.json(quiz);
+    } catch (error) {
+      console.error("Error generating quiz from note:", error);
+      res.status(500).json({ message: "Failed to generate quiz" });
+    }
+  });
+
+  // Practice mode 2: Flashcards generated from a note
+  app.post('/api/notes/:id/flashcards', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const note = await storage.getFileUpload(req.params.id);
+      if (!note || note.userId !== userId) {
+        return res.status(404).json({ message: "Note not found" });
+      }
+      if (!note.extractedText || note.extractedText.trim().length < 20) {
+        return res.status(400).json({ message: "This note doesn't have enough text to generate flashcards from" });
+      }
+      const flashcards = await generateFlashcards(note.extractedText);
+      res.json(flashcards);
+    } catch (error) {
+      console.error("Error generating flashcards from note:", error);
+      res.status(500).json({ message: "Failed to generate flashcards" });
+    }
+  });
+
+  // Practice mode 3: Conversational quiz — starts a real chat session seeded with the note
+  app.post('/api/notes/:id/chat', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const note = await storage.getFileUpload(req.params.id);
+      if (!note || note.userId !== userId) {
+        return res.status(404).json({ message: "Note not found" });
+      }
+      if (!note.extractedText || note.extractedText.trim().length < 20) {
+        return res.status(400).json({ message: "This note doesn't have enough text to practice with" });
+      }
+
+      const session = await storage.createChatSession({
+        userId,
+        title: `Practice: ${note.fileName}`,
+        mode: "chat",
+        summary: "",
+      });
+
+      const kickoffPrompt = `You are LENORY, a friendly Nigerian exam tutor. A student uploaded these notes titled "${note.fileName}". Quiz them on it one question at a time — ask a question, wait for their answer, then tell them if they're right, explain briefly, and ask the next one. Start now with your first question. Keep questions based only on this content:\n\n${note.extractedText.substring(0, 6000)}`;
+
+      const firstQuestion = await chatWithAI([{ role: "user", content: kickoffPrompt }]);
+
+      await storage.createChatMessage({
+        sessionId: session.id,
+        userId,
+        role: "assistant",
+        content: firstQuestion || "Let's begin! What's the first thing you remember from this note?",
+      });
+
+      res.json({ sessionId: session.id, firstMessage: firstQuestion });
+    } catch (error) {
+      console.error("Error starting note practice chat:", error);
+      res.status(500).json({ message: "Failed to start practice session" });
     }
   });
 

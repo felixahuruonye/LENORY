@@ -182,6 +182,7 @@ export interface IStorage {
   getFileUploadsByUser(userId: string): Promise<FileUpload[]>;
   createFileUpload(upload: InsertFileUpload): Promise<FileUpload>;
   updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined>;
+  deleteFileUpload(id: string): Promise<void>;
 
   // Study plan operations
   getStudyPlan(id: string): Promise<StudyPlan | undefined>;
@@ -1244,6 +1245,7 @@ class MemoryStorage implements IStorage {
   async createPurchase(p: any) { return p as Purchase; }
   async getFileUploadsByUser() { return []; }
   async createFileUpload(f: any) { return f as FileUpload; }
+  async deleteFileUpload() { return; }
   async getStudentProfileByUser() { return undefined; }
   async upsertStudentProfile(p: any) { return p as StudentProfile; }
   async getSchool() { return undefined; }
@@ -1762,6 +1764,101 @@ class SupabaseStorage extends MemoryStorage {
     }
     return super.getMemoryEntriesByUser(userId);
   }
+
+  // Notes / Knowledge Base file uploads — backed by document_uploads table
+  async createFileUpload(upload: InsertFileUpload): Promise<FileUpload> {
+    const memUpload = await super.createFileUpload(upload);
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb.from('document_uploads').insert({
+          id: memUpload.id,
+          user_id: upload.userId,
+          file_name: upload.fileName,
+          file_type: upload.fileType,
+          file_size: upload.fileSize,
+          file_url: upload.fileUrl,
+          extracted_text: upload.extractedText || null,
+          is_processing: upload.processingStatus === 'pending',
+          created_at: new Date().toISOString(),
+        }).select().single();
+        if (!error && data) {
+          return mapDocumentUploadRow(data);
+        }
+      } catch {}
+    }
+    return memUpload;
+  }
+
+  async getFileUploadsByUser(userId: string): Promise<FileUpload[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('document_uploads')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data) {
+          return data.map(mapDocumentUploadRow);
+        }
+      } catch {}
+    }
+    return super.getFileUploadsByUser(userId);
+  }
+
+  async getFileUpload(id: string): Promise<FileUpload | undefined> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb.from('document_uploads').select('*').eq('id', id).single();
+        if (!error && data) {
+          return mapDocumentUploadRow(data);
+        }
+      } catch {}
+    }
+    return super.getFileUpload(id);
+  }
+
+  async updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined> {
+    if (supabaseDb) {
+      try {
+        const updateData: any = { is_processing: status === 'pending' };
+        if (extractedText) updateData.extracted_text = extractedText;
+        const { data, error } = await supabaseDb
+          .from('document_uploads')
+          .update(updateData)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!error && data) {
+          return mapDocumentUploadRow(data);
+        }
+      } catch {}
+    }
+    return super.updateFileUploadStatus(id, status, extractedText);
+  }
+
+  async deleteFileUpload(id: string): Promise<void> {
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('document_uploads').delete().eq('id', id);
+        return;
+      } catch {}
+    }
+    return super.deleteFileUpload(id);
+  }
+}
+
+function mapDocumentUploadRow(data: any): FileUpload {
+  return {
+    id: data.id,
+    userId: data.user_id,
+    fileName: data.file_name,
+    fileType: data.file_type,
+    fileSize: data.file_size,
+    fileUrl: data.file_url,
+    extractedText: data.extracted_text || null,
+    processingStatus: data.is_processing ? 'pending' : 'completed',
+    createdAt: data.created_at ? new Date(data.created_at) : new Date(),
+  } as FileUpload;
 }
 
 function mapSupabaseUser(data: any): User {

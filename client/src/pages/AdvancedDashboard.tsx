@@ -12,7 +12,7 @@ import { Link, useLocation } from "wouter";
 import {
   Search, Sparkles, MessageSquare, Code2, Mic, ImageIcon, Brain, Zap, Clock,
   FolderOpen, Settings, LogOut, Monitor, Bell, X, History, ArrowRight,
-  BookOpen, Crown, TrendingUp, Coins, ChevronRight,
+  BookOpen, Crown, TrendingUp, Coins, ChevronRight, FileText,
 } from "lucide-react";
 
 function getGreeting(name: string): { greeting: string; subtitle: string } {
@@ -91,6 +91,7 @@ export default function AdvancedDashboard() {
   const searchCategories = [
     { label: "All", value: "all", icon: Search },
     { label: "Chat History", value: "chat", icon: MessageSquare },
+    { label: "Notes", value: "notes", icon: FileText },
     { label: "Memory", value: "memory", icon: Brain },
     { label: "Study Plans", value: "study_plan", icon: BookOpen },
     { label: "Exams", value: "exam", icon: Monitor },
@@ -443,7 +444,7 @@ export default function AdvancedDashboard() {
               if (cat.value !== 'all' && !showAllCategories) return null;
               const CatIcon = cat.icon;
               const categoryLinks: Record<string, string> = {
-                all: "/chat", chat: "/chat", memory: "/memory",
+                all: "/chat", chat: "/chat", memory: "/memory", notes: "/notes",
                 study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-generator",
                 image: "/image-gen", project: "/project-workspace", lesson: "/chat",
               };

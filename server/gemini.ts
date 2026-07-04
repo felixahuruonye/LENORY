@@ -1127,6 +1127,41 @@ export async function summarizeText(text: string, length: 'short' | 'medium' | '
 }
 
 // Generate flashcards
+export async function generateQuizFromText(text: string, questionCount: number = 5): Promise<any> {
+  try {
+    const prompt = `You are an expert exam-setter helping a Nigerian student practice their own study notes. Generate exactly ${questionCount} multiple-choice questions based ONLY on the text provided. Vary the difficulty (easy, medium, hard).
+
+Text:
+${text}
+
+Respond with ONLY valid JSON, no markdown fences:
+{
+  "questions": [
+    {
+      "questionText": "...",
+      "options": ["A", "B", "C", "D"],
+      "correctAnswer": "the exact matching option text",
+      "explanation": "brief explanation of why this is correct",
+      "difficulty": "easy"
+    }
+  ]
+}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    const responseText = response.text || "";
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { questions: [] };
+    return JSON.parse(jsonMatch[0]);
+  } catch (error) {
+    console.error("Error generating quiz:", error);
+    throw error;
+  }
+}
+
 export async function generateFlashcards(text: string): Promise<any> {
   try {
     const prompt = `You are an expert at creating study flashcards. Generate flashcards from the provided text.
