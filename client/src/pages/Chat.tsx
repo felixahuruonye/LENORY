@@ -378,7 +378,7 @@ export default function Chat() {
       const userMsg = file.type.startsWith("image/") ? `[Image: ${fileName}]` : `[File: ${fileName}]`;
       toast({ title: "Analyzing file...", description: `Sending ${fileName} to LENORY AI` });
       try {
-        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions." });
+        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions.", sessionId: currentSessionId });
         const data = await res.json();
         if (data.analysis) {
           setMessage("");

@@ -371,12 +371,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ──────────────────────────────────────────────────────────────────────
 
       // Verify session exists if provided, otherwise create a new one
+      let currentSession: any = null;
       if (sessionId) {
-        const session = await storage.getChatSession(sessionId);
-        if (!session) {
+        currentSession = await storage.getChatSession(sessionId);
+        if (!currentSession) {
           console.warn("Session not found, creating new session");
           const newSession = await storage.createChatSession({ userId, title: "New Chat", mode: "chat", summary: "" });
           sessionId = newSession.id;
+          currentSession = newSession;
           
           // Send notification for new chat
           try {
@@ -529,6 +531,14 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
 
       if (extraContext) {
         systemMessage += `\n\n## ADDITIONAL CONTEXT:\n${extraContext}`;
+      }
+
+      // If this session is grounded in an uploaded note, keep re-injecting that note's
+      // content on every turn so answers (including photos of questions) stay based on it.
+      const noteContextMarker = "__NOTE_CONTEXT__";
+      if (currentSession?.summary?.startsWith(noteContextMarker)) {
+        const noteText = currentSession.summary.substring(noteContextMarker.length);
+        systemMessage += `\n\n## THE STUDENT'S UPLOADED NOTE (answer strictly based on this, do not use outside knowledge unless the note doesn't cover it — say so if it doesn't):\n${noteText}`;
       }
 
       if (isAdvanced) {
@@ -1409,7 +1419,7 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
         userId,
         title: `Practice: ${note.fileName}`,
         mode: "chat",
-        summary: "",
+        summary: `__NOTE_CONTEXT__${note.extractedText.substring(0, 6000)}`,
       });
 
       const kickoffPrompt = `You are LENORY, a friendly Nigerian exam tutor. A student uploaded these notes titled "${note.fileName}". Quiz them on it one question at a time — ask a question, wait for their answer, then tell them if they're right, explain briefly, and ask the next one. Start now with your first question. Keep questions based only on this content:\n\n${note.extractedText.substring(0, 6000)}`;
@@ -3884,19 +3894,32 @@ KEY_WORDS: [keywords separated by commas]`,
   // ─────────────────────────────────────────────────────────────────────────────
   app.post('/api/chat/analyze-vision', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { base64, mimeType, fileName, prompt } = req.body;
+      const { base64, mimeType, fileName, prompt, sessionId } = req.body;
       if (!base64 || !mimeType) return res.status(400).json({ error: "Missing base64 or mimeType" });
 
       const buffer = Buffer.from(base64, 'base64');
       const { analyzeFileWithGeminiVision } = await import('./gemini');
       const { extractedText } = await analyzeFileWithGeminiVision(buffer, mimeType, fileName || 'file');
 
+      // If this chat session is grounded in an uploaded note, answer strictly from that note
+      let noteContext = "";
+      if (sessionId) {
+        const noteContextMarker = "__NOTE_CONTEXT__";
+        const session = await storage.getChatSession(sessionId);
+        if (session?.summary?.startsWith(noteContextMarker)) {
+          noteContext = session.summary.substring(noteContextMarker.length);
+        }
+      }
+
       // If a specific prompt was provided, do an additional pass using the prompt + extracted content
       let analysis = extractedText;
       if (prompt && extractedText) {
         const { chatWithAI } = await import('./gemini');
+        const groundedInstruction = noteContext
+          ? `You are helping a student practice using their own uploaded notes. Answer the question in the image/file below using ONLY the note content provided — do not use outside knowledge unless the note doesn't cover it (say so clearly if it doesn't).\n\nSTUDENT'S NOTE:\n${noteContext}\n\n`
+          : "";
         const enhanced = await chatWithAI([
-          { role: "user", content: `${prompt}\n\nFile content/description:\n${extractedText}` }
+          { role: "user", content: `${groundedInstruction}${prompt}\n\nFile content/description:\n${extractedText}` }
         ]);
         analysis = enhanced || extractedText;
       }
