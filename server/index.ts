@@ -62,7 +62,7 @@ app.use((req, res, next) => {
   });
 
   // Always use static build files if they exist (avoids HMR issues)
-  const distPath = path.resolve(import.meta.dirname, "dist/public");
+  const distPath = path.resolve(import.meta.dirname, "public");
   const hasStaticBuild = fs.existsSync(path.join(distPath, "index.html"));
   
   if (hasStaticBuild) {
