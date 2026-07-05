@@ -283,6 +283,30 @@ export default function LiveSession() {
     }
   }, [transcript, subject, toast]);
 
+  const [isSavingToNotes, setIsSavingToNotes] = useState(false);
+  const saveTranscriptAsNote = useCallback(async () => {
+    const textToSave = formattedNotes || transcript;
+    if (!textToSave) {
+      toast({ title: "Nothing to save", description: "Transcribe audio first.", variant: "destructive" });
+      return;
+    }
+    setIsSavingToNotes(true);
+    try {
+      const title = sessionTitle || `Live Session — ${new Date().toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}`;
+      const res = await apiRequest("POST", "/api/notes/from-text", { fileName: title, text: textToSave });
+      const data = await res.json();
+      if (data?.creditsCharged > 0) {
+        toast({ title: "Saved to Knowledge Base", description: "20 credits used (past your 10 free note uploads)." });
+      } else {
+        toast({ title: "Saved to Knowledge Base", description: "You can now quiz yourself on this in Notes." });
+      }
+    } catch (err: any) {
+      toast({ title: "Couldn't save note", description: err?.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setIsSavingToNotes(false);
+    }
+  }, [transcript, formattedNotes, sessionTitle, toast]);
+
   const saveNote = useCallback(() => {
     if (!transcript && !formattedNotes) {
       toast({ title: "Nothing to save", description: "Transcribe audio first.", variant: "destructive" });
@@ -547,6 +571,17 @@ export default function LiveSession() {
                       >
                         {copiedId === "transcript" ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                         {copiedId === "transcript" ? "Copied" : "Copy"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isSavingToNotes}
+                        onClick={() => saveTranscriptAsNote()}
+                        className="gap-1.5"
+                        data-testid="button-save-to-notes"
+                      >
+                        {isSavingToNotes ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BookOpen className="w-3.5 h-3.5" />}
+                        {isSavingToNotes ? "Saving..." : "Save to Knowledge Base"}
                       </Button>
                       <Button
                         size="sm"

@@ -76,9 +76,13 @@ export default function Notes() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
-      toast({ title: "Note uploaded", description: "Your note is ready to practice." });
+      if (data?.creditsCharged > 0) {
+        toast({ title: "Note uploaded", description: `20 credits used (past your 10 free uploads).` });
+      } else {
+        toast({ title: "Note uploaded", description: "Your note is ready to practice." });
+      }
     },
     onError: (err: any) => {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });

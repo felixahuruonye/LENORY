@@ -55,7 +55,17 @@ import {
   Gauge,
   Lightbulb,
   PenLine,
+  MoreVertical,
+  Pin,
+  PinOff,
+  Pencil,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -399,7 +409,7 @@ export default function Chat() {
         const res = await apiRequest("POST", "/api/chat/sessions", { title: userContent.slice(0, 40), mode: "standard" });
         const newSession = await res.json();
         sessionId = newSession.id;
-        setCurrentSessionId(sessionId);
+        switchToSession(sessionId);
         queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       } catch { return; }
     }
@@ -451,11 +461,16 @@ export default function Chat() {
   }, [voiceParam]);
 
   // ─── Session management ───────────────────────────────────────────────────
+  const switchToSession = (id: string | null) => {
+    setCurrentSessionId(id);
+    setLocation(id ? `/chat?sessionId=${id}` : "/chat", { replace: true } as any);
+  };
+
   const createNewChat = async () => {
     try {
       const res = await apiRequest("POST", "/api/chat/sessions", { title: "New Chat", mode: "chat" });
       const session = await res.json();
-      setCurrentSessionId(session.id);
+      switchToSession(session.id);
       setMessage("");
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
     } catch {
@@ -467,10 +482,39 @@ export default function Chat() {
     try {
       await apiRequest("DELETE", `/api/chat/sessions/${sessionId}`, {});
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      if (currentSessionId === sessionId) setCurrentSessionId(null);
+      if (currentSessionId === sessionId) switchToSession(null);
       toast({ title: "Chat deleted" });
     } catch {
       toast({ title: "Error", description: "Failed to delete chat", variant: "destructive" });
+    }
+  };
+
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const startRename = (session: ChatSession) => {
+    setRenamingSessionId(session.id);
+    setRenameValue(session.title);
+  };
+
+  const submitRename = async (sessionId: string) => {
+    const newTitle = renameValue.trim();
+    setRenamingSessionId(null);
+    if (!newTitle) return;
+    try {
+      await apiRequest("PATCH", `/api/chat/sessions/${sessionId}`, { title: newTitle });
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+    } catch {
+      toast({ title: "Error", description: "Failed to rename chat", variant: "destructive" });
+    }
+  };
+
+  const togglePinChat = async (session: ChatSession) => {
+    try {
+      await apiRequest("PATCH", `/api/chat/sessions/${session.id}`, { isBookmarked: !(session as any).isBookmarked });
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+    } catch {
+      toast({ title: "Error", description: "Failed to pin chat", variant: "destructive" });
     }
   };
 
@@ -479,7 +523,7 @@ export default function Chat() {
     try {
       await apiRequest("POST", "/api/chat/sessions/bulk-delete", { sessionIds: Array.from(selectedChatsForDelete) });
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      if (selectedChatsForDelete.has(currentSessionId || "")) setCurrentSessionId(null);
+      if (selectedChatsForDelete.has(currentSessionId || "")) switchToSession(null);
       setSelectedChatsForDelete(new Set());
       toast({ title: `Deleted ${selectedChatsForDelete.size} chats` });
     } catch {
@@ -580,7 +624,7 @@ export default function Chat() {
           const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
           const sData = await sRes.json();
           sessionId = sData.id;
-          setCurrentSessionId(sData.id);
+          switchToSession(sData.id);
           queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
         }
         await apiRequest("POST", "/api/chat/send", {
@@ -615,7 +659,7 @@ export default function Chat() {
         const res = await apiRequest("POST", "/api/chat/sessions", { title: message.trim().slice(0, 60), mode: "chat" });
         const session = await res.json();
         sessionId = session.id;
-        setCurrentSessionId(session.id);
+        switchToSession(session.id);
         queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       } catch {
         toast({ title: "Error", description: "Failed to create chat session", variant: "destructive" });
@@ -726,15 +770,52 @@ export default function Chat() {
               ? <p className="text-xs text-muted-foreground text-center py-6">No chats yet</p>
               : sessions.map(session => (
                   <div key={session.id} className={`flex items-center gap-1.5 p-2 rounded-lg cursor-pointer transition-colors group ${currentSessionId === session.id ? "bg-primary/15 text-primary" : "hover:bg-muted/60"}`}>
-                    <div className="flex-1 min-w-0" onClick={() => setCurrentSessionId(session.id)}>
-                      <p className="text-xs truncate font-medium" data-testid={`button-session-${session.id}`}>{session.title}</p>
-                    </div>
-                    <button onClick={() => { if (window.confirm("Delete " + session.title + "?")) deleteChat(session.id); }}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-destructive hover:bg-destructive/15 rounded transition-all flex-shrink-0"
-                      data-testid={`button-delete-${session.id}`}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    {renamingSessionId === session.id ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => submitRename(session.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitRename(session.id);
+                          if (e.key === "Escape") setRenamingSessionId(null);
+                        }}
+                        className="flex-1 min-w-0 text-xs font-medium bg-transparent border border-primary/40 rounded px-1 py-0.5 outline-none"
+                        data-testid={`input-rename-${session.id}`}
+                      />
+                    ) : (
+                      <div className="flex-1 min-w-0 flex items-center gap-1" onClick={() => switchToSession(session.id)}>
+                        {(session as any).isBookmarked && <Pin className="w-3 h-3 shrink-0 text-primary fill-primary" />}
+                        <p className="text-xs truncate font-medium" data-testid={`button-session-${session.id}`}>{session.title}</p>
+                      </div>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          onClick={(e) => e.stopPropagation()}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-all flex-shrink-0"
+                          data-testid={`button-menu-${session.id}`}
+                        >
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => startRename(session)}>
+                          <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => togglePinChat(session)}>
+                          {(session as any).isBookmarked
+                            ? <><PinOff className="w-3.5 h-3.5 mr-2" /> Unpin</>
+                            : <><Pin className="w-3.5 h-3.5 mr-2" /> Pin to top</>}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => { if (window.confirm("Delete " + session.title + "?")) deleteChat(session.id); }}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 ))
           ) : (
@@ -991,6 +1072,7 @@ export default function Chat() {
                     { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
                     { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
                     { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
+                    { icon: BookOpen, label: "My Notes", color: "text-purple-300 bg-purple-400/10", action: () => { setShowPlusMenu(false); setLocation("/notes"); } },
                     { icon: Sparkles, label: "Image Gen", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
                     { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
                   ].map(item => (

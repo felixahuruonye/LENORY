@@ -1320,6 +1320,28 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
       const userId = req.userId;
       const { originalname, mimetype, buffer } = req.file;
 
+      // ── CREDIT CHECK: first 10 notes free, then 20 credits each ──────────
+      const user = await storage.getUser(userId);
+      let creditsCharged = 0;
+      if (user?.email !== ADMIN_EMAIL) {
+        const existingNotes = await storage.getFileUploadsByUser(userId);
+        const isBeyondFreeLimit = existingNotes.length >= 10;
+        if (isBeyondFreeLimit) {
+          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+          if (credits.balance < 20) {
+            return res.status(402).json({
+              message: "You've used your 10 free note uploads. Uploading more notes costs 20 credits each, and your balance is too low.",
+              error: "INSUFFICIENT_CREDITS",
+              balance: credits.balance,
+            });
+          }
+          credits.balance -= 20;
+          credits.monthlyUsed += 20;
+          creditsCharged = 20;
+        }
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       console.log(`📚 Uploading note: ${originalname} (${mimetype})`);
 
       let extractedText = "";
@@ -1341,10 +1363,55 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
         extractedText,
       });
 
-      res.json(note);
+      res.json({ ...note, creditsCharged });
     } catch (error) {
       console.error("Note upload error:", error);
       res.status(500).json({ message: "Failed to upload note" });
+    }
+  });
+
+  // Save raw text (e.g. a Live Session transcript) directly as a note
+  app.post('/api/notes/from-text', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const { fileName, text } = req.body;
+      if (!text || text.trim().length < 10) {
+        return res.status(400).json({ message: "Not enough text to save as a note" });
+      }
+
+      const user = await storage.getUser(userId);
+      let creditsCharged = 0;
+      if (user?.email !== ADMIN_EMAIL) {
+        const existingNotes = await storage.getFileUploadsByUser(userId);
+        if (existingNotes.length >= 10) {
+          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+          if (credits.balance < 20) {
+            return res.status(402).json({
+              message: "You've used your 10 free note uploads. Saving more notes costs 20 credits each, and your balance is too low.",
+              error: "INSUFFICIENT_CREDITS",
+              balance: credits.balance,
+            });
+          }
+          credits.balance -= 20;
+          credits.monthlyUsed += 20;
+          creditsCharged = 20;
+        }
+      }
+
+      const note = await storage.createFileUpload({
+        userId,
+        fileName: fileName || `Live Session Transcript - ${new Date().toLocaleDateString()}`,
+        fileType: "text/plain",
+        fileSize: text.length,
+        fileUrl: `/api/uploads/${userId}/${nanoid()}`,
+        processingStatus: "completed",
+        extractedText: text,
+      });
+
+      res.json({ ...note, creditsCharged });
+    } catch (error) {
+      console.error("Save transcript as note error:", error);
+      res.status(500).json({ message: "Failed to save note" });
     }
   });
 

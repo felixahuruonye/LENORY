@@ -1553,6 +1553,7 @@ class SupabaseStorage extends MemoryStorage {
           title: session.title || 'New Chat',
           mode: session.mode || 'chat',
           summary: session.summary || '',
+          is_bookmarked: (session as any).isBookmarked || false,
           message_count: 0,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -1569,11 +1570,13 @@ class SupabaseStorage extends MemoryStorage {
           .from('chat_sessions')
           .select('*')
           .eq('user_id', userId)
+          .order('is_bookmarked', { ascending: false })
           .order('updated_at', { ascending: false });
         if (!error && data && data.length > 0) {
           return data.map((s: any) => ({
             id: s.id, userId: s.user_id, title: s.title, mode: s.mode,
             summary: s.summary || '', messageCount: s.message_count || 0,
+            isBookmarked: s.is_bookmarked || false,
             createdAt: new Date(s.created_at), updatedAt: new Date(s.updated_at),
           })) as ChatSession[];
         }
@@ -1589,6 +1592,7 @@ class SupabaseStorage extends MemoryStorage {
         if (!error && data) {
           return { id: data.id, userId: data.user_id, title: data.title, mode: data.mode,
             summary: data.summary || '', messageCount: data.message_count || 0,
+            isBookmarked: data.is_bookmarked || false,
             createdAt: new Date(data.created_at), updatedAt: new Date(data.updated_at) } as ChatSession;
         }
       } catch {}
@@ -1600,10 +1604,12 @@ class SupabaseStorage extends MemoryStorage {
     const mem = await super.updateChatSession(id, updates);
     if (supabaseDb) {
       try {
-        await supabaseDb.from('chat_sessions').update({
-          title: updates.title, mode: updates.mode,
-          summary: updates.summary, updated_at: new Date().toISOString(),
-        }).eq('id', id);
+        const updateData: any = { updated_at: new Date().toISOString() };
+        if (updates.title !== undefined) updateData.title = updates.title;
+        if (updates.mode !== undefined) updateData.mode = updates.mode;
+        if (updates.summary !== undefined) updateData.summary = updates.summary;
+        if ((updates as any).isBookmarked !== undefined) updateData.is_bookmarked = (updates as any).isBookmarked;
+        await supabaseDb.from('chat_sessions').update(updateData).eq('id', id);
       } catch {}
     }
     return mem;
