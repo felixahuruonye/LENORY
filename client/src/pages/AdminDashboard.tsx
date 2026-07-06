@@ -17,12 +17,12 @@ import { Link } from "wouter";
 export default function AdminDashboard() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
-  const [accessCode, setAccessCode] = useState("");
-  const [isAuthorized, setIsAuthorized] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "users" | "credits">("overview");
   const [searchUser, setSearchUser] = useState("");
   const [editingUser, setEditingUser] = useState<any>(null);
   const [creditAction, setCreditAction] = useState<{ userId: string; action: string; amount: string } | null>(null);
+
+  const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
   const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useQuery({
     queryKey: ["/api/admin/users"],
@@ -48,12 +48,8 @@ export default function AdminDashboard() {
   });
 
   const handleAuthorize = () => {
-    if (accessCode === "felix333666" || user?.email === "felixahuruonye@gmail.com") {
-      setIsAuthorized(true);
-      toast({ title: "Welcome, Admin", description: "Access granted." });
-    } else {
-      toast({ title: "Access Denied", description: "Invalid access code.", variant: "destructive" });
-    }
+    // Real auth is enforced server-side by email check on every /api/admin/* call.
+    // This client-side gate is just for UI — no bypass code exists or should exist here.
   };
 
   if (authLoading) {
@@ -69,18 +65,9 @@ export default function AdminDashboard() {
             <CardTitle className="text-2xl">Admin Access</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground text-center">Enter your master access code.</p>
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                placeholder="Access Code"
-                value={accessCode}
-                onChange={(e) => setAccessCode(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAuthorize()}
-                data-testid="input-access-code"
-              />
-              <Button onClick={handleAuthorize} data-testid="button-enter-code">Enter</Button>
-            </div>
+            <p className="text-sm text-muted-foreground text-center">
+              This page is only accessible from the LENORY admin account. Sign in with that account to continue.
+            </p>
             <Link href="/dashboard" className="block text-center text-sm text-primary hover:underline">
               Return to Dashboard
             </Link>

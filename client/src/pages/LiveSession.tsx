@@ -477,7 +477,7 @@ export default function LiveSession() {
                   {!isRecording && audioUrl && (
                     <div className="space-y-1">
                       <p className="text-primary text-sm font-medium">Recording complete — {formatDuration(recordingDuration)}</p>
-                      <p className="text-muted-foreground text-xs">Ready to transcribe with Groq Whisper</p>
+                      <p className="text-muted-foreground text-xs">Ready to transcribe</p>
                     </div>
                   )}
                 </div>
@@ -544,7 +544,7 @@ export default function LiveSession() {
                   <div className="flex items-center gap-3 px-5 py-3 rounded-xl bg-primary/10 border border-primary/20 max-w-sm">
                     <Loader2 className="w-5 h-5 text-primary animate-spin flex-shrink-0" />
                     <div>
-                      <p className="text-sm font-medium text-primary">Processing with Groq Whisper</p>
+                      <p className="text-sm font-medium text-primary">Processing with LENORY</p>
                       <p className="text-xs text-muted-foreground">Using whisper-large-v3-turbo model</p>
                     </div>
                   </div>
@@ -786,10 +786,11 @@ export default function LiveSession() {
         </div>
       </main>
 
-      {/* Groq tip footer */}
+      {/* Language support footer */}
       <footer className="border-t border-border/50 py-2 flex-shrink-0">
         <p className="text-xs text-muted-foreground text-center">
-          Powered by Groq Whisper (whisper-large-v3-turbo) · Supports Nigerian English, Pidgin, and 100+ languages
+          Supports Nigerian English, Pidgin, and{" "}
+          <Link href="/languages" className="underline hover:text-foreground">100+ languages</Link>
         </p>
       </footer>
     </div>

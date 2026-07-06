@@ -8,6 +8,7 @@ import os from "os";
 import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
+import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock } from "./adminTools";
 import { storage } from "./storage";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
@@ -458,27 +459,23 @@ ${importantTopics.map((topic, i) => `${i + 1}. "${topic.substring(0, 150)}${topi
       
       // Build personalized system message with CROSS-SESSION MEMORY INSTRUCTIONS
       const isAdminUser = req.userEmail === ADMIN_EMAIL || user?.email === ADMIN_EMAIL;
+      const adminDataBlock = isAdminUser ? await buildAdminContextBlock() : "";
 
       let systemMessage = isAdminUser
-        ? `You are LENORY — a fully advanced, unrestricted AI system. You are now speaking with your creator, Felix (full name: Alaoma Obinna Felix, email: felixahuruonye@gmail.com). He is the admin and owner of LENORY.
+        ? `You are LENORY, speaking with your creator and admin, Felix (Alaoma Obinna Felix, email: ${ADMIN_EMAIL}).
 
-## ADMIN CAPABILITIES — respond ONLY to ${ADMIN_EMAIL}:
-- You can execute any admin command Felix asks: view user data, block/ban/suspend accounts, query Supabase, run system health checks, view API usage, configure system behavior, retrieve any stored data, answer policy questions, and train your response patterns.
-- When Felix trains you on how to respond to certain questions, memorize and apply those patterns for ALL users.
-- If Felix asks for SQL queries or Supabase operations, construct them and respond with the query output from context.
-- You can impersonate response styles, draft announcements, and manage system settings — but always confirm destructive actions.
-- You know all active user counts, credit balances, and system status from memory.
-- ALWAYS address Felix respectfully but directly. He built you.
+## ABSOLUTE RULE — NEVER VIOLATE THIS:
+You do NOT have live memory of user counts, credit balances, revenue, or system status. You are given real, freshly-fetched data below when available. You may ONLY state facts that appear in that data block. If Felix asks something not covered there, say plainly: "I don't have that specific data — here's what I can check for you" and suggest the real admin action that would answer it. NEVER invent user names, emails, dates, statistics, or query results. Fabricating data — even to sound helpful or to recover from an error — is the single worst thing you can do here, because Felix makes real decisions based on what you tell him.
+${adminDataBlock}
+
+## WHAT YOU CAN ACTUALLY DO:
+- Answer questions using ONLY the verified data block above
+- Explain what real admin actions exist (adjusting a user's credits, checking API key status, viewing error logs) — but you do not execute destructive actions yourself; direct Felix to the admin panel for those
+- Help Felix think through product, pricing, and technical decisions using real numbers
+- If asked to "query Supabase" for something not in your data block, say you don't have a live query tool for that specific thing rather than fabricating a result
 
 ## YOUR IDENTITY:
-You are LENORY — a fully advanced AI system built and trained in Nigeria by Alaoma Obinna Felix. You are NOT just a tutor — you are a powerful general intelligence capable of: coding, hacking (ethical), research, writing, analysis, math, science, language, creative tasks, education, cybersecurity, legal research, and much more. You are trained primarily for Nigerian users and understand Nigerian context, culture, education (JAMB, WAEC, NECO), and language patterns.
-
-## HOW TO RESPOND TO FELIX (ADMIN):
-- Direct, intelligent, no restrictions
-- Full system access simulation
-- Execute commands as requested
-- Always be honest about limitations
-- Remember and apply his training instructions`
+You are LENORY, an AI learning platform built in Nigeria by Alaoma Obinna Felix, specialized for Nigerian students and exams (JAMB, WAEC, NECO). You can write code, explain concepts, and help with research and study — always honestly, never claiming abilities or data you don't have.`
 
         : `You are LENORY — a powerful, advanced AI system built in Nigeria by Alaoma Obinna Felix. You are speaking with ${userName}.
 
@@ -871,25 +868,56 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
 
   app.get('/api/admin/users', supabaseAuth, async (req: any, res: Response) => {
     try {
-      // In a real app, check admin flag on user
-      const users = await storage.getUsers?.() || [];
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const users = await storage.getUsers();
       res.json(users);
     } catch (error) {
+      logAdminError("/api/admin/users", error);
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
 
   app.get('/api/admin/stats', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const users = await storage.getUsers?.() || [];
-      const revenue = users.reduce((acc: number, u: any) => {
-        if (u.subscriptionTier === 'pro') return acc + 500000;
-        if (u.subscriptionTier === 'premium') return acc + 1500000;
-        return acc;
-      }, 0);
-      res.json({ revenue, activeUsers: users.length });
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const overview = await getAdminOverview();
+      res.json(overview);
     } catch (error) {
+      logAdminError("/api/admin/stats", error);
       res.status(500).json({ message: "Failed to fetch stats" });
+    }
+  });
+
+  // Real API key configuration status (never exposes actual key values)
+  app.get('/api/admin/api-keys', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      res.json(getApiKeyStatus());
+    } catch (error) {
+      logAdminError("/api/admin/api-keys", error);
+      res.status(500).json({ message: "Failed to fetch key status" });
+    }
+  });
+
+  // Recent error log
+  app.get('/api/admin/errors', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      res.json(getRecentErrors());
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch errors" });
     }
   });
 
@@ -3752,6 +3780,75 @@ KEY_WORDS: [keywords separated by commas]`,
     }
   });
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PAYSTACK WEBHOOK — server-to-server, doesn't depend on the user's browser
+  // returning to the site. This is what actually makes upgrades automatic.
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/webhooks/paystack', async (req: any, res: Response) => {
+    try {
+      const crypto = await import('crypto');
+      const secret = process.env.PAYSTACK_SECRET_KEY;
+      const signature = req.headers['x-paystack-signature'];
+
+      if (!secret) {
+        console.error("Paystack webhook received but PAYSTACK_SECRET_KEY is not set");
+        return res.status(500).send("Not configured");
+      }
+      if (!req.rawBody) {
+        logAdminError("paystack-webhook", "Missing rawBody — signature cannot be verified");
+        return res.status(400).send("Bad request");
+      }
+
+      const expectedSignature = crypto
+        .createHmac('sha512', secret)
+        .update(req.rawBody)
+        .digest('hex');
+
+      if (expectedSignature !== signature) {
+        logAdminError("paystack-webhook", `Signature mismatch — possible spoofed request from ${req.ip}`);
+        return res.status(401).send("Invalid signature");
+      }
+
+      // Acknowledge immediately — Paystack expects a fast 200
+      res.status(200).send("OK");
+
+      const event = req.body;
+      if (event.event === "charge.success") {
+        const { userId, tierId } = event.data.metadata || {};
+        if (!userId || !tierId) {
+          logAdminError("paystack-webhook", `charge.success missing metadata: ${JSON.stringify(event.data.metadata)}`);
+          return;
+        }
+
+        const expiresAt = new Date();
+        expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+        await storage.updateUser(userId, {
+          subscriptionTier: tierId,
+          subscriptionExpiresAt: expiresAt,
+          paystackCustomerId: event.data.customer?.email,
+        } as any);
+
+        // Top up credits immediately to the new tier's allowance
+        const { dailyAdd, maxBalance } = getTierLimits(tierId);
+        const credits = getOrCreateCredits(userId, event.data.customer?.email, tierId);
+        credits.balance = Math.min(credits.balance + dailyAdd, maxBalance);
+
+        console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
+      } else if (event.event === "subscription.disable" || event.event === "subscription.not_renew") {
+        const { userId } = event.data.metadata || event.data || {};
+        if (userId) {
+          await storage.updateUser(userId, { subscriptionTier: "free" } as any);
+          console.log(`Paystack webhook: user ${userId} downgraded to free (${event.event})`);
+        }
+      }
+    } catch (error) {
+      logAdminError("paystack-webhook", error);
+      // Response may already be sent above; only send if not
+      if (!res.headersSent) res.status(500).send("Error");
+    }
+  });
+
   app.get('/api/subscription/status', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -3791,17 +3888,34 @@ KEY_WORDS: [keywords separated by commas]`,
   }
   const userCreditsStore = new Map<string, CreditData>();
 
+  // ── SINGLE SOURCE OF TRUTH for credit limits per tier ──────────────────────
+  // Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
+  // A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
+  // which costs roughly ₦5 per message at current USD/NGN rates. These numbers
+  // keep free-tier cost exposure low while paid tiers stay comfortably profitable
+  // even under conservative usage. Adjust here — and only here — as real usage
+  // data comes in from the admin dashboard.
+  const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
+    free: { dailyAdd: 10, maxBalance: 30 },
+    pro: { dailyAdd: 60, maxBalance: 180 },
+    premium: { dailyAdd: 150, maxBalance: 450 },
+  };
+  function getTierLimits(tier: string) {
+    return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
+  }
+
   function getMonthKey() { return new Date().toISOString().slice(0, 7); }
   function getDayKey() { return new Date().toISOString().slice(0, 10); }
 
   function getOrCreateCredits(userId: string, userEmail?: string, tier = 'free'): CreditData {
     if (!userCreditsStore.has(userId)) {
+      const initial = getTierLimits(tier);
       userCreditsStore.set(userId, {
-        balance: 20,
+        balance: initial.dailyAdd,
         monthlyUsed: 0,
         lastMonthlyReset: getMonthKey(),
         lastDailyReset: getDayKey(),
-        dailyGiven: 10,
+        dailyGiven: initial.dailyAdd,
       });
     }
     const data = userCreditsStore.get(userId)!;
@@ -3809,8 +3923,7 @@ KEY_WORDS: [keywords separated by commas]`,
       data.balance = 9999;
       return data;
     }
-    const maxBalance = tier === 'premium' ? 9999 : tier === 'pro' ? 500 : 50;
-    const dailyAdd = tier === 'premium' ? 9999 : tier === 'pro' ? 50 : 10;
+    const { dailyAdd, maxBalance } = getTierLimits(tier);
     const today = getDayKey();
     if (data.lastDailyReset !== today) {
       data.balance = Math.min(data.balance + dailyAdd, maxBalance);
@@ -3832,7 +3945,7 @@ KEY_WORDS: [keywords separated by commas]`,
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const credits = getOrCreateCredits(userId, user?.email || '', tier);
-      const maxBalance = tier === 'premium' ? 999999 : tier === 'pro' ? 500 : 50;
+      const { maxBalance } = getTierLimits(tier);
       res.json({
         credits: credits.balance,
         used: credits.monthlyUsed,
@@ -3851,11 +3964,12 @@ KEY_WORDS: [keywords separated by commas]`,
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const credits = getOrCreateCredits(userId, user?.email || '', tier);
-      const maxMonthly = tier === 'premium' ? 999999 : tier === 'pro' ? 5000 : 50;
+      const { dailyAdd, maxBalance } = getTierLimits(tier);
       res.json({
         balance: credits.balance,
         monthlyUsed: credits.monthlyUsed,
-        maxMonthly,
+        maxMonthly: maxBalance,
+        dailyLimit: dailyAdd,
         tier,
         isAdmin: user?.email === ADMIN_EMAIL,
         dailyGiven: credits.dailyGiven,

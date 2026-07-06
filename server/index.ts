@@ -53,12 +53,27 @@ app.use((req, res, next) => {
   await runMigrations();
   const server = await registerRoutes(app);
 
+  const { logAdminError } = await import("./adminTools");
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
+    logAdminError(_req.path || "unknown-route", err);
+    if (!res.headersSent) {
+      res.status(status).json({ message });
+    }
+    // Deliberately NOT re-throwing here — a single bad request must never
+    // take down the whole server for every other user.
+  });
 
-    res.status(status).json({ message });
-    throw err;
+  // Process-level safety net: log and keep running instead of crashing.
+  process.on("uncaughtException", (err) => {
+    console.error("UNCAUGHT EXCEPTION (server kept running):", err);
+    logAdminError("uncaughtException", err);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("UNHANDLED REJECTION (server kept running):", reason);
+    logAdminError("unhandledRejection", reason);
   });
 
   // Always use static build files if they exist (avoids HMR issues)

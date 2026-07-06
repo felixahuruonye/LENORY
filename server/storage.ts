@@ -1488,6 +1488,24 @@ class MemoryStorage implements IStorage {
 
 class SupabaseStorage extends MemoryStorage {
   // ── Users (persistent via Supabase REST) ────────────────────────────────────
+  async getUsers(): Promise<User[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('users')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!error && data) {
+          return data.map(mapSupabaseUser);
+        }
+        console.error("getUsers Supabase error:", error);
+      } catch (e) {
+        console.error("getUsers Supabase exception:", e);
+      }
+    }
+    return [];
+  }
+
   async getUser(id: string): Promise<User | undefined> {
     // Try Supabase first
     if (supabaseDb) {

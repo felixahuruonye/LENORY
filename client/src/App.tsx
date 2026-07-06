@@ -37,6 +37,7 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import VideoGeneration from "@/pages/VideoGeneration";
 import AuthCallback from "@/pages/AuthCallback";
 import Notes from "@/pages/Notes";
+import Languages from "@/pages/Languages";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 
@@ -94,6 +95,7 @@ function Router() {
       <Route path="/memory" component={MemoryPanel} />
       <Route path="/study-plans" component={StudyPlans} />
       <Route path="/notes" component={Notes} />
+      <Route path="/languages" component={Languages} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/settings" component={SettingsPanel} />
       <Route path="/audio" component={AudioSystem} />

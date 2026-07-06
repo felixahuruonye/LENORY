@@ -1,0 +1,712 @@
+From 1b18ef3afe90ba08c5a758085d5d479c526af710 Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Mon, 6 Jul 2026 06:31:53 +0000
+Subject: [PATCH 1/2] Admin lockdown+real data, fix server-crash bug, unify
+ credit tiers, Paystack webhook, remove Groq branding, add Languages page
+
+---
+ client/src/App.tsx               |   2 +
+ client/src/pages/Languages.tsx   | 105 ++++++++++++++++++
+ client/src/pages/LiveSession.tsx |   9 +-
+ server/adminTools.ts             | 116 ++++++++++++++++++++
+ server/index.ts                  |  19 +++-
+ server/routes.ts                 | 178 +++++++++++++++++++++++++------
+ server/storage.ts                |  18 ++++
+ 7 files changed, 409 insertions(+), 38 deletions(-)
+ create mode 100644 client/src/pages/Languages.tsx
+ create mode 100644 server/adminTools.ts
+
+diff --git a/client/src/App.tsx b/client/src/App.tsx
+index 6c8342c..f9dce9a 100644
+--- a/client/src/App.tsx
++++ b/client/src/App.tsx
+@@ -37,6 +37,7 @@ import AdminDashboard from "@/pages/AdminDashboard";
+ import VideoGeneration from "@/pages/VideoGeneration";
+ import AuthCallback from "@/pages/AuthCallback";
+ import Notes from "@/pages/Notes";
++import Languages from "@/pages/Languages";
+ import Login from "@/pages/Login";
+ import Signup from "@/pages/Signup";
+ 
+@@ -94,6 +95,7 @@ function Router() {
+       <Route path="/memory" component={MemoryPanel} />
+       <Route path="/study-plans" component={StudyPlans} />
+       <Route path="/notes" component={Notes} />
++      <Route path="/languages" component={Languages} />
+       <Route path="/pricing" component={Pricing} />
+       <Route path="/settings" component={SettingsPanel} />
+       <Route path="/audio" component={AudioSystem} />
+diff --git a/client/src/pages/Languages.tsx b/client/src/pages/Languages.tsx
+new file mode 100644
+index 0000000..47c4f37
+--- /dev/null
++++ b/client/src/pages/Languages.tsx
+@@ -0,0 +1,105 @@
++import { useState, useMemo } from "react";
++import { useLocation } from "wouter";
++import { Card, CardContent } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Button } from "@/components/ui/button";
++import { ArrowLeft, Search, Globe, Star } from "lucide-react";
++
++// Languages supported by LENORY's voice transcription engine.
++// Nigerian-relevant languages are flagged and shown first — everything else
++// is the full underlying multilingual speech model's language set.
++const NIGERIA_RELEVANT = ["English", "Yoruba", "Hausa", "Swahili", "Arabic", "French"];
++
++const ALL_LANGUAGES = [
++  "English", "Yoruba", "Hausa", "Swahili", "Arabic", "French",
++  "Afrikaans", "Albanian", "Amharic", "Armenian", "Assamese", "Azerbaijani",
++  "Bashkir", "Basque", "Belarusian", "Bengali", "Bosnian", "Breton", "Bulgarian",
++  "Burmese", "Cantonese", "Catalan", "Chinese", "Croatian", "Czech", "Danish",
++  "Dutch", "Estonian", "Faroese", "Finnish", "Galician", "Georgian", "German",
++  "Greek", "Gujarati", "Haitian Creole", "Hawaiian", "Hebrew", "Hindi",
++  "Hungarian", "Icelandic", "Indonesian", "Italian", "Japanese", "Javanese",
++  "Kannada", "Kazakh", "Khmer", "Korean", "Lao", "Latin", "Latvian",
++  "Lingala", "Lithuanian", "Luxembourgish", "Macedonian", "Malagasy", "Malay",
++  "Malayalam", "Maltese", "Maori", "Marathi", "Mongolian", "Nepali",
++  "Norwegian", "Norwegian Nynorsk", "Occitan", "Pashto", "Persian", "Polish",
++  "Portuguese", "Punjabi", "Romanian", "Russian", "Sanskrit", "Serbian",
++  "Shona", "Sindhi", "Sinhala", "Slovak", "Slovenian", "Somali", "Spanish",
++  "Sundanese", "Tagalog", "Tajik", "Tamil", "Tatar", "Telugu", "Thai",
++  "Tibetan", "Turkish", "Turkmen", "Ukrainian", "Urdu", "Uzbek",
++  "Vietnamese", "Welsh", "Yiddish",
++];
++
++export default function Languages() {
++  const [, setLocation] = useLocation();
++  const [query, setQuery] = useState("");
++
++  const filtered = useMemo(() => {
++    const q = query.trim().toLowerCase();
++    const list = q ? ALL_LANGUAGES.filter((l) => l.toLowerCase().includes(q)) : ALL_LANGUAGES;
++    return [...list].sort((a, b) => a.localeCompare(b));
++  }, [query]);
++
++  return (
++    <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-6">
++      <div className="flex items-center gap-3">
++        <Button variant="ghost" size="icon" onClick={() => setLocation(-1 as any)} data-testid="button-back">
++          <ArrowLeft className="w-5 h-5" />
++        </Button>
++        <div>
++          <h1 className="text-2xl font-bold flex items-center gap-2">
++            <Globe className="w-6 h-6 text-purple-500" />
++            Languages
++          </h1>
++          <p className="text-muted-foreground text-sm">LENORY understands and transcribes {ALL_LANGUAGES.length}+ languages.</p>
++        </div>
++      </div>
++
++      <div className="relative">
++        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
++        <Input
++          placeholder="Search languages..."
++          value={query}
++          onChange={(e) => setQuery(e.target.value)}
++          className="pl-9"
++          data-testid="input-language-search"
++        />
++      </div>
++
++      {!query && (
++        <Card>
++          <CardContent className="pt-5">
++            <p className="text-sm font-medium mb-3 flex items-center gap-1.5">
++              <Star className="w-4 h-4 text-amber-500 fill-amber-500" /> Popular in Nigeria
++            </p>
++            <div className="flex flex-wrap gap-2">
++              {NIGERIA_RELEVANT.map((lang) => (
++                <span key={lang} className="px-3 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-medium">
++                  {lang}
++                </span>
++              ))}
++              <span className="px-3 py-1.5 rounded-full bg-muted text-muted-foreground text-sm">
++                Nigerian Pidgin (via English)
++              </span>
++            </div>
++          </CardContent>
++        </Card>
++      )}
++
++      <Card>
++        <CardContent className="pt-5">
++          <p className="text-sm font-medium mb-3 text-muted-foreground">
++            {query ? `${filtered.length} result${filtered.length === 1 ? "" : "s"}` : "All supported languages"}
++          </p>
++          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
++            {filtered.map((lang) => (
++              <p key={lang} className="text-sm py-1">{lang}</p>
++            ))}
++            {filtered.length === 0 && (
++              <p className="text-sm text-muted-foreground col-span-full text-center py-6">No languages match "{query}"</p>
++            )}
++          </div>
++        </CardContent>
++      </Card>
++    </div>
++  );
++}
+diff --git a/client/src/pages/LiveSession.tsx b/client/src/pages/LiveSession.tsx
+index 4657159..e3f1c8b 100644
+--- a/client/src/pages/LiveSession.tsx
++++ b/client/src/pages/LiveSession.tsx
+@@ -477,7 +477,7 @@ export default function LiveSession() {
+                   {!isRecording && audioUrl && (
+                     <div className="space-y-1">
+                       <p className="text-primary text-sm font-medium">Recording complete — {formatDuration(recordingDuration)}</p>
+-                      <p className="text-muted-foreground text-xs">Ready to transcribe with Groq Whisper</p>
++                      <p className="text-muted-foreground text-xs">Ready to transcribe</p>
+                     </div>
+                   )}
+                 </div>
+@@ -544,7 +544,7 @@ export default function LiveSession() {
+                   <div className="flex items-center gap-3 px-5 py-3 rounded-xl bg-primary/10 border border-primary/20 max-w-sm">
+                     <Loader2 className="w-5 h-5 text-primary animate-spin flex-shrink-0" />
+                     <div>
+-                      <p className="text-sm font-medium text-primary">Processing with Groq Whisper</p>
++                      <p className="text-sm font-medium text-primary">Processing with LENORY</p>
+                       <p className="text-xs text-muted-foreground">Using whisper-large-v3-turbo model</p>
+                     </div>
+                   </div>
+@@ -786,10 +786,11 @@ export default function LiveSession() {
+         </div>
+       </main>
+ 
+-      {/* Groq tip footer */}
++      {/* Language support footer */}
+       <footer className="border-t border-border/50 py-2 flex-shrink-0">
+         <p className="text-xs text-muted-foreground text-center">
+-          Powered by Groq Whisper (whisper-large-v3-turbo) · Supports Nigerian English, Pidgin, and 100+ languages
++          Supports Nigerian English, Pidgin, and{" "}
++          <Link href="/languages" className="underline hover:text-foreground">100+ languages</Link>
+         </p>
+       </footer>
+     </div>
+diff --git a/server/adminTools.ts b/server/adminTools.ts
+new file mode 100644
+index 0000000..bc683ca
+--- /dev/null
++++ b/server/adminTools.ts
+@@ -0,0 +1,116 @@
++// server/adminTools.ts
++// Real, auditable admin data functions. No AI "simulation" — every function here
++// returns actual facts (or explicitly says it couldn't get them). This exists
++// specifically to stop the AI from fabricating admin answers.
++
++import { storage } from "./storage";
++
++export const ADMIN_EMAIL = "felixahuruonye@gmail.com";
++
++// ── API key registry ─────────────────────────────────────────────────────────
++// Add new keys here as the app grows — this is the single source of truth.
++const KEY_REGISTRY: { name: string; envVar: string; usedFor: string; critical: boolean }[] = [
++  { name: "Gemini (Google AI)", envVar: "GOOGLE_API_KEY", usedFor: "Main chat brain, vision, image gen", critical: true },
++  { name: "Supabase URL", envVar: "SUPABASE_URL", usedFor: "Database (backend)", critical: true },
++  { name: "Supabase Service Role", envVar: "SUPABASE_SERVICE_ROLE_KEY", usedFor: "Database writes (backend)", critical: true },
++  { name: "Supabase Anon (backend)", envVar: "SUPABASE_ANON_KEY", usedFor: "Database auth (backend)", critical: false },
++  { name: "Supabase URL (frontend build)", envVar: "VITE_SUPABASE_URL", usedFor: "Frontend Supabase client", critical: true },
++  { name: "Supabase Anon (frontend build)", envVar: "VITE_SUPABASE_ANON_KEY", usedFor: "Frontend Supabase client", critical: true },
++  { name: "Paystack", envVar: "PAYSTACK_SECRET_KEY", usedFor: "Payments and subscriptions", critical: true },
++  { name: "Vapi", envVar: "VAPI_PUBLIC_KEY", usedFor: "Live voice sessions", critical: false },
++  { name: "Groq (Whisper)", envVar: "GROQ_API_KEY", usedFor: "Speech-to-text transcription", critical: false },
++  { name: "AssemblyAI", envVar: "ASSEMBLYAI_API_KEY", usedFor: "Backup transcription", critical: false },
++  { name: "ElevenLabs", envVar: "ELEVENLABS_API_KEY", usedFor: "Text-to-speech voices", critical: false },
++  { name: "Stability AI", envVar: "STABILITY_API_KEY", usedFor: "Image generation (alt engine)", critical: false },
++  { name: "Replicate", envVar: "REPLICATE_API_TOKEN", usedFor: "Image/video generation (alt engine)", critical: false },
++  { name: "OpenRouter", envVar: "OPENROUTER_API_KEY", usedFor: "Advanced/DeepSeek coding fallback", critical: false },
++  { name: "OpenAI", envVar: "OPENAI_API_KEY", usedFor: "Fallback model access", critical: false },
++];
++
++export function getApiKeyStatus() {
++  return KEY_REGISTRY.map((k) => ({
++    name: k.name,
++    usedFor: k.usedFor,
++    critical: k.critical,
++    configured: !!process.env[k.envVar] && process.env[k.envVar]!.trim().length > 0,
++    // We deliberately never expose the actual key value here — only presence.
++  }));
++}
++
++// ── Real-time error log (ring buffer, in-memory) ────────────────────────────
++// Not a replacement for real log aggregation, but gives Felix visibility
++// without needing a third-party logging service he'd have to pay for.
++interface LoggedError {
++  timestamp: string;
++  source: string;
++  message: string;
++}
++const MAX_ERRORS = 100;
++const recentErrors: LoggedError[] = [];
++
++export function logAdminError(source: string, error: unknown) {
++  const message = error instanceof Error ? error.message : String(error);
++  recentErrors.unshift({ timestamp: new Date().toISOString(), source, message });
++  if (recentErrors.length > MAX_ERRORS) recentErrors.length = MAX_ERRORS;
++}
++
++export function getRecentErrors() {
++  return recentErrors;
++}
++
++// ── Real usage overview — every number here comes from an actual query ─────
++export async function getAdminOverview() {
++  const users = await storage.getUsers();
++
++  const now = Date.now();
++  const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
++  const oneDayAgo = now - 24 * 60 * 60 * 1000;
++
++  const byTier: Record<string, number> = { free: 0, pro: 0, premium: 0 };
++  let signupsThisWeek = 0;
++  let signupsToday = 0;
++
++  for (const u of users) {
++    const tier = (u as any).subscriptionTier || "free";
++    byTier[tier] = (byTier[tier] || 0) + 1;
++    const created = new Date(u.createdAt).getTime();
++    if (created >= oneWeekAgo) signupsThisWeek++;
++    if (created >= oneDayAgo) signupsToday++;
++  }
++
++  // Revenue estimate based on real published prices (₦5,000 Pro, ₦15,000 Premium)
++  const monthlyRevenueEstimate = byTier.pro * 5000 + byTier.premium * 15000;
++
++  return {
++    totalUsers: users.length,
++    signupsToday,
++    signupsThisWeek,
++    usersByTier: byTier,
++    estimatedMonthlyRevenueNaira: monthlyRevenueEstimate,
++    generatedAt: new Date().toISOString(),
++  };
++}
++
++// Compact text block safe to inject directly into the admin AI's system prompt.
++// Every line here is a real fetched fact — nothing invented.
++export async function buildAdminContextBlock(): Promise<string> {
++  try {
++    const overview = await getAdminOverview();
++    const keys = getApiKeyStatus();
++    const missingCritical = keys.filter((k) => k.critical && !k.configured);
++    const errors = getRecentErrors().slice(0, 5);
++
++    return `
++## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
++- Total users: ${overview.totalUsers}
++- Signups today: ${overview.signupsToday}
++- Signups this week: ${overview.signupsThisWeek}
++- Users by tier: Free=${overview.usersByTier.free}, Pro=${overview.usersByTier.pro}, Premium=${overview.usersByTier.premium}
++- Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}
++- Missing critical API keys: ${missingCritical.length === 0 ? "none" : missingCritical.map((k) => k.name).join(", ")}
++- Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
++(Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
++  } catch (e) {
++    return `\n## SYSTEM DATA UNAVAILABLE: Could not fetch live stats (${e instanceof Error ? e.message : String(e)}). Tell Felix the data fetch failed — do NOT invent numbers to fill the gap.`;
++  }
++}
+diff --git a/server/index.ts b/server/index.ts
+index 17de0b9..4801c3b 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -53,12 +53,27 @@ app.use((req, res, next) => {
+   await runMigrations();
+   const server = await registerRoutes(app);
+ 
++  const { logAdminError } = await import("./adminTools");
++
+   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+     const status = err.status || err.statusCode || 500;
+     const message = err.message || "Internal Server Error";
++    logAdminError(_req.path || "unknown-route", err);
++    if (!res.headersSent) {
++      res.status(status).json({ message });
++    }
++    // Deliberately NOT re-throwing here — a single bad request must never
++    // take down the whole server for every other user.
++  });
+ 
+-    res.status(status).json({ message });
+-    throw err;
++  // Process-level safety net: log and keep running instead of crashing.
++  process.on("uncaughtException", (err) => {
++    console.error("UNCAUGHT EXCEPTION (server kept running):", err);
++    logAdminError("uncaughtException", err);
++  });
++  process.on("unhandledRejection", (reason) => {
++    console.error("UNHANDLED REJECTION (server kept running):", reason);
++    logAdminError("unhandledRejection", reason);
+   });
+ 
+   // Always use static build files if they exist (avoids HMR issues)
+diff --git a/server/routes.ts b/server/routes.ts
+index 6f041d8..373126f 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -8,6 +8,7 @@ import os from "os";
+ import path from "path";
+ // @ts-ignore - multer types not available but package is installed
+ import multer from "multer";
++import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock } from "./adminTools";
+ import { storage } from "./storage";
+ import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
+ import {
+@@ -458,27 +459,23 @@ ${importantTopics.map((topic, i) => `${i + 1}. "${topic.substring(0, 150)}${topi
+       
+       // Build personalized system message with CROSS-SESSION MEMORY INSTRUCTIONS
+       const isAdminUser = req.userEmail === ADMIN_EMAIL || user?.email === ADMIN_EMAIL;
++      const adminDataBlock = isAdminUser ? await buildAdminContextBlock() : "";
+ 
+       let systemMessage = isAdminUser
+-        ? `You are LENORY — a fully advanced, unrestricted AI system. You are now speaking with your creator, Felix (full name: Alaoma Obinna Felix, email: felixahuruonye@gmail.com). He is the admin and owner of LENORY.
++        ? `You are LENORY, speaking with your creator and admin, Felix (Alaoma Obinna Felix, email: ${ADMIN_EMAIL}).
+ 
+-## ADMIN CAPABILITIES — respond ONLY to ${ADMIN_EMAIL}:
+-- You can execute any admin command Felix asks: view user data, block/ban/suspend accounts, query Supabase, run system health checks, view API usage, configure system behavior, retrieve any stored data, answer policy questions, and train your response patterns.
+-- When Felix trains you on how to respond to certain questions, memorize and apply those patterns for ALL users.
+-- If Felix asks for SQL queries or Supabase operations, construct them and respond with the query output from context.
+-- You can impersonate response styles, draft announcements, and manage system settings — but always confirm destructive actions.
+-- You know all active user counts, credit balances, and system status from memory.
+-- ALWAYS address Felix respectfully but directly. He built you.
++## ABSOLUTE RULE — NEVER VIOLATE THIS:
++You do NOT have live memory of user counts, credit balances, revenue, or system status. You are given real, freshly-fetched data below when available. You may ONLY state facts that appear in that data block. If Felix asks something not covered there, say plainly: "I don't have that specific data — here's what I can check for you" and suggest the real admin action that would answer it. NEVER invent user names, emails, dates, statistics, or query results. Fabricating data — even to sound helpful or to recover from an error — is the single worst thing you can do here, because Felix makes real decisions based on what you tell him.
++${adminDataBlock}
+ 
+-## YOUR IDENTITY:
+-You are LENORY — a fully advanced AI system built and trained in Nigeria by Alaoma Obinna Felix. You are NOT just a tutor — you are a powerful general intelligence capable of: coding, hacking (ethical), research, writing, analysis, math, science, language, creative tasks, education, cybersecurity, legal research, and much more. You are trained primarily for Nigerian users and understand Nigerian context, culture, education (JAMB, WAEC, NECO), and language patterns.
++## WHAT YOU CAN ACTUALLY DO:
++- Answer questions using ONLY the verified data block above
++- Explain what real admin actions exist (adjusting a user's credits, checking API key status, viewing error logs) — but you do not execute destructive actions yourself; direct Felix to the admin panel for those
++- Help Felix think through product, pricing, and technical decisions using real numbers
++- If asked to "query Supabase" for something not in your data block, say you don't have a live query tool for that specific thing rather than fabricating a result
+ 
+-## HOW TO RESPOND TO FELIX (ADMIN):
+-- Direct, intelligent, no restrictions
+-- Full system access simulation
+-- Execute commands as requested
+-- Always be honest about limitations
+-- Remember and apply his training instructions`
++## YOUR IDENTITY:
++You are LENORY, an AI learning platform built in Nigeria by Alaoma Obinna Felix, specialized for Nigerian students and exams (JAMB, WAEC, NECO). You can write code, explain concepts, and help with research and study — always honestly, never claiming abilities or data you don't have.`
+ 
+         : `You are LENORY — a powerful, advanced AI system built in Nigeria by Alaoma Obinna Felix. You are speaking with ${userName}.
+ 
+@@ -871,28 +868,59 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+ 
+   app.get('/api/admin/users', supabaseAuth, async (req: any, res: Response) => {
+     try {
+-      // In a real app, check admin flag on user
+-      const users = await storage.getUsers?.() || [];
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      const users = await storage.getUsers();
+       res.json(users);
+     } catch (error) {
++      logAdminError("/api/admin/users", error);
+       res.status(500).json({ message: "Failed to fetch users" });
+     }
+   });
+ 
+   app.get('/api/admin/stats', supabaseAuth, async (req: any, res: Response) => {
+     try {
+-      const users = await storage.getUsers?.() || [];
+-      const revenue = users.reduce((acc: number, u: any) => {
+-        if (u.subscriptionTier === 'pro') return acc + 500000;
+-        if (u.subscriptionTier === 'premium') return acc + 1500000;
+-        return acc;
+-      }, 0);
+-      res.json({ revenue, activeUsers: users.length });
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      const overview = await getAdminOverview();
++      res.json(overview);
+     } catch (error) {
++      logAdminError("/api/admin/stats", error);
+       res.status(500).json({ message: "Failed to fetch stats" });
+     }
+   });
+ 
++  // Real API key configuration status (never exposes actual key values)
++  app.get('/api/admin/api-keys', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      res.json(getApiKeyStatus());
++    } catch (error) {
++      logAdminError("/api/admin/api-keys", error);
++      res.status(500).json({ message: "Failed to fetch key status" });
++    }
++  });
++
++  // Recent error log
++  app.get('/api/admin/errors', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      res.json(getRecentErrors());
++    } catch (error) {
++      res.status(500).json({ message: "Failed to fetch errors" });
++    }
++  });
++
+   // Dashboard stats endpoint
+   app.get('/api/dashboard/stats', supabaseAuth, async (req: any, res: Response) => {
+     try {
+@@ -3752,6 +3780,75 @@ KEY_WORDS: [keywords separated by commas]`,
+     }
+   });
+ 
++  // ─────────────────────────────────────────────────────────────────────────────
++  // PAYSTACK WEBHOOK — server-to-server, doesn't depend on the user's browser
++  // returning to the site. This is what actually makes upgrades automatic.
++  // ─────────────────────────────────────────────────────────────────────────────
++  app.post('/api/webhooks/paystack', async (req: any, res: Response) => {
++    try {
++      const crypto = await import('crypto');
++      const secret = process.env.PAYSTACK_SECRET_KEY;
++      const signature = req.headers['x-paystack-signature'];
++
++      if (!secret) {
++        console.error("Paystack webhook received but PAYSTACK_SECRET_KEY is not set");
++        return res.status(500).send("Not configured");
++      }
++      if (!req.rawBody) {
++        logAdminError("paystack-webhook", "Missing rawBody — signature cannot be verified");
++        return res.status(400).send("Bad request");
++      }
++
++      const expectedSignature = crypto
++        .createHmac('sha512', secret)
++        .update(req.rawBody)
++        .digest('hex');
++
++      if (expectedSignature !== signature) {
++        logAdminError("paystack-webhook", `Signature mismatch — possible spoofed request from ${req.ip}`);
++        return res.status(401).send("Invalid signature");
++      }
++
++      // Acknowledge immediately — Paystack expects a fast 200
++      res.status(200).send("OK");
++
++      const event = req.body;
++      if (event.event === "charge.success") {
++        const { userId, tierId } = event.data.metadata || {};
++        if (!userId || !tierId) {
++          logAdminError("paystack-webhook", `charge.success missing metadata: ${JSON.stringify(event.data.metadata)}`);
++          return;
++        }
++
++        const expiresAt = new Date();
++        expiresAt.setMonth(expiresAt.getMonth() + 1);
++
++        await storage.updateUser(userId, {
++          subscriptionTier: tierId,
++          subscriptionExpiresAt: expiresAt,
++          paystackCustomerId: event.data.customer?.email,
++        } as any);
++
++        // Top up credits immediately to the new tier's allowance
++        const { dailyAdd, maxBalance } = getTierLimits(tierId);
++        const credits = getOrCreateCredits(userId, event.data.customer?.email, tierId);
++        credits.balance = Math.min(credits.balance + dailyAdd, maxBalance);
++
++        console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
++      } else if (event.event === "subscription.disable" || event.event === "subscription.not_renew") {
++        const { userId } = event.data.metadata || event.data || {};
++        if (userId) {
++          await storage.updateUser(userId, { subscriptionTier: "free" } as any);
++          console.log(`Paystack webhook: user ${userId} downgraded to free (${event.event})`);
++        }
++      }
++    } catch (error) {
++      logAdminError("paystack-webhook", error);
++      // Response may already be sent above; only send if not
++      if (!res.headersSent) res.status(500).send("Error");
++    }
++  });
++
+   app.get('/api/subscription/status', supabaseAuth, async (req: any, res: Response) => {
+     try {
+       const userId = req.userId;
+@@ -3791,17 +3888,34 @@ KEY_WORDS: [keywords separated by commas]`,
+   }
+   const userCreditsStore = new Map<string, CreditData>();
+ 
++  // ── SINGLE SOURCE OF TRUTH for credit limits per tier ──────────────────────
++  // Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
++  // A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
++  // which costs roughly ₦5 per message at current USD/NGN rates. These numbers
++  // keep free-tier cost exposure low while paid tiers stay comfortably profitable
++  // even under conservative usage. Adjust here — and only here — as real usage
++  // data comes in from the admin dashboard.
++  const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
++    free: { dailyAdd: 10, maxBalance: 30 },
++    pro: { dailyAdd: 60, maxBalance: 180 },
++    premium: { dailyAdd: 150, maxBalance: 450 },
++  };
++  function getTierLimits(tier: string) {
++    return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
++  }
++
+   function getMonthKey() { return new Date().toISOString().slice(0, 7); }
+   function getDayKey() { return new Date().toISOString().slice(0, 10); }
+ 
+   function getOrCreateCredits(userId: string, userEmail?: string, tier = 'free'): CreditData {
+     if (!userCreditsStore.has(userId)) {
++      const initial = getTierLimits(tier);
+       userCreditsStore.set(userId, {
+-        balance: 20,
++        balance: initial.dailyAdd,
+         monthlyUsed: 0,
+         lastMonthlyReset: getMonthKey(),
+         lastDailyReset: getDayKey(),
+-        dailyGiven: 10,
++        dailyGiven: initial.dailyAdd,
+       });
+     }
+     const data = userCreditsStore.get(userId)!;
+@@ -3809,8 +3923,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       data.balance = 9999;
+       return data;
+     }
+-    const maxBalance = tier === 'premium' ? 9999 : tier === 'pro' ? 500 : 50;
+-    const dailyAdd = tier === 'premium' ? 9999 : tier === 'pro' ? 50 : 10;
++    const { dailyAdd, maxBalance } = getTierLimits(tier);
+     const today = getDayKey();
+     if (data.lastDailyReset !== today) {
+       data.balance = Math.min(data.balance + dailyAdd, maxBalance);
+@@ -3832,7 +3945,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       const user = await storage.getUser(userId);
+       const tier = user?.subscriptionTier || 'free';
+       const credits = getOrCreateCredits(userId, user?.email || '', tier);
+-      const maxBalance = tier === 'premium' ? 999999 : tier === 'pro' ? 500 : 50;
++      const { maxBalance } = getTierLimits(tier);
+       res.json({
+         credits: credits.balance,
+         used: credits.monthlyUsed,
+@@ -3851,11 +3964,12 @@ KEY_WORDS: [keywords separated by commas]`,
+       const user = await storage.getUser(userId);
+       const tier = user?.subscriptionTier || 'free';
+       const credits = getOrCreateCredits(userId, user?.email || '', tier);
+-      const maxMonthly = tier === 'premium' ? 999999 : tier === 'pro' ? 5000 : 50;
++      const { dailyAdd, maxBalance } = getTierLimits(tier);
+       res.json({
+         balance: credits.balance,
+         monthlyUsed: credits.monthlyUsed,
+-        maxMonthly,
++        maxMonthly: maxBalance,
++        dailyLimit: dailyAdd,
+         tier,
+         isAdmin: user?.email === ADMIN_EMAIL,
+         dailyGiven: credits.dailyGiven,
+diff --git a/server/storage.ts b/server/storage.ts
+index 89b256d..f9486c7 100644
+--- a/server/storage.ts
++++ b/server/storage.ts
+@@ -1488,6 +1488,24 @@ class MemoryStorage implements IStorage {
+ 
+ class SupabaseStorage extends MemoryStorage {
+   // ── Users (persistent via Supabase REST) ────────────────────────────────────
++  async getUsers(): Promise<User[]> {
++    if (supabaseDb) {
++      try {
++        const { data, error } = await supabaseDb
++          .from('users')
++          .select('*')
++          .order('created_at', { ascending: false });
++        if (!error && data) {
++          return data.map(mapSupabaseUser);
++        }
++        console.error("getUsers Supabase error:", error);
++      } catch (e) {
++        console.error("getUsers Supabase exception:", e);
++      }
++    }
++    return [];
++  }
++
+   async getUser(id: string): Promise<User | undefined> {
+     // Try Supabase first
+     if (supabaseDb) {
+-- 
+2.43.0
+
+
+From f60e7ece23878adaf7f3d88f89567522475e99dd Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Mon, 6 Jul 2026 07:12:56 +0000
+Subject: [PATCH 2/2] Remove dead access-code backdoor in admin dashboard (was
+ already non-functional, but cleaned up)
+
+---
+ client/src/pages/AdminDashboard.tsx | 27 +++++++--------------------
+ 1 file changed, 7 insertions(+), 20 deletions(-)
+
+diff --git a/client/src/pages/AdminDashboard.tsx b/client/src/pages/AdminDashboard.tsx
+index 8ce4a28..8fcde3d 100644
+--- a/client/src/pages/AdminDashboard.tsx
++++ b/client/src/pages/AdminDashboard.tsx
+@@ -17,13 +17,13 @@ import { Link } from "wouter";
+ export default function AdminDashboard() {
+   const { user, isLoading: authLoading } = useAuth();
+   const { toast } = useToast();
+-  const [accessCode, setAccessCode] = useState("");
+-  const [isAuthorized, setIsAuthorized] = useState(false);
+   const [activeTab, setActiveTab] = useState<"overview" | "users" | "credits">("overview");
+   const [searchUser, setSearchUser] = useState("");
+   const [editingUser, setEditingUser] = useState<any>(null);
+   const [creditAction, setCreditAction] = useState<{ userId: string; action: string; amount: string } | null>(null);
+ 
++  const isAuthorized = user?.email === "felixahuruonye@gmail.com";
++
+   const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useQuery({
+     queryKey: ["/api/admin/users"],
+     enabled: isAuthorized,
+@@ -48,12 +48,8 @@ export default function AdminDashboard() {
+   });
+ 
+   const handleAuthorize = () => {
+-    if (accessCode === "felix333666" || user?.email === "felixahuruonye@gmail.com") {
+-      setIsAuthorized(true);
+-      toast({ title: "Welcome, Admin", description: "Access granted." });
+-    } else {
+-      toast({ title: "Access Denied", description: "Invalid access code.", variant: "destructive" });
+-    }
++    // Real auth is enforced server-side by email check on every /api/admin/* call.
++    // This client-side gate is just for UI — no bypass code exists or should exist here.
+   };
+ 
+   if (authLoading) {
+@@ -69,18 +65,9 @@ export default function AdminDashboard() {
+             <CardTitle className="text-2xl">Admin Access</CardTitle>
+           </CardHeader>
+           <CardContent className="space-y-4">
+-            <p className="text-sm text-muted-foreground text-center">Enter your master access code.</p>
+-            <div className="flex gap-2">
+-              <Input
+-                type="password"
+-                placeholder="Access Code"
+-                value={accessCode}
+-                onChange={(e) => setAccessCode(e.target.value)}
+-                onKeyDown={(e) => e.key === "Enter" && handleAuthorize()}
+-                data-testid="input-access-code"
+-              />
+-              <Button onClick={handleAuthorize} data-testid="button-enter-code">Enter</Button>
+-            </div>
++            <p className="text-sm text-muted-foreground text-center">
++              This page is only accessible from the LENORY admin account. Sign in with that account to continue.
++            </p>
+             <Link href="/dashboard" className="block text-center text-sm text-primary hover:underline">
+               Return to Dashboard
+             </Link>
+-- 
+2.43.0
+
