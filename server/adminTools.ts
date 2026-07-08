@@ -4,8 +4,101 @@
 // specifically to stop the AI from fabricating admin answers.
 
 import { storage } from "./storage";
+import { supabaseDb } from "./db";
 
 export const ADMIN_EMAIL = "felixahuruonye@gmail.com";
+
+// ── Real API usage tracking ──────────────────────────────────────────────────
+// Every call site that hits an external AI provider should call this. Fire-and-
+// forget by design — a logging failure must never break the actual feature.
+export function logApiUsage(provider: string, userId?: string, endpoint?: string) {
+  if (!supabaseDb) return;
+  supabaseDb
+    .from("api_usage_events")
+    .insert({ provider, endpoint: endpoint || null, user_id: userId || null })
+    .then(() => {})
+    .catch((e: unknown) => console.error("logApiUsage failed (non-fatal):", e));
+}
+
+export async function getApiUsageSummary() {
+  if (!supabaseDb) {
+    return { available: false, reason: "Supabase not connected", byProvider: [] };
+  }
+  try {
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: last24hData } = await supabaseDb
+      .from("api_usage_events")
+      .select("provider")
+      .gte("created_at", since24h);
+    const { data: last7dData } = await supabaseDb
+      .from("api_usage_events")
+      .select("provider")
+      .gte("created_at", since7d);
+
+    const countBy = (rows: any[] | null) => {
+      const counts: Record<string, number> = {};
+      (rows || []).forEach((r) => { counts[r.provider] = (counts[r.provider] || 0) + 1; });
+      return counts;
+    };
+
+    const last24h = countBy(last24hData);
+    const last7d = countBy(last7dData);
+    const providers = Array.from(new Set([...Object.keys(last24h), ...Object.keys(last7d)]));
+
+    return {
+      available: true,
+      byProvider: providers.map((p) => ({ provider: p, last24h: last24h[p] || 0, last7d: last7d[p] || 0 })),
+    };
+  } catch (e) {
+    return { available: false, reason: e instanceof Error ? e.message : String(e), byProvider: [] };
+  }
+}
+
+// Real balance check — Stability AI has a genuine, documented balance endpoint.
+// Other providers (Gemini, Replicate) don't expose a simple equivalent via API
+// key alone, so we don't fabricate a number for them — we report call counts
+// instead (see getApiUsageSummary), which is honest and fully in our control.
+export async function getStabilityBalance(): Promise<{ available: boolean; credits?: number; error?: string }> {
+  const key = process.env.STABILITY_API_KEY;
+  if (!key) return { available: false, error: "STABILITY_API_KEY not configured" };
+  try {
+    const res = await fetch("https://api.stability.ai/v1/user/balance", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) return { available: false, error: `Stability API returned ${res.status}` };
+    const data = await res.json();
+    return { available: true, credits: data.credits };
+  } catch (e) {
+    return { available: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function getModelUsageByTier() {
+  if (!supabaseDb) return { available: false, byTier: {} };
+  try {
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: events } = await supabaseDb
+      .from("api_usage_events")
+      .select("provider, user_id")
+      .gte("created_at", since7d)
+      .not("user_id", "is", null);
+
+    const users = await storage.getUsers();
+    const tierByUserId = new Map(users.map((u) => [u.id, (u as any).subscriptionTier || "free"]));
+
+    const byTier: Record<string, Record<string, number>> = { free: {}, pro: {}, premium: {} };
+    for (const e of events || []) {
+      const tier = tierByUserId.get(e.user_id) || "free";
+      if (!byTier[tier]) byTier[tier] = {};
+      byTier[tier][e.provider] = (byTier[tier][e.provider] || 0) + 1;
+    }
+    return { available: true, byTier, periodDays: 7 };
+  } catch (e) {
+    return { available: false, error: e instanceof Error ? e.message : String(e), byTier: {} };
+  }
+}
 
 // ── API key registry ─────────────────────────────────────────────────────────
 // Add new keys here as the app grows — this is the single source of truth.
@@ -99,6 +192,13 @@ export async function buildAdminContextBlock(): Promise<string> {
     const keys = getApiKeyStatus();
     const missingCritical = keys.filter((k) => k.critical && !k.configured);
     const errors = getRecentErrors().slice(0, 5);
+    const usage = await getApiUsageSummary();
+    const stability = await getStabilityBalance();
+
+    const usageLine = usage.available
+      ? usage.byProvider.map((p) => `${p.provider}: ${p.last24h}/24h, ${p.last7d}/7d`).join(" | ") || "no calls logged yet"
+      : `unavailable (${usage.reason})`;
+    const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
 
     return `
 ## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
@@ -108,6 +208,8 @@ export async function buildAdminContextBlock(): Promise<string> {
 - Users by tier: Free=${overview.usersByTier.free}, Pro=${overview.usersByTier.pro}, Premium=${overview.usersByTier.premium}
 - Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}
 - Missing critical API keys: ${missingCritical.length === 0 ? "none" : missingCritical.map((k) => k.name).join(", ")}
+- API call volume: ${usageLine}
+- Stability AI credit balance: ${stabilityLine}
 - Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
 (Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
   } catch (e) {

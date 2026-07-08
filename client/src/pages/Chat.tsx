@@ -334,6 +334,16 @@ export default function Chat() {
   const urlSessionId = new URLSearchParams(searchString).get("sessionId");
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
   const [message, setMessage] = useState("");
+  const [pastedFile, setPastedFile] = useState<{ name: string; content: string } | null>(null);
+  const LONG_PASTE_THRESHOLD = 2000; // characters — matches Claude-style paste-as-file UX
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (text && text.length > LONG_PASTE_THRESHOLD) {
+      e.preventDefault();
+      setPastedFile({ name: `Pasted text (${text.length.toLocaleString()} chars).txt`, content: text });
+    }
+  };
   const [isLoading, setIsLoading] = useState(false);
 
   const recognitionRef = useRef<any>(null);
@@ -587,11 +597,12 @@ export default function Chat() {
   // ─── Send message ─────────────────────────────────────────────────────────
   const resetInput = () => {
     setMessage("");
+    setPastedFile(null);
     if (textareaRef.current) textareaRef.current.style.height = "44px";
   };
 
   const handleSendMessage = async () => {
-    if (!message.trim() || isLoading) return;
+    if ((!message.trim() && !pastedFile) || isLoading) return;
 
     // Feature navigation
     const featureRoute = detectFeatureOpen(message);
@@ -669,12 +680,16 @@ export default function Chat() {
 
     try {
       setIsLoading(true);
+      const combinedContent = pastedFile
+        ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
+        : message.trim();
       const res = await apiRequest("POST", "/api/chat/send", {
-        content: message.trim(),
+        content: combinedContent,
         sessionId,
         autoLearn: true,
         model: selectedModel.id,
         isAdvanced: advancedMode,
+        isLongPaste: !!pastedFile,
       });
 
       if (res.status === 402) {
@@ -684,6 +699,18 @@ export default function Chat() {
         setIsLoading(false);
         return;
       }
+
+      if (!res.ok) {
+        let errMessage = "LENORY couldn't respond to that message. Please try again.";
+        try {
+          const errData = await res.json();
+          errMessage = errData.message || errMessage;
+        } catch {}
+        toast({ title: "Message failed", description: errMessage, variant: "destructive" });
+        setIsLoading(false);
+        return; // Don't clear the user's typed message — they shouldn't have to retype it
+      }
+
       resetInput();
       await res.json();
       await refetchMessages();
@@ -1106,6 +1133,15 @@ export default function Chat() {
               </div>
             )}
 
+            {/* Long paste → file chip, Claude-style */}
+            {pastedFile && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
+                <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-xs flex-1 truncate">{pastedFile.name} — will be processed as an attachment (12 credits)</span>
+                <button onClick={() => setPastedFile(null)} className="text-muted-foreground hover:text-foreground" data-testid="button-remove-pasted-file"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+
             {/* Main input card — Claude style */}
             <div className={`rounded-2xl border transition-all ${
               isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
@@ -1120,6 +1156,7 @@ export default function Chat() {
                   value={message}
                   onChange={e => { setMessage(e.target.value); autoResize(); }}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   placeholder={
                     isListening ? "Listening..." :
                     videoMode ? "Describe your video..." :

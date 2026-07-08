@@ -1,0 +1,935 @@
+From 95b19c3ecfa6357958e7123b26a8ef9e8ec981c0 Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Tue, 7 Jul 2026 22:17:20 +0000
+Subject: [PATCH] Batch 2: real Supabase credits (removes in-memory storage),
+ fix long-message bug, gate Advanced Mode by tier, real API usage tracking,
+ paste-as-file
+
+---
+ batch2_credits_migration.sql |  42 ++++++++
+ client/src/pages/Chat.tsx    |  41 ++++++-
+ server/adminTools.ts         | 102 ++++++++++++++++++
+ server/creditsStore.ts       | 180 +++++++++++++++++++++++++++++++
+ server/gemini.ts             |  26 +++--
+ server/index.ts              |   3 +-
+ server/routes.ts             | 202 ++++++++++++++++++-----------------
+ 7 files changed, 488 insertions(+), 108 deletions(-)
+ create mode 100644 batch2_credits_migration.sql
+ create mode 100644 server/creditsStore.ts
+
+diff --git a/batch2_credits_migration.sql b/batch2_credits_migration.sql
+new file mode 100644
+index 0000000..225305c
+--- /dev/null
++++ b/batch2_credits_migration.sql
+@@ -0,0 +1,42 @@
++-- Batch 2 migration: run this in Supabase → SQL Editor
++-- Adds real persistent credit storage and API usage tracking.
++
++-- ── Credits: the real source of truth, replacing the old in-memory Map ──────
++CREATE TABLE IF NOT EXISTS public.user_credits (
++  user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
++  balance INTEGER NOT NULL DEFAULT 0,
++  monthly_used INTEGER NOT NULL DEFAULT 0,
++  daily_given INTEGER NOT NULL DEFAULT 0,
++  last_daily_reset DATE NOT NULL DEFAULT CURRENT_DATE,
++  last_monthly_reset DATE NOT NULL DEFAULT CURRENT_DATE,
++  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
++);
++
++ALTER TABLE public.user_credits ENABLE ROW LEVEL SECURITY;
++
++DROP POLICY IF EXISTS "Users can view own credits" ON public.user_credits;
++CREATE POLICY "Users can view own credits" ON public.user_credits
++  FOR SELECT USING (auth.uid() = user_id);
++
++GRANT ALL ON public.user_credits TO authenticated;
++GRANT ALL ON public.user_credits TO service_role;
++
++-- ── API usage tracking: real call counts per provider, for the admin dashboard ──
++CREATE TABLE IF NOT EXISTS public.api_usage_events (
++  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
++  provider VARCHAR(50) NOT NULL,
++  endpoint VARCHAR(100),
++  user_id UUID,
++  created_at TIMESTAMP DEFAULT NOW() NOT NULL
++);
++
++CREATE INDEX IF NOT EXISTS idx_api_usage_provider_time ON public.api_usage_events(provider, created_at);
++
++ALTER TABLE public.api_usage_events ENABLE ROW LEVEL SECURITY;
++
++DROP POLICY IF EXISTS "Service role full access to usage events" ON public.api_usage_events;
++CREATE POLICY "Service role full access to usage events" ON public.api_usage_events
++  FOR ALL USING (auth.role() = 'service_role');
++
++GRANT ALL ON public.api_usage_events TO service_role;
++GRANT ALL ON public.api_usage_events TO authenticated;
+diff --git a/client/src/pages/Chat.tsx b/client/src/pages/Chat.tsx
+index 0b52aa1..ec65d68 100644
+--- a/client/src/pages/Chat.tsx
++++ b/client/src/pages/Chat.tsx
+@@ -334,6 +334,16 @@ export default function Chat() {
+   const urlSessionId = new URLSearchParams(searchString).get("sessionId");
+   const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
+   const [message, setMessage] = useState("");
++  const [pastedFile, setPastedFile] = useState<{ name: string; content: string } | null>(null);
++  const LONG_PASTE_THRESHOLD = 2000; // characters — matches Claude-style paste-as-file UX
++
++  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
++    const text = e.clipboardData.getData("text");
++    if (text && text.length > LONG_PASTE_THRESHOLD) {
++      e.preventDefault();
++      setPastedFile({ name: `Pasted text (${text.length.toLocaleString()} chars).txt`, content: text });
++    }
++  };
+   const [isLoading, setIsLoading] = useState(false);
+ 
+   const recognitionRef = useRef<any>(null);
+@@ -587,11 +597,12 @@ export default function Chat() {
+   // ─── Send message ─────────────────────────────────────────────────────────
+   const resetInput = () => {
+     setMessage("");
++    setPastedFile(null);
+     if (textareaRef.current) textareaRef.current.style.height = "44px";
+   };
+ 
+   const handleSendMessage = async () => {
+-    if (!message.trim() || isLoading) return;
++    if ((!message.trim() && !pastedFile) || isLoading) return;
+ 
+     // Feature navigation
+     const featureRoute = detectFeatureOpen(message);
+@@ -669,12 +680,16 @@ export default function Chat() {
+ 
+     try {
+       setIsLoading(true);
++      const combinedContent = pastedFile
++        ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
++        : message.trim();
+       const res = await apiRequest("POST", "/api/chat/send", {
+-        content: message.trim(),
++        content: combinedContent,
+         sessionId,
+         autoLearn: true,
+         model: selectedModel.id,
+         isAdvanced: advancedMode,
++        isLongPaste: !!pastedFile,
+       });
+ 
+       if (res.status === 402) {
+@@ -684,6 +699,18 @@ export default function Chat() {
+         setIsLoading(false);
+         return;
+       }
++
++      if (!res.ok) {
++        let errMessage = "LENORY couldn't respond to that message. Please try again.";
++        try {
++          const errData = await res.json();
++          errMessage = errData.message || errMessage;
++        } catch {}
++        toast({ title: "Message failed", description: errMessage, variant: "destructive" });
++        setIsLoading(false);
++        return; // Don't clear the user's typed message — they shouldn't have to retype it
++      }
++
+       resetInput();
+       await res.json();
+       await refetchMessages();
+@@ -1106,6 +1133,15 @@ export default function Chat() {
+               </div>
+             )}
+ 
++            {/* Long paste → file chip, Claude-style */}
++            {pastedFile && (
++              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
++                <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
++                <span className="text-xs flex-1 truncate">{pastedFile.name} — will be processed as an attachment (12 credits)</span>
++                <button onClick={() => setPastedFile(null)} className="text-muted-foreground hover:text-foreground" data-testid="button-remove-pasted-file"><X className="w-3.5 h-3.5" /></button>
++              </div>
++            )}
++
+             {/* Main input card — Claude style */}
+             <div className={`rounded-2xl border transition-all ${
+               isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
+@@ -1120,6 +1156,7 @@ export default function Chat() {
+                   value={message}
+                   onChange={e => { setMessage(e.target.value); autoResize(); }}
+                   onKeyDown={handleKeyDown}
++                  onPaste={handlePaste}
+                   placeholder={
+                     isListening ? "Listening..." :
+                     videoMode ? "Describe your video..." :
+diff --git a/server/adminTools.ts b/server/adminTools.ts
+index bc683ca..3690ff7 100644
+--- a/server/adminTools.ts
++++ b/server/adminTools.ts
+@@ -4,9 +4,102 @@
+ // specifically to stop the AI from fabricating admin answers.
+ 
+ import { storage } from "./storage";
++import { supabaseDb } from "./db";
+ 
+ export const ADMIN_EMAIL = "felixahuruonye@gmail.com";
+ 
++// ── Real API usage tracking ──────────────────────────────────────────────────
++// Every call site that hits an external AI provider should call this. Fire-and-
++// forget by design — a logging failure must never break the actual feature.
++export function logApiUsage(provider: string, userId?: string, endpoint?: string) {
++  if (!supabaseDb) return;
++  supabaseDb
++    .from("api_usage_events")
++    .insert({ provider, endpoint: endpoint || null, user_id: userId || null })
++    .then(() => {})
++    .catch((e: unknown) => console.error("logApiUsage failed (non-fatal):", e));
++}
++
++export async function getApiUsageSummary() {
++  if (!supabaseDb) {
++    return { available: false, reason: "Supabase not connected", byProvider: [] };
++  }
++  try {
++    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
++    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
++
++    const { data: last24hData } = await supabaseDb
++      .from("api_usage_events")
++      .select("provider")
++      .gte("created_at", since24h);
++    const { data: last7dData } = await supabaseDb
++      .from("api_usage_events")
++      .select("provider")
++      .gte("created_at", since7d);
++
++    const countBy = (rows: any[] | null) => {
++      const counts: Record<string, number> = {};
++      (rows || []).forEach((r) => { counts[r.provider] = (counts[r.provider] || 0) + 1; });
++      return counts;
++    };
++
++    const last24h = countBy(last24hData);
++    const last7d = countBy(last7dData);
++    const providers = Array.from(new Set([...Object.keys(last24h), ...Object.keys(last7d)]));
++
++    return {
++      available: true,
++      byProvider: providers.map((p) => ({ provider: p, last24h: last24h[p] || 0, last7d: last7d[p] || 0 })),
++    };
++  } catch (e) {
++    return { available: false, reason: e instanceof Error ? e.message : String(e), byProvider: [] };
++  }
++}
++
++// Real balance check — Stability AI has a genuine, documented balance endpoint.
++// Other providers (Gemini, Replicate) don't expose a simple equivalent via API
++// key alone, so we don't fabricate a number for them — we report call counts
++// instead (see getApiUsageSummary), which is honest and fully in our control.
++export async function getStabilityBalance(): Promise<{ available: boolean; credits?: number; error?: string }> {
++  const key = process.env.STABILITY_API_KEY;
++  if (!key) return { available: false, error: "STABILITY_API_KEY not configured" };
++  try {
++    const res = await fetch("https://api.stability.ai/v1/user/balance", {
++      headers: { Authorization: `Bearer ${key}` },
++    });
++    if (!res.ok) return { available: false, error: `Stability API returned ${res.status}` };
++    const data = await res.json();
++    return { available: true, credits: data.credits };
++  } catch (e) {
++    return { available: false, error: e instanceof Error ? e.message : String(e) };
++  }
++}
++
++export async function getModelUsageByTier() {
++  if (!supabaseDb) return { available: false, byTier: {} };
++  try {
++    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
++    const { data: events } = await supabaseDb
++      .from("api_usage_events")
++      .select("provider, user_id")
++      .gte("created_at", since7d)
++      .not("user_id", "is", null);
++
++    const users = await storage.getUsers();
++    const tierByUserId = new Map(users.map((u) => [u.id, (u as any).subscriptionTier || "free"]));
++
++    const byTier: Record<string, Record<string, number>> = { free: {}, pro: {}, premium: {} };
++    for (const e of events || []) {
++      const tier = tierByUserId.get(e.user_id) || "free";
++      if (!byTier[tier]) byTier[tier] = {};
++      byTier[tier][e.provider] = (byTier[tier][e.provider] || 0) + 1;
++    }
++    return { available: true, byTier, periodDays: 7 };
++  } catch (e) {
++    return { available: false, error: e instanceof Error ? e.message : String(e), byTier: {} };
++  }
++}
++
+ // ── API key registry ─────────────────────────────────────────────────────────
+ // Add new keys here as the app grows — this is the single source of truth.
+ const KEY_REGISTRY: { name: string; envVar: string; usedFor: string; critical: boolean }[] = [
+@@ -99,6 +192,13 @@ export async function buildAdminContextBlock(): Promise<string> {
+     const keys = getApiKeyStatus();
+     const missingCritical = keys.filter((k) => k.critical && !k.configured);
+     const errors = getRecentErrors().slice(0, 5);
++    const usage = await getApiUsageSummary();
++    const stability = await getStabilityBalance();
++
++    const usageLine = usage.available
++      ? usage.byProvider.map((p) => `${p.provider}: ${p.last24h}/24h, ${p.last7d}/7d`).join(" | ") || "no calls logged yet"
++      : `unavailable (${usage.reason})`;
++    const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
+ 
+     return `
+ ## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
+@@ -108,6 +208,8 @@ export async function buildAdminContextBlock(): Promise<string> {
+ - Users by tier: Free=${overview.usersByTier.free}, Pro=${overview.usersByTier.pro}, Premium=${overview.usersByTier.premium}
+ - Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}
+ - Missing critical API keys: ${missingCritical.length === 0 ? "none" : missingCritical.map((k) => k.name).join(", ")}
++- API call volume: ${usageLine}
++- Stability AI credit balance: ${stabilityLine}
+ - Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
+ (Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
+   } catch (e) {
+diff --git a/server/creditsStore.ts b/server/creditsStore.ts
+new file mode 100644
+index 0000000..910b93d
+--- /dev/null
++++ b/server/creditsStore.ts
+@@ -0,0 +1,180 @@
++// server/creditsStore.ts
++// Real, persistent credit tracking. Supabase is the source of truth — a server
++// restart, deploy, or crash must never reset anyone's balance again.
++
++import { supabaseDb } from "./db";
++
++export interface CreditRecord {
++  balance: number;
++  monthlyUsed: number;
++  dailyGiven: number;
++  lastDailyReset: string;
++  lastMonthlyReset: string;
++}
++
++// Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
++// A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
++// which costs roughly ₦5 per message at current USD/NGN rates. Adjust here —
++// and only here — as real usage data comes in from the admin dashboard.
++export const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
++  free: { dailyAdd: 10, maxBalance: 30 },
++  pro: { dailyAdd: 60, maxBalance: 180 },
++  premium: { dailyAdd: 150, maxBalance: 450 },
++};
++
++export function getTierLimits(tier: string) {
++  return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
++}
++
++function todayKey(): string {
++  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
++}
++function monthKey(): string {
++  return new Date().toISOString().slice(0, 7); // YYYY-MM
++}
++
++// In-memory is now ONLY a fallback for the rare moment Supabase is unreachable —
++// never the primary store. If Supabase fails, we degrade gracefully instead of
++// crashing, but nothing here is treated as durable.
++const emergencyFallbackStore = new Map<string, CreditRecord>();
++
++function fallbackGetOrCreate(userId: string, tier: string): CreditRecord {
++  const today = todayKey();
++  if (!emergencyFallbackStore.has(userId)) {
++    const limits = getTierLimits(tier);
++    emergencyFallbackStore.set(userId, {
++      balance: limits.dailyAdd,
++      monthlyUsed: 0,
++      dailyGiven: limits.dailyAdd,
++      lastDailyReset: today,
++      lastMonthlyReset: monthKey(),
++    });
++  }
++  const rec = emergencyFallbackStore.get(userId)!;
++  if (rec.lastDailyReset !== today) {
++    const limits = getTierLimits(tier);
++    rec.balance = Math.min(rec.balance + limits.dailyAdd, limits.maxBalance);
++    rec.dailyGiven = limits.dailyAdd;
++    rec.lastDailyReset = today;
++  }
++  return rec;
++}
++
++// Fetch (or create) a user's credit record, applying the daily top-up if a new
++// day has started. This is the ONLY function that should read credit state.
++export async function getOrCreateCredits(userId: string, tier: string = "free"): Promise<CreditRecord> {
++  const today = todayKey();
++  const limits = getTierLimits(tier);
++
++  if (!supabaseDb) {
++    console.warn("⚠️ Supabase unavailable — using emergency in-memory credits fallback");
++    return fallbackGetOrCreate(userId, tier);
++  }
++
++  try {
++    let { data, error } = await supabaseDb
++      .from("user_credits")
++      .select("*")
++      .eq("user_id", userId)
++      .single();
++
++    if (error || !data) {
++      const inserted = await supabaseDb
++        .from("user_credits")
++        .insert({
++          user_id: userId,
++          balance: limits.dailyAdd,
++          monthly_used: 0,
++          daily_given: limits.dailyAdd,
++          last_daily_reset: today,
++          last_monthly_reset: monthKey(),
++        })
++        .select()
++        .single();
++      data = inserted.data;
++      if (!data) throw new Error("Failed to create credit record");
++    }
++
++    // Daily reset
++    if (data.last_daily_reset !== today) {
++      const newBalance = Math.min(data.balance + limits.dailyAdd, limits.maxBalance);
++      const currentMonth = monthKey();
++      const isNewMonth = data.last_monthly_reset !== currentMonth;
++      const updated = await supabaseDb
++        .from("user_credits")
++        .update({
++          balance: newBalance,
++          daily_given: limits.dailyAdd,
++          last_daily_reset: today,
++          monthly_used: isNewMonth ? 0 : data.monthly_used,
++          last_monthly_reset: isNewMonth ? currentMonth : data.last_monthly_reset,
++        })
++        .eq("user_id", userId)
++        .select()
++        .single();
++      data = updated.data || data;
++    }
++
++    return {
++      balance: data.balance,
++      monthlyUsed: data.monthly_used,
++      dailyGiven: data.daily_given,
++      lastDailyReset: data.last_daily_reset,
++      lastMonthlyReset: data.last_monthly_reset,
++    };
++  } catch (e) {
++    console.error("Credits Supabase error, using emergency fallback:", e);
++    return fallbackGetOrCreate(userId, tier);
++  }
++}
++
++// Deduct credits after a real, verified check that balance is sufficient.
++// Returns the new balance, or null if the write failed (caller should treat
++// this conservatively — we already checked balance was sufficient before acting).
++export async function deductCredits(userId: string, amount: number): Promise<number | null> {
++  if (!supabaseDb) {
++    const rec = emergencyFallbackStore.get(userId);
++    if (rec) { rec.balance -= amount; rec.monthlyUsed += amount; return rec.balance; }
++    return null;
++  }
++  try {
++    const { data } = await supabaseDb.from("user_credits").select("balance, monthly_used").eq("user_id", userId).single();
++    if (!data) return null;
++    const newBalance = data.balance - amount;
++    const { data: updated } = await supabaseDb
++      .from("user_credits")
++      .update({ balance: newBalance, monthly_used: data.monthly_used + amount, updated_at: new Date().toISOString() })
++      .eq("user_id", userId)
++      .select()
++      .single();
++    return updated?.balance ?? newBalance;
++  } catch (e) {
++    console.error("deductCredits Supabase error:", e);
++    return null;
++  }
++}
++
++// Add credits (Paystack top-up, admin adjustment). Caps at the tier's maxBalance
++// unless uncapped is explicitly requested (e.g. an admin override).
++export async function addCredits(userId: string, amount: number, tier: string = "free", uncapped = false): Promise<number | null> {
++  const limits = getTierLimits(tier);
++  if (!supabaseDb) {
++    const rec = emergencyFallbackStore.get(userId);
++    if (rec) { rec.balance = uncapped ? rec.balance + amount : Math.min(rec.balance + amount, limits.maxBalance); return rec.balance; }
++    return null;
++  }
++  try {
++    const { data } = await supabaseDb.from("user_credits").select("balance").eq("user_id", userId).single();
++    const current = data?.balance ?? 0;
++    const newBalance = uncapped ? current + amount : Math.min(current + amount, limits.maxBalance);
++    const { data: updated } = await supabaseDb
++      .from("user_credits")
++      .upsert({ user_id: userId, balance: newBalance, updated_at: new Date().toISOString() })
++      .select()
++      .single();
++    return updated?.balance ?? newBalance;
++  } catch (e) {
++    console.error("addCredits Supabase error:", e);
++    return null;
++  }
++}
+diff --git a/server/gemini.ts b/server/gemini.ts
+index afc8468..e2698e7 100644
+--- a/server/gemini.ts
++++ b/server/gemini.ts
+@@ -704,11 +704,7 @@ function generateColorPaletteFromPrompt(prompt: string): [string, string, string
+ }
+ 
+ export async function chatWithGemini(messages: Array<{ role: string; content: string }>): Promise<string> {
+-  try {
+-    if (!apiKey) {
+-      throw new Error("Gemini API key not configured");
+-    }
+-
++  const attemptCall = async (): Promise<string> => {
+     const response = await ai.models.generateContent({
+       model: "gemini-2.5-flash",
+       contents: messages.map(m => ({
+@@ -716,10 +712,26 @@ export async function chatWithGemini(messages: Array<{ role: string; content: st
+         parts: [{ text: m.content }]
+       })) as any
+     });
++    return response.text || "";
++  };
+ 
+-    const result = response.text;
++  try {
++    if (!apiKey) {
++      throw new Error("Gemini API key not configured");
++    }
++
++    let result = await attemptCall();
++
++    // Long/complex messages occasionally come back empty (safety filtering,
++    // transient API issue). One retry resolves most of these instead of
++    // failing the whole request.
+     if (!result) {
+-      throw new Error("Empty response from Gemini");
++      console.warn("Gemini returned empty response, retrying once...");
++      result = await attemptCall();
++    }
++
++    if (!result) {
++      throw new Error("Empty response from Gemini after retry");
+     }
+     return result;
+   } catch (error) {
+diff --git a/server/index.ts b/server/index.ts
+index 4801c3b..b681990 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -13,11 +13,12 @@ declare module 'http' {
+   }
+ }
+ app.use(express.json({
++  limit: "5mb",
+   verify: (req, _res, buf) => {
+     req.rawBody = buf;
+   }
+ }));
+-app.use(express.urlencoded({ extended: false }));
++app.use(express.urlencoded({ extended: false, limit: "5mb" }));
+ 
+ app.use((req, res, next) => {
+   const start = Date.now();
+diff --git a/server/routes.ts b/server/routes.ts
+index 373126f..6a85dde 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -8,7 +8,8 @@ import os from "os";
+ import path from "path";
+ // @ts-ignore - multer types not available but package is installed
+ import multer from "multer";
+-import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock } from "./adminTools";
++import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier } from "./adminTools";
++import { getOrCreateCredits, deductCredits, addCredits, getTierLimits } from "./creditsStore";
+ import { storage } from "./storage";
+ import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
+ import {
+@@ -344,7 +345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
+   app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
+     try {
+       const userId = req.userId;
+-      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced, overrideResponse } = req.body;
++      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced, overrideResponse, isLongPaste } = req.body;
+ 
+       if (!content?.trim()) {
+         return res.status(400).json({ message: "Message content is required" });
+@@ -356,18 +357,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
+       const user = await storage.getUser(userId);
+       const userName = user?.firstName || "Friend";
+ 
+-      // ── CREDIT CHECK (1 credit per chat message) ──────────────────────────
++      // ── CREDIT CHECK (1 credit per chat message, +12 for long-paste-as-file) ──
+       if (user?.email !== ADMIN_EMAIL) {
+-        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+-        if (credits.balance < 1) {
++        const tier = (user as any)?.subscriptionTier || 'free';
++        const totalCost = 1 + (isLongPaste ? 12 : 0);
++        const credits = await getOrCreateCredits(userId, tier);
++        if (credits.balance < totalCost) {
+           return res.status(402).json({
+-            message: "You've run out of credits. You earn 10 free credits each day, or top up for more.",
++            message: isLongPaste
++              ? "That long paste needs 13 credits to process (1 + 12 for the attachment) and your balance is too low."
++              : "You've run out of credits. You earn 10 free credits each day, or top up for more.",
+             error: "INSUFFICIENT_CREDITS",
+             balance: credits.balance,
+           });
+         }
+-        credits.balance -= 1;
+-        credits.monthlyUsed += 1;
++        await deductCredits(userId, totalCost);
+       }
+       // ──────────────────────────────────────────────────────────────────────
+ 
+@@ -538,6 +542,14 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
+         systemMessage += `\n\n## THE STUDENT'S UPLOADED NOTE (answer strictly based on this, do not use outside knowledge unless the note doesn't cover it — say so if it doesn't):\n${noteText}`;
+       }
+ 
++      // SECURITY FIX: never trust the client's isAdvanced flag directly — a free
++      // user could send isAdvanced:true and get the pricier model for free.
++      // Advanced mode is now only honored if the user's real, server-verified
++      // tier actually allows it.
++      const realUserTier = (user as any)?.subscriptionTier || 'free';
++      const canUseAdvanced = realUserTier === 'pro' || realUserTier === 'premium' || user?.email === ADMIN_EMAIL;
++      isAdvanced = !!isAdvanced && canUseAdvanced;
++
+       if (isAdvanced) {
+         systemMessage += `\n\n## ADVANCED MODE:\nYou are acting as a Technical/Project Specialist. Provide deep analysis, accurate solutions, and help with complex technical tasks.`;
+       }
+@@ -719,14 +731,16 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
+       // CRITICAL FIX: Don't add LENORY branding to the AI response itself
+       // The response should be pure - branding stays in UI, not in generated content
+       // This prevents AI from overwriting user's requested branding on websites, images, PDFs
++      logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
+       res.json({ 
+         success: true, 
+         message: aiResponse  // Plain response - NO branding injection
+       });
+     } catch (error) {
+       console.error("Error sending message:", error);
++      logAdminError("/api/chat/send", error);
+       const errorMsg = error instanceof Error ? error.message : String(error);
+-      res.status(500).json({ message: "Failed to send message" });
++      res.status(500).json({ message: errorMsg.includes("Empty response") ? "LENORY had trouble with that message — it may be too long or complex. Try breaking it into smaller parts." : "Failed to send message. Please try again." });
+     }
+   });
+ 
+@@ -921,6 +935,38 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+     }
+   });
+ 
++  // Real per-provider API call counts + real Stability credit balance
++  app.get('/api/admin/api-usage', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      const [usage, stabilityBalance] = await Promise.all([
++        getApiUsageSummary(),
++        getStabilityBalance(),
++      ]);
++      res.json({ usage, stabilityBalance });
++    } catch (error) {
++      logAdminError("/api/admin/api-usage", error);
++      res.status(500).json({ message: "Failed to fetch API usage" });
++    }
++  });
++
++  // Which model/tier combination is actually being used, last 7 days
++  app.get('/api/admin/model-usage-by-tier', supabaseAuth, async (req: any, res: Response) => {
++    try {
++      const requester = await storage.getUser(req.userId);
++      if (requester?.email !== REAL_ADMIN_EMAIL) {
++        return res.status(403).json({ message: "Forbidden" });
++      }
++      res.json(await getModelUsageByTier());
++    } catch (error) {
++      logAdminError("/api/admin/model-usage-by-tier", error);
++      res.status(500).json({ message: "Failed to fetch model usage" });
++    }
++  });
++
+   // Dashboard stats endpoint
+   app.get('/api/dashboard/stats', supabaseAuth, async (req: any, res: Response) => {
+     try {
+@@ -1355,7 +1401,8 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+         const existingNotes = await storage.getFileUploadsByUser(userId);
+         const isBeyondFreeLimit = existingNotes.length >= 10;
+         if (isBeyondFreeLimit) {
+-          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
++          const tier = (user as any)?.subscriptionTier || 'free';
++          const credits = await getOrCreateCredits(userId, tier);
+           if (credits.balance < 20) {
+             return res.status(402).json({
+               message: "You've used your 10 free note uploads. Uploading more notes costs 20 credits each, and your balance is too low.",
+@@ -1363,8 +1410,7 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+               balance: credits.balance,
+             });
+           }
+-          credits.balance -= 20;
+-          credits.monthlyUsed += 20;
++          await deductCredits(userId, 20);
+           creditsCharged = 20;
+         }
+       }
+@@ -1412,7 +1458,8 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+       if (user?.email !== ADMIN_EMAIL) {
+         const existingNotes = await storage.getFileUploadsByUser(userId);
+         if (existingNotes.length >= 10) {
+-          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
++          const tier = (user as any)?.subscriptionTier || 'free';
++          const credits = await getOrCreateCredits(userId, tier);
+           if (credits.balance < 20) {
+             return res.status(402).json({
+               message: "You've used your 10 free note uploads. Saving more notes costs 20 credits each, and your balance is too low.",
+@@ -1420,8 +1467,7 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
+               balance: credits.balance,
+             });
+           }
+-          credits.balance -= 20;
+-          credits.monthlyUsed += 20;
++          await deductCredits(userId, 20);
+           creditsCharged = 20;
+         }
+       }
+@@ -2671,8 +2717,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       }
+ 
+       const image = await generateImageWithLENORY(prompt);
+-      
+-      const stored = await storage.createGeneratedImage({
++      logApiUsage("stability-image", userId, "/api/generate-image");      const stored = await storage.createGeneratedImage({
+         userId,
+         prompt,
+         imageUrl: image.url,
+@@ -3108,12 +3153,14 @@ KEY_WORDS: [keywords separated by commas]`,
+       let creditsDeducted = 0;
+       if (user?.email !== ADMIN_EMAIL_CHECK && durationSeconds > 0) {
+         const durationMinutes = Math.ceil(durationSeconds / 60);
+-        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
++        const tier = (user as any)?.subscriptionTier || 'free';
++        const credits = await getOrCreateCredits(userId, tier);
+         creditsDeducted = Math.min(durationMinutes, credits.balance);
+-        credits.balance -= creditsDeducted;
++        await deductCredits(userId, creditsDeducted);
+         console.log(`💳 Deducted ${creditsDeducted} credits for ${durationMinutes} min transcription`);
+       }
+ 
++      logApiUsage(engineUsed, userId, "/api/transcribe");
+       res.json({
+         text: transcriptText,
+         duration_seconds: durationSeconds,
+@@ -3830,9 +3877,9 @@ KEY_WORDS: [keywords separated by commas]`,
+         } as any);
+ 
+         // Top up credits immediately to the new tier's allowance
+-        const { dailyAdd, maxBalance } = getTierLimits(tierId);
+-        const credits = getOrCreateCredits(userId, event.data.customer?.email, tierId);
+-        credits.balance = Math.min(credits.balance + dailyAdd, maxBalance);
++        const { dailyAdd } = getTierLimits(tierId);
++        await getOrCreateCredits(userId, tierId); // ensure a row exists first
++        await addCredits(userId, dailyAdd, tierId);
+ 
+         console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
+       } else if (event.event === "subscription.disable" || event.event === "subscription.not_renew") {
+@@ -3879,64 +3926,9 @@ KEY_WORDS: [keywords separated by commas]`,
+   // ─────────────────────────────────────────────────────────────────────────────
+   const ADMIN_EMAIL = 'felixahuruonye@gmail.com';
+ 
+-  interface CreditData {
+-    balance: number;
+-    monthlyUsed: number;
+-    lastMonthlyReset: string; // YYYY-MM
+-    lastDailyReset: string;   // YYYY-MM-DD
+-    dailyGiven: number;
+-  }
+-  const userCreditsStore = new Map<string, CreditData>();
+-
+-  // ── SINGLE SOURCE OF TRUTH for credit limits per tier ──────────────────────
+-  // Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
+-  // A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
+-  // which costs roughly ₦5 per message at current USD/NGN rates. These numbers
+-  // keep free-tier cost exposure low while paid tiers stay comfortably profitable
+-  // even under conservative usage. Adjust here — and only here — as real usage
+-  // data comes in from the admin dashboard.
+-  const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
+-    free: { dailyAdd: 10, maxBalance: 30 },
+-    pro: { dailyAdd: 60, maxBalance: 180 },
+-    premium: { dailyAdd: 150, maxBalance: 450 },
+-  };
+-  function getTierLimits(tier: string) {
+-    return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
+-  }
+-
+-  function getMonthKey() { return new Date().toISOString().slice(0, 7); }
+-  function getDayKey() { return new Date().toISOString().slice(0, 10); }
+-
+-  function getOrCreateCredits(userId: string, userEmail?: string, tier = 'free'): CreditData {
+-    if (!userCreditsStore.has(userId)) {
+-      const initial = getTierLimits(tier);
+-      userCreditsStore.set(userId, {
+-        balance: initial.dailyAdd,
+-        monthlyUsed: 0,
+-        lastMonthlyReset: getMonthKey(),
+-        lastDailyReset: getDayKey(),
+-        dailyGiven: initial.dailyAdd,
+-      });
+-    }
+-    const data = userCreditsStore.get(userId)!;
+-    if (userEmail === ADMIN_EMAIL) {
+-      data.balance = 9999;
+-      return data;
+-    }
+-    const { dailyAdd, maxBalance } = getTierLimits(tier);
+-    const today = getDayKey();
+-    if (data.lastDailyReset !== today) {
+-      data.balance = Math.min(data.balance + dailyAdd, maxBalance);
+-      data.lastDailyReset = today;
+-      data.dailyGiven = dailyAdd;
+-    }
+-    const thisMonth = getMonthKey();
+-    if (data.lastMonthlyReset !== thisMonth) {
+-      data.monthlyUsed = 0;
+-      data.lastMonthlyReset = thisMonth;
+-    }
+-    return data;
+-  }
++  // Credits are now handled by ./creditsStore.ts, backed by real Supabase
++  // storage — see getOrCreateCredits, deductCredits, addCredits, getTierLimits
++  // imported near the top of this file. The old in-memory Map is gone.
+ 
+   // Alias for /api/credits used by the Chat UI
+   app.get('/api/user/credits', supabaseAuth, async (req: any, res: Response) => {
+@@ -3944,7 +3936,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       const userId = req.userId;
+       const user = await storage.getUser(userId);
+       const tier = user?.subscriptionTier || 'free';
+-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
++      const credits = await getOrCreateCredits(userId, tier);
+       const { maxBalance } = getTierLimits(tier);
+       res.json({
+         credits: credits.balance,
+@@ -3963,7 +3955,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       const userId = req.userId;
+       const user = await storage.getUser(userId);
+       const tier = user?.subscriptionTier || 'free';
+-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
++      const credits = await getOrCreateCredits(userId, tier);
+       const { dailyAdd, maxBalance } = getTierLimits(tier);
+       res.json({
+         balance: credits.balance,
+@@ -3988,13 +3980,12 @@ KEY_WORDS: [keywords separated by commas]`,
+         return res.json({ success: true, balance: 9999, message: "Admin: unlimited" });
+       }
+       const tier = user?.subscriptionTier || 'free';
+-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
++      const credits = await getOrCreateCredits(userId, tier);
+       if (credits.balance < amount) {
+         return res.status(402).json({ error: "Insufficient credits", balance: credits.balance });
+       }
+-      credits.balance -= amount;
+-      credits.monthlyUsed += amount;
+-      res.json({ success: true, balance: credits.balance });
++      const newBalance = await deductCredits(userId, amount);
++      res.json({ success: true, balance: newBalance ?? (credits.balance - amount) });
+     } catch (error) {
+       res.status(500).json({ message: "Failed to deduct credits" });
+     }
+@@ -4042,8 +4033,10 @@ KEY_WORDS: [keywords separated by commas]`,
+       const data = await verifyRes.json();
+       if (data.data?.status === 'success') {
+         const { userId, creditAmount } = data.data.metadata;
+-        const credits = getOrCreateCredits(userId);
+-        credits.balance += Number(creditAmount);
++        const user = await storage.getUser(userId);
++        const tier = (user as any)?.subscriptionTier || 'free';
++        await getOrCreateCredits(userId, tier);
++        await addCredits(userId, Number(creditAmount), tier, true); // uncapped — this was a direct purchase
+         res.redirect('/dashboard?topup=success');
+       } else {
+         res.redirect('/pricing?topup=failed');
+@@ -4060,11 +4053,21 @@ KEY_WORDS: [keywords separated by commas]`,
+       if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+       const { userId } = req.params;
+       const { amount, action } = req.body; // action: 'add' | 'set' | 'deduct'
+-      const credits = getOrCreateCredits(userId);
+-      if (action === 'set') credits.balance = Number(amount);
+-      else if (action === 'add') credits.balance += Number(amount);
+-      else if (action === 'deduct') credits.balance = Math.max(0, credits.balance - Number(amount));
+-      res.json({ success: true, balance: credits.balance });
++      const targetUser = await storage.getUser(userId);
++      const tier = (targetUser as any)?.subscriptionTier || 'free';
++      const credits = await getOrCreateCredits(userId, tier);
++      let newBalance = credits.balance;
++      if (action === 'set') {
++        newBalance = Number(amount);
++        await addCredits(userId, newBalance - credits.balance, tier, true);
++      } else if (action === 'add') {
++        await addCredits(userId, Number(amount), tier, true);
++        newBalance = credits.balance + Number(amount);
++      } else if (action === 'deduct') {
++        const deducted = await deductCredits(userId, Math.min(Number(amount), credits.balance));
++        newBalance = deducted ?? Math.max(0, credits.balance - Number(amount));
++      }
++      res.json({ success: true, balance: newBalance });
+     } catch (error) {
+       res.status(500).json({ message: "Failed to adjust credits" });
+     }
+@@ -4174,18 +4177,19 @@ KEY_WORDS: [keywords separated by commas]`,
+   app.post('/api/video/generate', supabaseAuth, async (req: any, res: Response) => {
+     try {
+       const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
+-      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add your Replicate token in Replit Secrets." });
++      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add REPLICATE_API_TOKEN in Render environment variables." });
+       const { prompt } = req.body;
+       if (!prompt) return res.status(400).json({ error: "prompt is required" });
+       // Deduct credits (video = 5 credits)
+       const userId = req.userId;
+       const user = await storage.getUser(userId);
+       if (user?.email !== ADMIN_EMAIL) {
+-        const credits = getOrCreateCredits(userId, user?.email || '');
++        const tier = (user as any)?.subscriptionTier || 'free';
++        const credits = await getOrCreateCredits(userId, tier);
+         if (credits.balance < 5) {
+           return res.status(402).json({ error: "Insufficient credits. Video generation costs 5 credits." });
+         }
+-        credits.balance -= 5;
++        await deductCredits(userId, 5);
+       }
+       // Start prediction with Replicate
+       const createRes = await fetch('https://api.replicate.com/v1/models/anotherjesse/zeroscope-v2-xl/predictions', {
+@@ -4208,6 +4212,7 @@ KEY_WORDS: [keywords separated by commas]`,
+       });
+       const prediction = await createRes.json();
+       if (prediction.error) return res.status(500).json({ error: prediction.error });
++      logApiUsage("replicate-video", userId, "/api/video/generate");
+       res.json({ id: prediction.id, status: prediction.status, output: prediction.output });
+     } catch (error) {
+       console.error('Video generation error:', error);
+@@ -4273,8 +4278,9 @@ KEY_WORDS: [keywords separated by commas]`,
+       const data = groqResData as any;
+       if (user?.email !== ADMIN_EMAIL && data.duration) {
+         const minutes = Math.ceil(data.duration / 60 / 5);
+-        const credits = getOrCreateCredits(userId, user?.email || '');
+-        credits.balance = Math.max(0, credits.balance - minutes);
++        const tier = (user as any)?.subscriptionTier || 'free';
++        const credits = await getOrCreateCredits(userId, tier);
++        await deductCredits(userId, Math.min(minutes, credits.balance));
+       }
+ 
+       res.json({
+-- 
+2.43.0
+

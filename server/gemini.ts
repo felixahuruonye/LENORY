@@ -704,11 +704,7 @@ function generateColorPaletteFromPrompt(prompt: string): [string, string, string
 }
 
 export async function chatWithGemini(messages: Array<{ role: string; content: string }>): Promise<string> {
-  try {
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
+  const attemptCall = async (): Promise<string> => {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: messages.map(m => ({
@@ -716,10 +712,26 @@ export async function chatWithGemini(messages: Array<{ role: string; content: st
         parts: [{ text: m.content }]
       })) as any
     });
+    return response.text || "";
+  };
 
-    const result = response.text;
+  try {
+    if (!apiKey) {
+      throw new Error("Gemini API key not configured");
+    }
+
+    let result = await attemptCall();
+
+    // Long/complex messages occasionally come back empty (safety filtering,
+    // transient API issue). One retry resolves most of these instead of
+    // failing the whole request.
     if (!result) {
-      throw new Error("Empty response from Gemini");
+      console.warn("Gemini returned empty response, retrying once...");
+      result = await attemptCall();
+    }
+
+    if (!result) {
+      throw new Error("Empty response from Gemini after retry");
     }
     return result;
   } catch (error) {

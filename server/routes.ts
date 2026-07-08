@@ -8,7 +8,8 @@ import os from "os";
 import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
-import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock } from "./adminTools";
+import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier } from "./adminTools";
+import { getOrCreateCredits, deductCredits, addCredits, getTierLimits } from "./creditsStore";
 import { storage } from "./storage";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
@@ -344,7 +345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
-      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced, overrideResponse } = req.body;
+      let { content, sessionId, includeUserContext, context: extraContext, isAdvanced, overrideResponse, isLongPaste } = req.body;
 
       if (!content?.trim()) {
         return res.status(400).json({ message: "Message content is required" });
@@ -356,18 +357,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
 
-      // ── CREDIT CHECK (1 credit per chat message) ──────────────────────────
+      // ── CREDIT CHECK (1 credit per chat message, +12 for long-paste-as-file) ──
       if (user?.email !== ADMIN_EMAIL) {
-        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
-        if (credits.balance < 1) {
+        const tier = (user as any)?.subscriptionTier || 'free';
+        const totalCost = 1 + (isLongPaste ? 12 : 0);
+        const credits = await getOrCreateCredits(userId, tier);
+        if (credits.balance < totalCost) {
           return res.status(402).json({
-            message: "You've run out of credits. You earn 10 free credits each day, or top up for more.",
+            message: isLongPaste
+              ? "That long paste needs 13 credits to process (1 + 12 for the attachment) and your balance is too low."
+              : "You've run out of credits. You earn 10 free credits each day, or top up for more.",
             error: "INSUFFICIENT_CREDITS",
             balance: credits.balance,
           });
         }
-        credits.balance -= 1;
-        credits.monthlyUsed += 1;
+        await deductCredits(userId, totalCost);
       }
       // ──────────────────────────────────────────────────────────────────────
 
@@ -537,6 +541,14 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
         const noteText = currentSession.summary.substring(noteContextMarker.length);
         systemMessage += `\n\n## THE STUDENT'S UPLOADED NOTE (answer strictly based on this, do not use outside knowledge unless the note doesn't cover it — say so if it doesn't):\n${noteText}`;
       }
+
+      // SECURITY FIX: never trust the client's isAdvanced flag directly — a free
+      // user could send isAdvanced:true and get the pricier model for free.
+      // Advanced mode is now only honored if the user's real, server-verified
+      // tier actually allows it.
+      const realUserTier = (user as any)?.subscriptionTier || 'free';
+      const canUseAdvanced = realUserTier === 'pro' || realUserTier === 'premium' || user?.email === ADMIN_EMAIL;
+      isAdvanced = !!isAdvanced && canUseAdvanced;
 
       if (isAdvanced) {
         systemMessage += `\n\n## ADVANCED MODE:\nYou are acting as a Technical/Project Specialist. Provide deep analysis, accurate solutions, and help with complex technical tasks.`;
@@ -719,14 +731,16 @@ You are NOT limited to being a tutor. You are a fully capable AI that can:
       // CRITICAL FIX: Don't add LENORY branding to the AI response itself
       // The response should be pure - branding stays in UI, not in generated content
       // This prevents AI from overwriting user's requested branding on websites, images, PDFs
+      logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
       res.json({ 
         success: true, 
         message: aiResponse  // Plain response - NO branding injection
       });
     } catch (error) {
       console.error("Error sending message:", error);
+      logAdminError("/api/chat/send", error);
       const errorMsg = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ message: "Failed to send message" });
+      res.status(500).json({ message: errorMsg.includes("Empty response") ? "LENORY had trouble with that message — it may be too long or complex. Try breaking it into smaller parts." : "Failed to send message. Please try again." });
     }
   });
 
@@ -918,6 +932,38 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
       res.json(getRecentErrors());
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch errors" });
+    }
+  });
+
+  // Real per-provider API call counts + real Stability credit balance
+  app.get('/api/admin/api-usage', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const [usage, stabilityBalance] = await Promise.all([
+        getApiUsageSummary(),
+        getStabilityBalance(),
+      ]);
+      res.json({ usage, stabilityBalance });
+    } catch (error) {
+      logAdminError("/api/admin/api-usage", error);
+      res.status(500).json({ message: "Failed to fetch API usage" });
+    }
+  });
+
+  // Which model/tier combination is actually being used, last 7 days
+  app.get('/api/admin/model-usage-by-tier', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      res.json(await getModelUsageByTier());
+    } catch (error) {
+      logAdminError("/api/admin/model-usage-by-tier", error);
+      res.status(500).json({ message: "Failed to fetch model usage" });
     }
   });
 
@@ -1355,7 +1401,8 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
         const existingNotes = await storage.getFileUploadsByUser(userId);
         const isBeyondFreeLimit = existingNotes.length >= 10;
         if (isBeyondFreeLimit) {
-          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+          const tier = (user as any)?.subscriptionTier || 'free';
+          const credits = await getOrCreateCredits(userId, tier);
           if (credits.balance < 20) {
             return res.status(402).json({
               message: "You've used your 10 free note uploads. Uploading more notes costs 20 credits each, and your balance is too low.",
@@ -1363,8 +1410,7 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
               balance: credits.balance,
             });
           }
-          credits.balance -= 20;
-          credits.monthlyUsed += 20;
+          await deductCredits(userId, 20);
           creditsCharged = 20;
         }
       }
@@ -1412,7 +1458,8 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
       if (user?.email !== ADMIN_EMAIL) {
         const existingNotes = await storage.getFileUploadsByUser(userId);
         if (existingNotes.length >= 10) {
-          const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+          const tier = (user as any)?.subscriptionTier || 'free';
+          const credits = await getOrCreateCredits(userId, tier);
           if (credits.balance < 20) {
             return res.status(402).json({
               message: "You've used your 10 free note uploads. Saving more notes costs 20 credits each, and your balance is too low.",
@@ -1420,8 +1467,7 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
               balance: credits.balance,
             });
           }
-          credits.balance -= 20;
-          credits.monthlyUsed += 20;
+          await deductCredits(userId, 20);
           creditsCharged = 20;
         }
       }
@@ -2671,8 +2717,7 @@ KEY_WORDS: [keywords separated by commas]`,
       }
 
       const image = await generateImageWithLENORY(prompt);
-      
-      const stored = await storage.createGeneratedImage({
+      logApiUsage("stability-image", userId, "/api/generate-image");      const stored = await storage.createGeneratedImage({
         userId,
         prompt,
         imageUrl: image.url,
@@ -3108,12 +3153,14 @@ KEY_WORDS: [keywords separated by commas]`,
       let creditsDeducted = 0;
       if (user?.email !== ADMIN_EMAIL_CHECK && durationSeconds > 0) {
         const durationMinutes = Math.ceil(durationSeconds / 60);
-        const credits = getOrCreateCredits(userId, user?.email || '', (user as any)?.subscriptionTier || 'free');
+        const tier = (user as any)?.subscriptionTier || 'free';
+        const credits = await getOrCreateCredits(userId, tier);
         creditsDeducted = Math.min(durationMinutes, credits.balance);
-        credits.balance -= creditsDeducted;
+        await deductCredits(userId, creditsDeducted);
         console.log(`💳 Deducted ${creditsDeducted} credits for ${durationMinutes} min transcription`);
       }
 
+      logApiUsage(engineUsed, userId, "/api/transcribe");
       res.json({
         text: transcriptText,
         duration_seconds: durationSeconds,
@@ -3830,9 +3877,9 @@ KEY_WORDS: [keywords separated by commas]`,
         } as any);
 
         // Top up credits immediately to the new tier's allowance
-        const { dailyAdd, maxBalance } = getTierLimits(tierId);
-        const credits = getOrCreateCredits(userId, event.data.customer?.email, tierId);
-        credits.balance = Math.min(credits.balance + dailyAdd, maxBalance);
+        const { dailyAdd } = getTierLimits(tierId);
+        await getOrCreateCredits(userId, tierId); // ensure a row exists first
+        await addCredits(userId, dailyAdd, tierId);
 
         console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
       } else if (event.event === "subscription.disable" || event.event === "subscription.not_renew") {
@@ -3879,64 +3926,9 @@ KEY_WORDS: [keywords separated by commas]`,
   // ─────────────────────────────────────────────────────────────────────────────
   const ADMIN_EMAIL = 'felixahuruonye@gmail.com';
 
-  interface CreditData {
-    balance: number;
-    monthlyUsed: number;
-    lastMonthlyReset: string; // YYYY-MM
-    lastDailyReset: string;   // YYYY-MM-DD
-    dailyGiven: number;
-  }
-  const userCreditsStore = new Map<string, CreditData>();
-
-  // ── SINGLE SOURCE OF TRUTH for credit limits per tier ──────────────────────
-  // Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
-  // A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
-  // which costs roughly ₦5 per message at current USD/NGN rates. These numbers
-  // keep free-tier cost exposure low while paid tiers stay comfortably profitable
-  // even under conservative usage. Adjust here — and only here — as real usage
-  // data comes in from the admin dashboard.
-  const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
-    free: { dailyAdd: 10, maxBalance: 30 },
-    pro: { dailyAdd: 60, maxBalance: 180 },
-    premium: { dailyAdd: 150, maxBalance: 450 },
-  };
-  function getTierLimits(tier: string) {
-    return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
-  }
-
-  function getMonthKey() { return new Date().toISOString().slice(0, 7); }
-  function getDayKey() { return new Date().toISOString().slice(0, 10); }
-
-  function getOrCreateCredits(userId: string, userEmail?: string, tier = 'free'): CreditData {
-    if (!userCreditsStore.has(userId)) {
-      const initial = getTierLimits(tier);
-      userCreditsStore.set(userId, {
-        balance: initial.dailyAdd,
-        monthlyUsed: 0,
-        lastMonthlyReset: getMonthKey(),
-        lastDailyReset: getDayKey(),
-        dailyGiven: initial.dailyAdd,
-      });
-    }
-    const data = userCreditsStore.get(userId)!;
-    if (userEmail === ADMIN_EMAIL) {
-      data.balance = 9999;
-      return data;
-    }
-    const { dailyAdd, maxBalance } = getTierLimits(tier);
-    const today = getDayKey();
-    if (data.lastDailyReset !== today) {
-      data.balance = Math.min(data.balance + dailyAdd, maxBalance);
-      data.lastDailyReset = today;
-      data.dailyGiven = dailyAdd;
-    }
-    const thisMonth = getMonthKey();
-    if (data.lastMonthlyReset !== thisMonth) {
-      data.monthlyUsed = 0;
-      data.lastMonthlyReset = thisMonth;
-    }
-    return data;
-  }
+  // Credits are now handled by ./creditsStore.ts, backed by real Supabase
+  // storage — see getOrCreateCredits, deductCredits, addCredits, getTierLimits
+  // imported near the top of this file. The old in-memory Map is gone.
 
   // Alias for /api/credits used by the Chat UI
   app.get('/api/user/credits', supabaseAuth, async (req: any, res: Response) => {
@@ -3944,7 +3936,7 @@ KEY_WORDS: [keywords separated by commas]`,
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
+      const credits = await getOrCreateCredits(userId, tier);
       const { maxBalance } = getTierLimits(tier);
       res.json({
         credits: credits.balance,
@@ -3963,7 +3955,7 @@ KEY_WORDS: [keywords separated by commas]`,
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
+      const credits = await getOrCreateCredits(userId, tier);
       const { dailyAdd, maxBalance } = getTierLimits(tier);
       res.json({
         balance: credits.balance,
@@ -3988,13 +3980,12 @@ KEY_WORDS: [keywords separated by commas]`,
         return res.json({ success: true, balance: 9999, message: "Admin: unlimited" });
       }
       const tier = user?.subscriptionTier || 'free';
-      const credits = getOrCreateCredits(userId, user?.email || '', tier);
+      const credits = await getOrCreateCredits(userId, tier);
       if (credits.balance < amount) {
         return res.status(402).json({ error: "Insufficient credits", balance: credits.balance });
       }
-      credits.balance -= amount;
-      credits.monthlyUsed += amount;
-      res.json({ success: true, balance: credits.balance });
+      const newBalance = await deductCredits(userId, amount);
+      res.json({ success: true, balance: newBalance ?? (credits.balance - amount) });
     } catch (error) {
       res.status(500).json({ message: "Failed to deduct credits" });
     }
@@ -4042,8 +4033,10 @@ KEY_WORDS: [keywords separated by commas]`,
       const data = await verifyRes.json();
       if (data.data?.status === 'success') {
         const { userId, creditAmount } = data.data.metadata;
-        const credits = getOrCreateCredits(userId);
-        credits.balance += Number(creditAmount);
+        const user = await storage.getUser(userId);
+        const tier = (user as any)?.subscriptionTier || 'free';
+        await getOrCreateCredits(userId, tier);
+        await addCredits(userId, Number(creditAmount), tier, true); // uncapped — this was a direct purchase
         res.redirect('/dashboard?topup=success');
       } else {
         res.redirect('/pricing?topup=failed');
@@ -4060,11 +4053,21 @@ KEY_WORDS: [keywords separated by commas]`,
       if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
       const { userId } = req.params;
       const { amount, action } = req.body; // action: 'add' | 'set' | 'deduct'
-      const credits = getOrCreateCredits(userId);
-      if (action === 'set') credits.balance = Number(amount);
-      else if (action === 'add') credits.balance += Number(amount);
-      else if (action === 'deduct') credits.balance = Math.max(0, credits.balance - Number(amount));
-      res.json({ success: true, balance: credits.balance });
+      const targetUser = await storage.getUser(userId);
+      const tier = (targetUser as any)?.subscriptionTier || 'free';
+      const credits = await getOrCreateCredits(userId, tier);
+      let newBalance = credits.balance;
+      if (action === 'set') {
+        newBalance = Number(amount);
+        await addCredits(userId, newBalance - credits.balance, tier, true);
+      } else if (action === 'add') {
+        await addCredits(userId, Number(amount), tier, true);
+        newBalance = credits.balance + Number(amount);
+      } else if (action === 'deduct') {
+        const deducted = await deductCredits(userId, Math.min(Number(amount), credits.balance));
+        newBalance = deducted ?? Math.max(0, credits.balance - Number(amount));
+      }
+      res.json({ success: true, balance: newBalance });
     } catch (error) {
       res.status(500).json({ message: "Failed to adjust credits" });
     }
@@ -4174,18 +4177,19 @@ KEY_WORDS: [keywords separated by commas]`,
   app.post('/api/video/generate', supabaseAuth, async (req: any, res: Response) => {
     try {
       const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
-      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add your Replicate token in Replit Secrets." });
+      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add REPLICATE_API_TOKEN in Render environment variables." });
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "prompt is required" });
       // Deduct credits (video = 5 credits)
       const userId = req.userId;
       const user = await storage.getUser(userId);
       if (user?.email !== ADMIN_EMAIL) {
-        const credits = getOrCreateCredits(userId, user?.email || '');
+        const tier = (user as any)?.subscriptionTier || 'free';
+        const credits = await getOrCreateCredits(userId, tier);
         if (credits.balance < 5) {
           return res.status(402).json({ error: "Insufficient credits. Video generation costs 5 credits." });
         }
-        credits.balance -= 5;
+        await deductCredits(userId, 5);
       }
       // Start prediction with Replicate
       const createRes = await fetch('https://api.replicate.com/v1/models/anotherjesse/zeroscope-v2-xl/predictions', {
@@ -4208,6 +4212,7 @@ KEY_WORDS: [keywords separated by commas]`,
       });
       const prediction = await createRes.json();
       if (prediction.error) return res.status(500).json({ error: prediction.error });
+      logApiUsage("replicate-video", userId, "/api/video/generate");
       res.json({ id: prediction.id, status: prediction.status, output: prediction.output });
     } catch (error) {
       console.error('Video generation error:', error);
@@ -4273,8 +4278,9 @@ KEY_WORDS: [keywords separated by commas]`,
       const data = groqResData as any;
       if (user?.email !== ADMIN_EMAIL && data.duration) {
         const minutes = Math.ceil(data.duration / 60 / 5);
-        const credits = getOrCreateCredits(userId, user?.email || '');
-        credits.balance = Math.max(0, credits.balance - minutes);
+        const tier = (user as any)?.subscriptionTier || 'free';
+        const credits = await getOrCreateCredits(userId, tier);
+        await deductCredits(userId, Math.min(minutes, credits.balance));
       }
 
       res.json({
