@@ -66,6 +66,7 @@ export async function getStabilityBalance(): Promise<{ available: boolean; credi
   try {
     const res = await fetch("https://api.stability.ai/v1/user/balance", {
       headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(3000), // never let this hang a whole chat message
     });
     if (!res.ok) return { available: false, error: `Stability API returned ${res.status}` };
     const data = await res.json();
@@ -186,7 +187,13 @@ export async function getAdminOverview() {
 
 // Compact text block safe to inject directly into the admin AI's system prompt.
 // Every line here is a real fetched fact — nothing invented.
+let cachedAdminBlock: { value: string; expiresAt: number } | null = null;
+const ADMIN_BLOCK_CACHE_MS = 30_000; // 30 seconds — fresh enough for admin chat, far fewer calls
+
 export async function buildAdminContextBlock(): Promise<string> {
+  if (cachedAdminBlock && cachedAdminBlock.expiresAt > Date.now()) {
+    return cachedAdminBlock.value;
+  }
   try {
     const overview = await getAdminOverview();
     const keys = getApiKeyStatus();
@@ -200,7 +207,7 @@ export async function buildAdminContextBlock(): Promise<string> {
       : `unavailable (${usage.reason})`;
     const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
 
-    return `
+    const block = `
 ## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
 - Total users: ${overview.totalUsers}
 - Signups today: ${overview.signupsToday}
@@ -212,6 +219,9 @@ export async function buildAdminContextBlock(): Promise<string> {
 - Stability AI credit balance: ${stabilityLine}
 - Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
 (Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
+
+    cachedAdminBlock = { value: block, expiresAt: Date.now() + ADMIN_BLOCK_CACHE_MS };
+    return block;
   } catch (e) {
     return `\n## SYSTEM DATA UNAVAILABLE: Could not fetch live stats (${e instanceof Error ? e.message : String(e)}). Tell Felix the data fetch failed — do NOT invent numbers to fill the gap.`;
   }

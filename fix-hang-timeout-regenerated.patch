@@ -1,0 +1,113 @@
+From a3db078ce5f18193c2b62716902447fda64004d3 Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Wed, 8 Jul 2026 20:38:34 +0000
+Subject: [PATCH] Fix potential hang: add timeout to Stability balance check,
+ cache admin data block
+
+---
+ batch2_credits_migration_fixed.sql | 47 ++++++++++++++++++++++++++++++
+ server/adminTools.ts               | 12 +++++++-
+ 2 files changed, 58 insertions(+), 1 deletion(-)
+ create mode 100644 batch2_credits_migration_fixed.sql
+
+diff --git a/batch2_credits_migration_fixed.sql b/batch2_credits_migration_fixed.sql
+new file mode 100644
+index 0000000..72fe6f2
+--- /dev/null
++++ b/batch2_credits_migration_fixed.sql
+@@ -0,0 +1,47 @@
++-- Batch 2 migration (FIXED) — run this in Supabase → SQL Editor
++-- Adds real persistent credit storage and API usage tracking.
++-- Fix: users.id is VARCHAR in this database, not UUID — corrected below.
++
++-- If your previous attempt partially created anything, clean up first:
++DROP TABLE IF EXISTS public.user_credits;
++DROP TABLE IF EXISTS public.api_usage_events;
++
++-- ── Credits: the real source of truth, replacing the old in-memory Map ──────
++CREATE TABLE public.user_credits (
++  user_id VARCHAR PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
++  balance INTEGER NOT NULL DEFAULT 0,
++  monthly_used INTEGER NOT NULL DEFAULT 0,
++  daily_given INTEGER NOT NULL DEFAULT 0,
++  last_daily_reset DATE NOT NULL DEFAULT CURRENT_DATE,
++  last_monthly_reset DATE NOT NULL DEFAULT CURRENT_DATE,
++  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
++);
++
++ALTER TABLE public.user_credits ENABLE ROW LEVEL SECURITY;
++
++DROP POLICY IF EXISTS "Users can view own credits" ON public.user_credits;
++CREATE POLICY "Users can view own credits" ON public.user_credits
++  FOR SELECT USING (auth.uid()::varchar = user_id);
++
++GRANT ALL ON public.user_credits TO authenticated;
++GRANT ALL ON public.user_credits TO service_role;
++
++-- ── API usage tracking: real call counts per provider, for the admin dashboard ──
++CREATE TABLE public.api_usage_events (
++  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
++  provider VARCHAR(50) NOT NULL,
++  endpoint VARCHAR(100),
++  user_id VARCHAR,
++  created_at TIMESTAMP DEFAULT NOW() NOT NULL
++);
++
++CREATE INDEX IF NOT EXISTS idx_api_usage_provider_time ON public.api_usage_events(provider, created_at);
++
++ALTER TABLE public.api_usage_events ENABLE ROW LEVEL SECURITY;
++
++DROP POLICY IF EXISTS "Service role full access to usage events" ON public.api_usage_events;
++CREATE POLICY "Service role full access to usage events" ON public.api_usage_events
++  FOR ALL USING (auth.role() = 'service_role');
++
++GRANT ALL ON public.api_usage_events TO service_role;
++GRANT ALL ON public.api_usage_events TO authenticated;
+diff --git a/server/adminTools.ts b/server/adminTools.ts
+index 3690ff7..0965c06 100644
+--- a/server/adminTools.ts
++++ b/server/adminTools.ts
+@@ -66,6 +66,7 @@ export async function getStabilityBalance(): Promise<{ available: boolean; credi
+   try {
+     const res = await fetch("https://api.stability.ai/v1/user/balance", {
+       headers: { Authorization: `Bearer ${key}` },
++      signal: AbortSignal.timeout(3000), // never let this hang a whole chat message
+     });
+     if (!res.ok) return { available: false, error: `Stability API returned ${res.status}` };
+     const data = await res.json();
+@@ -186,7 +187,13 @@ export async function getAdminOverview() {
+ 
+ // Compact text block safe to inject directly into the admin AI's system prompt.
+ // Every line here is a real fetched fact — nothing invented.
++let cachedAdminBlock: { value: string; expiresAt: number } | null = null;
++const ADMIN_BLOCK_CACHE_MS = 30_000; // 30 seconds — fresh enough for admin chat, far fewer calls
++
+ export async function buildAdminContextBlock(): Promise<string> {
++  if (cachedAdminBlock && cachedAdminBlock.expiresAt > Date.now()) {
++    return cachedAdminBlock.value;
++  }
+   try {
+     const overview = await getAdminOverview();
+     const keys = getApiKeyStatus();
+@@ -200,7 +207,7 @@ export async function buildAdminContextBlock(): Promise<string> {
+       : `unavailable (${usage.reason})`;
+     const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
+ 
+-    return `
++    const block = `
+ ## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
+ - Total users: ${overview.totalUsers}
+ - Signups today: ${overview.signupsToday}
+@@ -212,6 +219,9 @@ export async function buildAdminContextBlock(): Promise<string> {
+ - Stability AI credit balance: ${stabilityLine}
+ - Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
+ (Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
++
++    cachedAdminBlock = { value: block, expiresAt: Date.now() + ADMIN_BLOCK_CACHE_MS };
++    return block;
+   } catch (e) {
+     return `\n## SYSTEM DATA UNAVAILABLE: Could not fetch live stats (${e instanceof Error ? e.message : String(e)}). Tell Felix the data fetch failed — do NOT invent numbers to fill the gap.`;
+   }
+-- 
+2.43.0
+
