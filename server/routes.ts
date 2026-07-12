@@ -4177,7 +4177,11 @@ KEY_WORDS: [keywords separated by commas]`,
   app.post('/api/video/generate', supabaseAuth, async (req: any, res: Response) => {
     try {
       const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
-      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured. Add REPLICATE_API_TOKEN in Render environment variables." });
+      if (!replicateToken) return res.status(500).json({ error: "Video generation not configured on this server." });
+      // Premium-only feature
+      if ((user as any)?.subscriptionTier !== 'premium' && user?.email !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: "Video generation is only available in Premium plan." });
+      }
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "prompt is required" });
       // Deduct credits (video = 5 credits)
@@ -4245,7 +4249,7 @@ KEY_WORDS: [keywords separated by commas]`,
   app.post('/api/groq/transcribe', supabaseAuth, groqUpload.single('audio'), async (req: any, res: Response) => {
     try {
       const apiKey = process.env.GROQ_API_KEY;
-      if (!apiKey) return res.status(500).json({ error: "Groq not configured. Add GROQ_API_KEY to Replit Secrets." });
+      if (!apiKey) return res.status(500).json({ error: "Speech-to-text is temporarily unavailable." });
       if (!req.file) return res.status(400).json({ error: "No audio file provided." });
 
       const { language = 'en' } = req.body;
