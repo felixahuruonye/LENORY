@@ -334,6 +334,7 @@ export default function Chat() {
   const urlSessionId = new URLSearchParams(searchString).get("sessionId");
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
   const [message, setMessage] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<{ id: string; file: File; previewUrl?: string }[]>([]);
   const [pastedFile, setPastedFile] = useState<{ name: string; content: string } | null>(null);
   const LONG_PASTE_THRESHOLD = 2000; // characters — matches Claude-style paste-as-file UX
 
@@ -383,32 +384,73 @@ export default function Chat() {
   };
 
   // ─── File analyze ─────────────────────────────────────────────────────────
-  const handleFileAnalyze = async (file: File) => {
+  const addFilesToPending = (files: FileList | File[]) => {
     setShowPlusMenu(false);
-    if (!file) return;
-    if (file.size > 20 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Max file size is 20MB", variant: "destructive" });
-      return;
+    const fileArray = Array.from(files);
+    const oversized = fileArray.filter(f => f.size > 20 * 1024 * 1024);
+    if (oversized.length > 0) {
+      toast({ title: "File too large", description: `${oversized.map(f => f.name).join(", ")} exceeds the 20MB limit`, variant: "destructive" });
     }
+    const validFiles = fileArray.filter(f => f.size <= 20 * 1024 * 1024);
+    const newPending = validFiles.map(file => ({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+    }));
+    setPendingFiles(prev => [...prev, ...newPending]);
+  };
+
+  const removePendingFile = (id: string) => {
+    setPendingFiles(prev => {
+      const target = prev.find(f => f.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter(f => f.id !== id);
+    });
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(",")[1];
-      const mimeType = file.type || "application/octet-stream";
-      const fileName = file.name;
-      const userMsg = file.type.startsWith("image/") ? `[Image: ${fileName}]` : `[File: ${fileName}]`;
-      toast({ title: "Analyzing file...", description: `Sending ${fileName} to LENORY AI` });
-      try {
-        const res = await apiRequest("POST", "/api/chat/analyze-vision", { base64, mimeType, fileName, prompt: "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions.", sessionId: currentSessionId });
-        const data = await res.json();
-        if (data.analysis) {
-          setMessage("");
-          await handleSendMessageWithContent(`Analyze this file: ${fileName}`, `I analyzed **${fileName}**:\n\n${data.analysis}`);
-        }
-      } catch {
-        toast({ title: "Analysis failed", description: "Could not analyze file. Try again.", variant: "destructive" });
-      }
-    };
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+
+  const sendPendingFilesWithPrompt = async (userPrompt: string) => {
+    if (pendingFiles.length === 0) return;
+    const filesToSend = [...pendingFiles];
+    setPendingFiles([]);
+    setIsLoading(true);
+    const promptToUse = userPrompt.trim() || "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions.";
+    const fileNames = filesToSend.map(f => f.file.name).join(", ");
+    toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
+    try {
+      const analyses: string[] = [];
+      for (const { file } of filesToSend) {
+        const base64 = await fileToBase64(file);
+        const mimeType = file.type || "application/octet-stream";
+        const res = await apiRequest("POST", "/api/chat/analyze-vision", {
+          base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
+        });
+        if (!res.ok) {
+          let errMsg = `Could not analyze ${file.name}`;
+          try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
+          toast({ title: "Analysis failed", description: errMsg, variant: "destructive" });
+          continue;
+        }
+        const data = await res.json();
+        if (data.analysis) analyses.push(`**${file.name}:**\n${data.analysis}`);
+      }
+      filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
+      if (analyses.length > 0) {
+        const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
+        await handleSendMessageWithContent(
+          userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel,
+          analyses.join("\n\n")
+        );
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSendMessageWithContent = async (userContent: string, assistantContent: string) => {
@@ -602,7 +644,15 @@ export default function Chat() {
   };
 
   const handleSendMessage = async () => {
-    if ((!message.trim() && !pastedFile) || isLoading) return;
+    if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
+
+    // Files attached — send them with whatever prompt (or default) is typed
+    if (pendingFiles.length > 0) {
+      const userPrompt = message.trim();
+      resetInput();
+      await sendPendingFilesWithPrompt(userPrompt);
+      return;
+    }
 
     // Feature navigation
     const featureRoute = detectFeatureOpen(message);
@@ -1133,6 +1183,29 @@ export default function Chat() {
               </div>
             )}
 
+            {/* Attached files preview chips */}
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
+                {pendingFiles.map(pf => (
+                  <div key={pf.id} className="relative flex items-center gap-1.5 bg-background border border-border rounded-lg pl-1.5 pr-6 py-1" data-testid={`chip-file-${pf.id}`}>
+                    {pf.previewUrl ? (
+                      <img src={pf.previewUrl} alt={pf.file.name} className="w-6 h-6 rounded object-cover flex-shrink-0" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                    )}
+                    <span className="text-xs max-w-[100px] truncate">{pf.file.name}</span>
+                    <button
+                      onClick={() => removePendingFile(pf.id)}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      data-testid={`button-remove-file-${pf.id}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Long paste → file chip, Claude-style */}
             {pastedFile && (
               <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
@@ -1160,6 +1233,7 @@ export default function Chat() {
                   placeholder={
                     isListening ? "Listening..." :
                     videoMode ? "Describe your video..." :
+                    pendingFiles.length > 0 ? "Add a prompt for these files (optional)..." :
                     "How can I help you today?"
                   }
                   className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground/60 text-sm leading-relaxed outline-none border-none min-h-[44px] max-h-[220px] overflow-y-auto"
@@ -1250,9 +1324,9 @@ export default function Chat() {
                   {/* Send */}
                   <button
                     onClick={handleSendMessage}
-                    disabled={!message.trim() || isLoading || isSearching}
+                    disabled={(!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching}
                     className={`p-2 rounded-xl transition-all ${
-                      !message.trim() || isLoading || isSearching
+                      (!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching
                         ? "text-muted-foreground/30 cursor-not-allowed"
                         : videoMode
                           ? "bg-purple-600 text-white"
@@ -1280,10 +1354,10 @@ export default function Chat() {
       </div>
 
       {/* Hidden file inputs */}
-      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" data-testid="input-file-upload"
-        onChange={e => { const f = e.target.files?.[0]; if (f) handleFileAnalyze(f); e.target.value = ""; }} />
+      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" data-testid="input-file-upload"
+        onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
       <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" data-testid="input-camera-upload"
-        onChange={e => { const f = e.target.files?.[0]; if (f) handleFileAnalyze(f); e.target.value = ""; }} />
+        onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
     </div>
   );
 }
