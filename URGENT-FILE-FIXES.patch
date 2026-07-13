@@ -1,0 +1,123 @@
+From fbda34d4b54420e257378e70aa2ae62a82764e4a Mon Sep 17 00:00:00 2001
+From: "Felix (via Claude)" <felix@lenory.app>
+Date: Mon, 13 Jul 2026 11:17:29 +0000
+Subject: [PATCH] Fix Ask LENORY multi-file hang/vanish bug
+ (parallel+timeout+never lose files), enable multi-upload in Knowledge Base
+
+---
+ client/src/pages/Chat.tsx  | 49 +++++++++++++++++++++++++-------------
+ client/src/pages/Notes.tsx | 23 ++++++++++++++----
+ 2 files changed, 52 insertions(+), 20 deletions(-)
+
+diff --git a/client/src/pages/Chat.tsx b/client/src/pages/Chat.tsx
+index 3bb90ef..731f88e 100644
+--- a/client/src/pages/Chat.tsx
++++ b/client/src/pages/Chat.tsx
+@@ -418,29 +418,46 @@ export default function Chat() {
+   const sendPendingFilesWithPrompt = async (userPrompt: string) => {
+     if (pendingFiles.length === 0) return;
+     const filesToSend = [...pendingFiles];
+-    setPendingFiles([]);
+     setIsLoading(true);
+     const promptToUse = userPrompt.trim() || "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions.";
+     const fileNames = filesToSend.map(f => f.file.name).join(", ");
+     toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
+     try {
+-      const analyses: string[] = [];
+-      for (const { file } of filesToSend) {
+-        const base64 = await fileToBase64(file);
+-        const mimeType = file.type || "application/octet-stream";
+-        const res = await apiRequest("POST", "/api/chat/analyze-vision", {
+-          base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
+-        });
+-        if (!res.ok) {
+-          let errMsg = `Could not analyze ${file.name}`;
+-          try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
+-          toast({ title: "Analysis failed", description: errMsg, variant: "destructive" });
+-          continue;
++      // Process in parallel (not one-by-one) so multiple files don't compound
++      // into a timeout, and each gets its own hard timeout so a slow one can't
++      // hang the whole batch.
++      const results = await Promise.all(filesToSend.map(async ({ file }) => {
++        try {
++          const base64 = await fileToBase64(file);
++          const mimeType = file.type || "application/octet-stream";
++          const res = await Promise.race([
++            apiRequest("POST", "/api/chat/analyze-vision", {
++              base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
++            }),
++            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 45000)),
++          ]);
++          if (!res.ok) {
++            let errMsg = `Could not analyze ${file.name}`;
++            try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
++            return { file, ok: false, error: errMsg };
++          }
++          const data = await res.json();
++          return { file, ok: true, analysis: data.analysis || `(No analysis returned for ${file.name})` };
++        } catch (e) {
++          return { file, ok: false, error: e instanceof Error && e.message === "timeout" ? `${file.name} took too long to analyze` : `Failed to analyze ${file.name}` };
+         }
+-        const data = await res.json();
+-        if (data.analysis) analyses.push(`**${file.name}:**\n${data.analysis}`);
+-      }
++      }));
++
++      const analyses = results.filter(r => r.ok).map(r => `**${r.file.name}:**\n${(r as any).analysis}`);
++      const failures = results.filter(r => !r.ok);
++
+       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
++      setPendingFiles([]); // clear only now that we actually know the outcome
++
++      if (failures.length > 0) {
++        toast({ title: failures.length === filesToSend.length ? "Analysis failed" : "Some files failed", description: failures.map(f => (f as any).error).join(" | "), variant: "destructive" });
++      }
++
+       if (analyses.length > 0) {
+         const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
+         await handleSendMessageWithContent(
+diff --git a/client/src/pages/Notes.tsx b/client/src/pages/Notes.tsx
+index 5a48d34..065f71c 100644
+--- a/client/src/pages/Notes.tsx
++++ b/client/src/pages/Notes.tsx
+@@ -111,10 +111,25 @@ export default function Notes() {
+     },
+   });
+ 
+-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+-    const file = e.target.files?.[0];
+-    if (file) uploadMutation.mutate(file);
++  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
++    const files = e.target.files;
+     if (fileInputRef.current) fileInputRef.current.value = "";
++    if (!files || files.length === 0) return;
++    const fileArray = Array.from(files);
++    if (fileArray.length === 1) {
++      uploadMutation.mutate(fileArray[0]);
++      return;
++    }
++    // Multiple files: upload one at a time so credit balance checks (which
++    // depend on your running total) stay accurate instead of racing.
++    toast({ title: `Uploading ${fileArray.length} notes...` });
++    for (const file of fileArray) {
++      try {
++        await uploadMutation.mutateAsync(file);
++      } catch {
++        // Individual failure toast already shown by onError — continue with the rest
++      }
++    }
+   };
+ 
+   return (
+@@ -128,7 +143,7 @@ export default function Notes() {
+           <p className="text-muted-foreground text-sm">Upload your notes, then quiz yourself before exams.</p>
+         </div>
+         <div>
+-          <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt,.doc,.docx" className="hidden" onChange={handleFileSelect} />
++          <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt,.doc,.docx" multiple className="hidden" onChange={handleFileSelect} />
+           <Button onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
+             {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+             Upload Note
+-- 
+2.43.0
+

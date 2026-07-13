@@ -111,10 +111,25 @@ export default function Notes() {
     },
   });
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) uploadMutation.mutate(file);
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
+    if (fileArray.length === 1) {
+      uploadMutation.mutate(fileArray[0]);
+      return;
+    }
+    // Multiple files: upload one at a time so credit balance checks (which
+    // depend on your running total) stay accurate instead of racing.
+    toast({ title: `Uploading ${fileArray.length} notes...` });
+    for (const file of fileArray) {
+      try {
+        await uploadMutation.mutateAsync(file);
+      } catch {
+        // Individual failure toast already shown by onError — continue with the rest
+      }
+    }
   };
 
   return (
@@ -128,7 +143,7 @@ export default function Notes() {
           <p className="text-muted-foreground text-sm">Upload your notes, then quiz yourself before exams.</p>
         </div>
         <div>
-          <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt,.doc,.docx" className="hidden" onChange={handleFileSelect} />
+          <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt,.doc,.docx" multiple className="hidden" onChange={handleFileSelect} />
           <Button onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
             {uploadMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
             Upload Note

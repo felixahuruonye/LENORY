@@ -418,29 +418,46 @@ export default function Chat() {
   const sendPendingFilesWithPrompt = async (userPrompt: string) => {
     if (pendingFiles.length === 0) return;
     const filesToSend = [...pendingFiles];
-    setPendingFiles([]);
     setIsLoading(true);
     const promptToUse = userPrompt.trim() || "Analyze this file/image and provide a detailed explanation, extract any text, describe content, and answer any questions.";
     const fileNames = filesToSend.map(f => f.file.name).join(", ");
     toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
     try {
-      const analyses: string[] = [];
-      for (const { file } of filesToSend) {
-        const base64 = await fileToBase64(file);
-        const mimeType = file.type || "application/octet-stream";
-        const res = await apiRequest("POST", "/api/chat/analyze-vision", {
-          base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
-        });
-        if (!res.ok) {
-          let errMsg = `Could not analyze ${file.name}`;
-          try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
-          toast({ title: "Analysis failed", description: errMsg, variant: "destructive" });
-          continue;
+      // Process in parallel (not one-by-one) so multiple files don't compound
+      // into a timeout, and each gets its own hard timeout so a slow one can't
+      // hang the whole batch.
+      const results = await Promise.all(filesToSend.map(async ({ file }) => {
+        try {
+          const base64 = await fileToBase64(file);
+          const mimeType = file.type || "application/octet-stream";
+          const res = await Promise.race([
+            apiRequest("POST", "/api/chat/analyze-vision", {
+              base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 45000)),
+          ]);
+          if (!res.ok) {
+            let errMsg = `Could not analyze ${file.name}`;
+            try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
+            return { file, ok: false, error: errMsg };
+          }
+          const data = await res.json();
+          return { file, ok: true, analysis: data.analysis || `(No analysis returned for ${file.name})` };
+        } catch (e) {
+          return { file, ok: false, error: e instanceof Error && e.message === "timeout" ? `${file.name} took too long to analyze` : `Failed to analyze ${file.name}` };
         }
-        const data = await res.json();
-        if (data.analysis) analyses.push(`**${file.name}:**\n${data.analysis}`);
-      }
+      }));
+
+      const analyses = results.filter(r => r.ok).map(r => `**${r.file.name}:**\n${(r as any).analysis}`);
+      const failures = results.filter(r => !r.ok);
+
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
+      setPendingFiles([]); // clear only now that we actually know the outcome
+
+      if (failures.length > 0) {
+        toast({ title: failures.length === filesToSend.length ? "Analysis failed" : "Some files failed", description: failures.map(f => (f as any).error).join(" | "), variant: "destructive" });
+      }
+
       if (analyses.length > 0) {
         const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
         await handleSendMessageWithContent(
