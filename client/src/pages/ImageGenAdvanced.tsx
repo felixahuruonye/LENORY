@@ -234,12 +234,23 @@ export default function ImageGenAdvanced() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="w-full aspect-square bg-secondary/50 rounded-lg overflow-hidden">
+                    <div className="w-full aspect-square bg-secondary/50 rounded-lg overflow-hidden flex items-center justify-center">
                       <img
                         src={generatedImages[0].imageUrl}
                         alt={generatedImages[0].prompt}
                         className="w-full h-full object-cover"
                         data-testid="img-preview"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          target.style.display = 'none';
+                          const parent = target.parentElement;
+                          if (parent && !parent.querySelector('.img-error-msg')) {
+                            const msg = document.createElement('p');
+                            msg.className = 'img-error-msg text-sm text-muted-foreground text-center p-4';
+                            msg.textContent = 'Image failed to load. Try generating again.';
+                            parent.appendChild(msg);
+                          }
+                        }}
                       />
                     </div>
                     <p className="text-sm text-muted-foreground truncate">{generatedImages[0].prompt}</p>
@@ -319,23 +330,35 @@ export default function ImageGenAdvanced() {
                   <p className="text-xs text-muted-foreground">Be specific — describe scene, lighting, movement, style.</p>
                 </div>
 
-                <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg text-sm text-purple-300">
-                  <strong>Note:</strong> Video generation is available on the Premium plan. Each video costs 5 credits.
-                </div>
-
-                <Button
-                  size="lg"
-                  className="w-full bg-purple-600 hover:bg-purple-500 text-white"
-                  onClick={() => generateVideoMutation.mutate(videoPrompt)}
-                  disabled={generateVideoMutation.isPending || !videoPrompt.trim()}
-                  data-testid="button-generate-video"
-                >
-                  {generateVideoMutation.isPending ? (
-                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
-                  ) : (
-                    <><Film className="h-4 w-4 mr-2" />Generate Video (5 credits)</>
-                  )}
-                </Button>
+                {(user as any)?.subscriptionTier === 'premium' || user?.email === 'felixahuruonye@gmail.com' ? (
+                  <>
+                    <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg text-sm text-purple-300">
+                      <strong>Note:</strong> Each video costs 5 credits.
+                    </div>
+                    <Button
+                      size="lg"
+                      className="w-full bg-purple-600 hover:bg-purple-500 text-white"
+                      onClick={() => generateVideoMutation.mutate(videoPrompt)}
+                      disabled={generateVideoMutation.isPending || !videoPrompt.trim()}
+                      data-testid="button-generate-video"
+                    >
+                      {generateVideoMutation.isPending ? (
+                        <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+                      ) : (
+                        <><Film className="h-4 w-4 mr-2" />Generate Video (5 credits)</>
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-sm text-amber-300">
+                      <strong>Premium feature:</strong> Video generation is only available on the Premium plan.
+                    </div>
+                    <Button size="lg" className="w-full bg-amber-600 hover:bg-amber-500 text-white" asChild data-testid="button-upgrade-video">
+                      <Link href="/pricing">Upgrade to Premium</Link>
+                    </Button>
+                  </>
+                )}
               </CardContent>
             </Card>
 

@@ -1095,7 +1095,9 @@ class MemoryStorage implements IStorage {
   }
 
   async getGeneratedImagesByUser(userId: string) {
-    return Array.from(this.data.generatedImages.values()).filter(i => i.userId === userId);
+    return Array.from(this.data.generatedImages.values())
+      .filter(i => i.userId === userId)
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async deleteGeneratedImage(id: string) {
