@@ -106,7 +106,7 @@ export default function ImageGenAdvanced() {
       }
     },
     onError: () => {
-      toast({ title: "Video error", description: "Failed. Make sure REPLICATE_API_TOKEN is set in Secrets.", variant: "destructive" });
+      toast({ title: "Video error", description: "Video generation failed. Please try again.", variant: "destructive" });
     },
   });
 
@@ -320,7 +320,7 @@ export default function ImageGenAdvanced() {
                 </div>
 
                 <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg text-sm text-purple-300">
-                  <strong>Note:</strong> Video generation uses Replicate (Zeroscope). Add <code className="bg-black/20 px-1 rounded">REPLICATE_API_TOKEN</code> in Replit Secrets to enable this feature. Each video costs 5 credits.
+                  <strong>Note:</strong> Video generation is available on the Premium plan. Each video costs 5 credits.
                 </div>
 
                 <Button

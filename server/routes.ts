@@ -43,13 +43,18 @@ import { initializePayment, verifyPayment, convertNairaToKobo } from "./paystack
 import { nanoid as generateId } from "nanoid";
 
 import { registerChatRoutes } from "./replit_integrations/chat";
-import { registerImageRoutes } from "./replit_integrations/image";
+// registerImageRoutes import removed — see note below where it was called
 import { handleGeminiLiveConnection, GEMINI_VOICES } from "./geminiLive";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Wire up Replit AI Integrations
   registerChatRoutes(app);
-  registerImageRoutes(app);
+  // NOTE: registerImageRoutes() removed — it was a leftover from the old Replit
+  // setup, registered an old broken /api/generate-image handler (plain Gemini
+  // image modality, no Stability AI, no credits, no tier checks) that was
+  // silently winning over the real implementation further down this file,
+  // since Express uses the first matching route handler. This is why image
+  // generation looked broken no matter what was fixed in the real endpoint.
 
   // Auth routes (using Supabase JWT authentication)
   app.get('/api/auth/user', supabaseAuth, async (req: any, res: Response) => {
@@ -2717,7 +2722,8 @@ KEY_WORDS: [keywords separated by commas]`,
       }
 
       const image = await generateImageWithLENORY(prompt);
-      logApiUsage("stability-image", userId, "/api/generate-image");      const stored = await storage.createGeneratedImage({
+      logApiUsage("stability-image", userId, "/api/generate-image");
+      const stored = await storage.createGeneratedImage({
         userId,
         prompt,
         imageUrl: image.url,
@@ -4178,6 +4184,10 @@ KEY_WORDS: [keywords separated by commas]`,
     try {
       const replicateToken = process.env.REPLICATE_API_TOKEN || process.env['Replicate api'] || process.env['REPLICATE_API'];
       if (!replicateToken) return res.status(500).json({ error: "Video generation not configured on this server." });
+
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+
       // Premium-only feature
       if ((user as any)?.subscriptionTier !== 'premium' && user?.email !== ADMIN_EMAIL) {
         return res.status(403).json({ error: "Video generation is only available in Premium plan." });
@@ -4185,8 +4195,6 @@ KEY_WORDS: [keywords separated by commas]`,
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "prompt is required" });
       // Deduct credits (video = 5 credits)
-      const userId = req.userId;
-      const user = await storage.getUser(userId);
       if (user?.email !== ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
@@ -4195,31 +4203,43 @@ KEY_WORDS: [keywords separated by commas]`,
         }
         await deductCredits(userId, 5);
       }
-      // Start prediction with Replicate
-      const createRes = await fetch('https://api.replicate.com/v1/models/anotherjesse/zeroscope-v2-xl/predictions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${replicateToken}`,
-          'Content-Type': 'application/json',
-          Prefer: 'wait',
-        },
-        body: JSON.stringify({
-          input: {
-            prompt,
-            num_frames: 24,
-            fps: 8,
-            width: 576,
-            height: 320,
-            num_inference_steps: 20,
+      // Start prediction with Replicate — hard timeout so a slow/stuck request
+      // can never hang the whole response
+      let prediction: any;
+      try {
+        const createRes = await fetch('https://api.replicate.com/v1/models/anotherjesse/zeroscope-v2-xl/predictions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${replicateToken}`,
+            'Content-Type': 'application/json',
+            Prefer: 'wait',
           },
-        }),
-      });
-      const prediction = await createRes.json();
-      if (prediction.error) return res.status(500).json({ error: prediction.error });
+          body: JSON.stringify({
+            input: {
+              prompt,
+              num_frames: 24,
+              fps: 8,
+              width: 576,
+              height: 320,
+              num_inference_steps: 20,
+            },
+          }),
+          signal: AbortSignal.timeout(55000), // Replicate's "wait" header caps at 60s server-side
+        });
+        prediction = await createRes.json();
+      } catch (fetchErr) {
+        logAdminError("/api/video/generate", fetchErr);
+        return res.status(500).json({ error: "Video generation timed out. Try a shorter, simpler prompt, or try again." });
+      }
+      if (prediction.error) {
+        logAdminError("/api/video/generate (replicate)", new Error(JSON.stringify(prediction.error)));
+        return res.status(500).json({ error: typeof prediction.error === 'string' ? prediction.error : "Video generation failed on Replicate's side." });
+      }
       logApiUsage("replicate-video", userId, "/api/video/generate");
       res.json({ id: prediction.id, status: prediction.status, output: prediction.output });
     } catch (error) {
       console.error('Video generation error:', error);
+      logAdminError("/api/video/generate", error);
       res.status(500).json({ error: "Video generation failed" });
     }
   });
