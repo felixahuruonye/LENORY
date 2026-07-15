@@ -2715,18 +2715,18 @@ KEY_WORDS: [keywords separated by commas]`,
   app.post('/api/generate-image', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
-      const { prompt, relatedTopic } = req.body;
+      const { prompt, relatedTopic, style } = req.body;
 
       if (!prompt?.trim()) {
         return res.status(400).json({ message: "Prompt is required" });
       }
 
-      // ── Tier-based monthly image generation limits ────────────────────────
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const isAdmin = user?.email === ADMIN_EMAIL;
 
       if (!isAdmin) {
+        // ── Tier-based monthly image generation limits ────────────────────
         const MONTHLY_IMAGE_LIMITS: Record<string, number> = {
           free: 5,
           pro: 50,
@@ -2735,31 +2735,58 @@ KEY_WORDS: [keywords separated by commas]`,
         const limit = MONTHLY_IMAGE_LIMITS[tier] ?? 5;
         if (isFinite(limit)) {
           const allImages = await storage.getGeneratedImagesByUser(userId);
-          const thisMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const thisMonth = new Date().toISOString().slice(0, 7);
           const monthlyCount = allImages.filter((img: any) => {
             const created = img.createdAt || img.created_at || "";
             return typeof created === "string" ? created.startsWith(thisMonth) : false;
           }).length;
           if (monthlyCount >= limit) {
             return res.status(403).json({
-              message: `Image generation limit reached (${limit}/month on ${tier} plan). Upgrade your plan to generate more.`,
+              message: `Image generation limit reached (${limit}/month on ${tier} plan). Upgrade to generate more.`,
               limit,
               used: monthlyCount,
               tier,
             });
           }
         }
-      }
-      // ─────────────────────────────────────────────────────────────────────
 
-      const image = await generateImageWithLENORY(prompt);
+        // ── Credit check (2 credits per image) ───────────────────────────
+        const credits = await getOrCreateCredits(userId, tier);
+        if (credits.balance < 2) {
+          return res.status(403).json({
+            message: "Insufficient credits. You need at least 2 credits to generate an image.",
+            balance: credits.balance,
+          });
+        }
+      }
+
+      // Build effective prompt — include style hint so Gemini enhances it correctly
+      const styleHints: Record<string, string> = {
+        illustrated: "illustrated, vector art, flat design",
+        sketch: "pencil sketch, hand-drawn, monochrome line art",
+        "3d": "3D render, CGI, octane render, volumetric lighting",
+        watercolor: "watercolor painting, soft brush strokes, artistic",
+        neon: "neon glow, cyberpunk, dark background, neon lights",
+        photorealistic: "photorealistic, ultra-detailed, 8K, sharp focus",
+      };
+      const styleTag = styleHints[style] || "";
+      const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
+
+      const image = await generateImageWithLENORY(effectivePrompt);
       logApiUsage("stability-image", userId, "/api/generate-image");
+
       const stored = await storage.createGeneratedImage({
         userId,
         prompt,
         imageUrl: image.url,
-        relatedTopic
+        relatedTopic,
       });
+
+      // Deduct 2 credits after successful generation (admin is exempt)
+      if (!isAdmin) {
+        const newBalance = await deductCredits(userId, 2);
+        console.log(`💰 Deducted 2 credits for image generation — user ${userId}, new balance: ${newBalance}`);
+      }
 
       res.json(stored);
     } catch (error) {
@@ -4111,6 +4138,21 @@ KEY_WORDS: [keywords separated by commas]`,
   });
 
   // Admin: manually adjust credits
+  // Get credit balance for a specific user (admin only)
+  app.get('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const adminUser = await storage.getUser(req.userId);
+      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      const tier = (targetUser as any)?.subscriptionTier || 'free';
+      const credits = await getOrCreateCredits(userId, tier);
+      res.json({ balance: credits.balance, monthlyUsed: credits.monthlyUsed });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get credits" });
+    }
+  });
+
   app.post('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
@@ -4208,6 +4250,73 @@ KEY_WORDS: [keywords separated by commas]`,
     } catch (error) {
       console.error('AssemblyAI token error:', error);
       res.status(500).json({ error: "Token generation failed" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // VOICE CREDIT TRACKING
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Called by the frontend when a VAPI/voice call ends. Deducts 20 credits/minute.
+  app.post('/api/voice/end-call', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const { durationSeconds = 0 } = req.body;
+      const user = await storage.getUser(userId);
+      const isAdmin = user?.email === ADMIN_EMAIL;
+
+      if (isAdmin || durationSeconds <= 0) {
+        return res.json({ success: true, creditsDeducted: 0, durationSeconds, minutes: 0 });
+      }
+
+      const minutes = Math.ceil(durationSeconds / 60);
+      const creditsToDeduct = minutes * 20;
+      const newBalance = await deductCredits(userId, creditsToDeduct);
+      console.log(`🎙️ Voice call ended — user ${userId}, duration: ${durationSeconds}s (${minutes} min), deducted ${creditsToDeduct} credits, new balance: ${newBalance}`);
+      res.json({ success: true, creditsDeducted: creditsToDeduct, durationSeconds, minutes, newBalance });
+    } catch (error) {
+      console.error("Voice end-call credit error:", error);
+      res.status(500).json({ message: "Failed to process voice credits" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // YARNGPT TTS – Nigerian-accented text-to-speech proxy
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post('/api/tts/yarngpt', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { text, speaker = "idera" } = req.body;
+      if (!text) return res.status(400).json({ error: "text is required" });
+
+      // YarnGPT HuggingFace Space API
+      const hfResponse = await fetch("https://olamilekan-yarngpt.hf.space/run/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: [text.slice(0, 500), speaker] }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!hfResponse.ok) {
+        const errText = await hfResponse.text().catch(() => "");
+        console.warn(`YarnGPT failed (${hfResponse.status}): ${errText.slice(0, 200)}`);
+        return res.status(502).json({ error: "YarnGPT TTS service unavailable" });
+      }
+
+      const data: any = await hfResponse.json();
+      // HuggingFace Gradio format: { data: [{ name, data, is_file, ... }] }
+      const audioData = data?.data?.[0];
+      if (!audioData) return res.status(502).json({ error: "No audio data in YarnGPT response" });
+
+      // audioData can be { data: "base64...", mime_type: "audio/wav" } or a URL string
+      if (typeof audioData === "string" && audioData.startsWith("http")) {
+        return res.json({ audioUrl: audioData });
+      }
+      if (audioData?.data) {
+        return res.json({ audioBase64: audioData.data, mimeType: audioData.mime_type || "audio/wav" });
+      }
+      return res.json({ audioData });
+    } catch (error: any) {
+      console.error("YarnGPT TTS error:", error);
+      res.status(500).json({ error: "TTS request failed" });
     }
   });
 

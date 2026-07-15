@@ -1,0 +1,106 @@
+
+I need you to debug my image and video generation features in server/routes.ts, 
+server/gemini.ts, and client/src/pages/ImageGenAdvanced.tsx. 
+
+DO NOT touch: credit system (server/creditsStore.ts), chat functionality 
+(anything related to /api/chat/send), or admin tools (server/adminTools.ts). 
+Those are working and were recently fixed — leave them exactly as they are.
+
+Problem: When I generate an image via /api/generate-image, the API call 
+succeeds and credits ARE meant to be deducted, but I need you to verify:
+1. Credits are actually being deducted correctly for image generation 
+   (check the /api/generate-image endpoint in server/routes.ts) if so make it to show on the credit dashboard in dashboard page, and it should update admin page with the current credit balance of the user in admin page. 
+2. The generated image actually displays correctly on screen after 
+   generation (check client/src/pages/ImageGenAdvanced.tsx, the 
+   "Latest Image" section)
+3. Test on an actual mobile viewport (375px width) that the Create 
+   Studio page (client/src/pages/ImageGenAdvanced.tsx) fits the 
+   screen with no horizontal scrolling
+
+Go through the full request flow end-to-end: button click → API call → 
+Stability AI response → database save → frontend display → confirm each 
+step works before moving to the next. Show me exactly what you find broken 
+at each step before fixing it.
+
+Next fix:
+
+I need you to fix and build several connected features in my app (LENORY). 
+Work through them in order. Show me evidence (logs, test results, screenshots 
+of what you tested) at each step — don't just claim something works.
+
+FIRST: Run `git pull origin main` and confirm you're on the latest commit 
+before touching anything.
+
+DO NOT touch: server/creditsStore.ts internals, server/adminTools.ts, the 
+/api/chat/send text flow, or anything already working in image generation 
+(server/gemini.ts generateImageWithLENORY). If you need to reference these 
+files, read them, don't rewrite them.
+
+ADMIN TESTING ACCESS: felixahuruonye@gmail.com must have unrestricted access 
+to every feature across Free/Pro/Premium for testing — confirm this exists 
+everywhere tier checks are added (check ADMIN_EMAIL usage pattern already in 
+server/routes.ts and follow it).
+
+STEP 1 — Fix VAPI_PUBLIC_KEY error:
+- Check Render environment variables: confirm VAPI_PUBLIC_KEY is actually 
+  set and valid (not expired/revoked on Vapi's dashboard)
+- Find where it's used in client code (search for VAPI_PUBLIC_KEY or 
+  useVapi) and confirm it's being read correctly
+- Reproduce the "Voice call error" shown on the Live Voice Session screen — 
+  check browser console for the actual underlying error, show me the exact 
+  message
+
+STEP 2 — Rebuild the Voice settings tab completely:
+- The language selected in Settings > Voice must actually control what 
+  language/accent the AI speaks in, not just be a cosmetic dropdown
+- For Nigerian English: integrate YarnGPT (https://yarngpt.ai, API docs at 
+  https://yarngpt.ai/api-docs) as a TTS option — it's a free, open-source, 
+  Nigerian-accented TTS model (11 voices, supports Yoruba/Igbo/Hausa/Pidgin/
+  English). Use this instead of a generic American-accented voice when 
+  Nigerian English is selected.
+- Build a Voice Gallery page it must show Lenory Voice Gallery don't mention vapi or yarngpt anywhere in the frontend: list available voices (from YarnGPT and 
+  whatever VAPI-connected providers we have), let the user preview/play 
+  each one before choosing, let them set a chosen voice as their default
+- Each voice choice should support a custom system prompt that makes the 
+  AI greet the user by name and mention what it can help them with
+
+STEP 3 — Fix the live voice conversation behavior:
+- When the wave/voice button is toggled on in Ask LENORY, the AI should 
+  speak first (a greeting), then wait for the user to speak — not talk 
+  over them or repeat itself
+- It must not hallucinate or repeat background noise as if it were 
+  conversation
+- It must have full memory of the current chat session AND be able to 
+  reference previous sessions if the user asks about them
+- CRITICAL BUG: when a user has an existing text conversation and turns 
+  on voice mode, their previous text messages currently disappear from 
+  view. Users must NOT be forced to start a new chat to use voice — voice 
+  mode should continue within their existing conversation, with full 
+  access to that conversation's history
+
+STEP 4 — Credit tracking for voice (this must be bulletproof, we cannot 
+lose money here):
+- Real cost is roughly $0.06–$0.10/minute using Gemini Flash + YarnGPT 
+  (versus $0.15-0.30/min with premium providers) — track actual call 
+  duration and deduct 20 credits per minute of voice conversation, 
+  rounded up
+- This MUST persist to Supabase via the existing getOrCreateCredits/
+  deductCredits functions in server/creditsStore.ts (read this file to 
+  understand the pattern, use it, don't rebuild it)
+- Test: start a voice call, end it, confirm the credit balance actually 
+  decreased by the correct amount in the database, not just in memory
+
+STEP 5 — Fix video generation:
+- It currently uses Replicate's anotherjesse/zeroscope-v2-xl model — 
+  confirm this is still working end-to-end (submit a real test prompt, 
+  check Render logs for the actual response or error)
+- Confirm REPLICATE_API_TOKEN works and video generation actually 
+  completes and displays
+
+STEP 6 — Add a gallery-picker button:
+- In Create Studio (both Images and Videos tabs add a "+" or similar button that lets the user select an 
+  EXISTING photo or video from their device gallery to use as a base 
+  for editing/generation, not just typing a text prompt from scratch
+
+After each step, tell me exactly what you changed, which files, and what 
+you tested to confirm it works — with real output, not a summary claim.

@@ -21,6 +21,8 @@ export default function AdminDashboard() {
   const [searchUser, setSearchUser] = useState("");
   const [editingUser, setEditingUser] = useState<any>(null);
   const [creditAction, setCreditAction] = useState<{ userId: string; action: string; amount: string } | null>(null);
+  const [userCreditsMap, setUserCreditsMap] = useState<Record<string, number | null>>({});
+  const [loadingCreditUserId, setLoadingCreditUserId] = useState<string | null>(null);
 
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
@@ -50,6 +52,21 @@ export default function AdminDashboard() {
   const handleAuthorize = () => {
     // Real auth is enforced server-side by email check on every /api/admin/* call.
     // This client-side gate is just for UI — no bypass code exists or should exist here.
+  };
+
+  const fetchAndShowCredits = async (userId: string) => {
+    setLoadingCreditUserId(userId);
+    try {
+      const res = await apiRequest("GET", `/api/admin/credits/${userId}`);
+      const data = await res.json();
+      setUserCreditsMap((m) => ({ ...m, [userId]: data.balance ?? 0 }));
+    } catch {
+      setUserCreditsMap((m) => ({ ...m, [userId]: null }));
+    } finally {
+      setLoadingCreditUserId(null);
+    }
+    setCreditAction({ userId, action: "add", amount: "10" });
+    setActiveTab("credits");
   };
 
   if (authLoading) {
@@ -219,12 +236,13 @@ export default function AdminDashboard() {
                         <th className="px-4 py-3 font-semibold">User</th>
                         <th className="px-4 py-3 font-semibold">Tier</th>
                         <th className="px-4 py-3 font-semibold">LENORY ID</th>
+                        <th className="px-4 py-3 font-semibold">Credits</th>
                         <th className="px-4 py-3 font-semibold">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {filteredUsers.length === 0 ? (
-                        <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No users found</td></tr>
+                        <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No users found</td></tr>
                       ) : filteredUsers.map((u: any) => (
                         <tr key={u.id} className="hover:bg-muted/20 transition-colors" data-testid={`row-user-${u.id}`}>
                           <td className="px-4 py-3">
@@ -240,15 +258,28 @@ export default function AdminDashboard() {
                             </Badge>
                           </td>
                           <td className="px-4 py-3 font-mono text-xs">{u.lenoryId || "—"}</td>
+                          <td className="px-4 py-3 font-mono text-sm">
+                            {userCreditsMap[u.id] !== undefined ? (
+                              <span className="font-semibold text-yellow-600 dark:text-yellow-400">
+                                {userCreditsMap[u.id] ?? "err"}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">click →</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => setCreditAction({ userId: u.id, action: "add", amount: "10" })}
+                              onClick={() => fetchAndShowCredits(u.id)}
+                              disabled={loadingCreditUserId === u.id}
                               data-testid={`button-edit-credits-${u.id}`}
                             >
-                              <Coins className="h-3 w-3 mr-1" />
-                              Credits
+                              {loadingCreditUserId === u.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <><Coins className="h-3 w-3 mr-1" />Credits</>
+                              )}
                             </Button>
                           </td>
                         </tr>

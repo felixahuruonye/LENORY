@@ -40,6 +40,7 @@ import Notes from "@/pages/Notes";
 import Languages from "@/pages/Languages";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
+import VoiceGallery from "@/pages/VoiceGallery";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -115,6 +116,7 @@ function Router() {
       <Route path="/notifications" component={Notifications} />
       <Route path="/live-ai" component={LiveAI} />
       <Route path="/video-gen" component={VideoGeneration} />
+      <Route path="/voice-gallery" component={VoiceGallery} />
       <Route>
         <Redirect to="/dashboard" />
       </Route>

@@ -20,6 +20,7 @@ import {
   Users,
   Flame,
   Zap,
+  Coins,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
@@ -50,6 +51,12 @@ export default function Dashboard() {
   // Fetch dashboard stats
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['/api/dashboard/stats'],
+    enabled: !!user,
+  });
+
+  // Fetch credit balance
+  const { data: creditData } = useQuery<{ credits: number; used: number; limit: number }>({
+    queryKey: ['/api/user/credits'],
     enabled: !!user,
   });
 
@@ -320,7 +327,7 @@ export default function Dashboard() {
             </ScrollReveal>
 
             {/* Stats Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4 mb-8">
               <ScrollReveal delay={200}>
                 <Card data-testid="card-stat-xp">
                   <CardContent className="p-4">
@@ -383,6 +390,24 @@ export default function Dashboard() {
                     </div>
                   </CardContent>
                 </Card>
+              </ScrollReveal>
+
+              <ScrollReveal delay={400}>
+                <a href="/pricing">
+                  <Card className="hover-elevate active-elevate-2 cursor-pointer" data-testid="card-stat-credits">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+                          <Coins className="h-5 w-5 text-yellow-500" />
+                        </div>
+                        <div>
+                          <div className="text-2xl font-bold">{creditData?.credits ?? "—"}</div>
+                          <p className="text-xs text-muted-foreground">Credits</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </a>
               </ScrollReveal>
             </div>
 

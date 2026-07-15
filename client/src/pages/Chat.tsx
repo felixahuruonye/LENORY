@@ -218,8 +218,14 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 }
 
 // ─── VAPI Voice Panel ─────────────────────────────────────────────────────────
-function VapiPanel({ onClose }: { onClose: () => void }) {
-  const { status, isSpeaking, transcript, startCall, stopCall, error } = useVapi();
+function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessages?: { role: string; content: string }[] }) {
+  const { status, isSpeaking, transcript, callDurationSeconds, startCall, stopCall, error } = useVapi();
+
+  const formatDuration = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, "0");
+    const s = (secs % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
 
   return (
     <div className="mx-auto max-w-2xl my-3">
@@ -228,6 +234,11 @@ function VapiPanel({ onClose }: { onClose: () => void }) {
           <div className="flex items-center gap-2">
             <Radio className="w-5 h-5 text-primary" />
             <span className="font-semibold">Live Voice Session</span>
+            {status === "active" && (
+              <span className="text-xs text-muted-foreground font-mono bg-muted/50 px-2 py-0.5 rounded-full">
+                {formatDuration(callDurationSeconds)} · 20cr/min
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground" data-testid="button-close-vapi">
             <X className="w-4 h-4" />
@@ -237,6 +248,12 @@ function VapiPanel({ onClose }: { onClose: () => void }) {
         {error && (
           <div className="mb-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">
             {error}
+          </div>
+        )}
+
+        {chatMessages && chatMessages.length > 0 && status === "idle" && (
+          <div className="mb-3 p-3 rounded-lg bg-primary/5 border border-primary/15 text-xs text-muted-foreground">
+            LENORY will remember your last {Math.min(chatMessages.length, 6)} messages from this conversation.
           </div>
         )}
 
@@ -280,7 +297,11 @@ function VapiPanel({ onClose }: { onClose: () => void }) {
 
           <div className="flex gap-3">
             {(status === "idle" || status === "error") && (
-              <Button onClick={startCall} className="bg-primary" data-testid="button-start-voice-call">
+              <Button
+                onClick={() => startCall(chatMessages?.map((m) => ({ role: m.role, content: m.content })))}
+                className="bg-primary"
+                data-testid="button-start-voice-call"
+              >
                 <Phone className="w-4 h-4 mr-2" />
                 Start Voice Call
               </Button>
@@ -1067,7 +1088,12 @@ export default function Chat() {
             )}
 
             {/* VAPI panel in chat */}
-            {showVapiPanel && <VapiPanel onClose={() => setShowVapiPanel(false)} />}
+            {showVapiPanel && (
+              <VapiPanel
+                onClose={() => setShowVapiPanel(false)}
+                chatMessages={messages?.map((m: any) => ({ role: m.role, content: m.content }))}
+              />
+            )}
 
             {/* Messages */}
             {messages.length > 0 && (

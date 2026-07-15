@@ -17,6 +17,7 @@ import {
   Loader2,
   History,
   RefreshCw,
+  FolderOpen,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -29,10 +30,39 @@ export default function ImageGenAdvanced() {
   // Image state
   const [imagePrompt, setImagePrompt] = useState("");
   const [selectedStyle, setSelectedStyle] = useState("photorealistic");
+  const [galleryImagePreview, setGalleryImagePreview] = useState<string | null>(null);
 
   // Video state
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoQueue, setVideoQueue] = useState<{ id: string; prompt: string; status: string; url?: string }[]>([]);
+  const [galleryVideoPreview, setGalleryVideoPreview] = useState<string | null>(null);
+
+  // File input refs for gallery pickers
+  const imageGalleryRef = useRef<HTMLInputElement>(null);
+  const videoGalleryRef = useRef<HTMLInputElement>(null);
+
+  const handleGalleryImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setGalleryImagePreview(url);
+    // Auto-fill prompt with file name hint
+    if (!imagePrompt.trim()) {
+      setImagePrompt(`A detailed image inspired by: ${file.name.replace(/\.[^.]+$/, "").replace(/_|-/g, " ")}`);
+    }
+    toast({ title: "Image loaded", description: "Reference image set. Adjust the prompt and generate." });
+  };
+
+  const handleGalleryVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setGalleryVideoPreview(url);
+    if (!videoPrompt.trim()) {
+      setVideoPrompt(`A cinematic video scene inspired by: ${file.name.replace(/\.[^.]+$/, "").replace(/_|-/g, " ")}`);
+    }
+    toast({ title: "Video loaded", description: "Reference video set. Adjust the prompt and generate." });
+  };
 
   const handleDeleteImage = async (imageId: string) => {
     try {
@@ -207,19 +237,55 @@ export default function ImageGenAdvanced() {
                     ))}
                   </div>
                 </div>
-                <Button
-                  size="lg"
-                  className="w-full"
-                  onClick={() => generateImageMutation.mutate({ prompt: imagePrompt, style: selectedStyle })}
-                  disabled={generateImageMutation.isPending || !imagePrompt.trim()}
-                  data-testid="button-generate-image"
-                >
-                  {generateImageMutation.isPending ? (
-                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
-                  ) : (
-                    <><Wand2 className="h-4 w-4 mr-2" />Generate Image (2 credits)</>
-                  )}
-                </Button>
+                {/* Gallery reference image preview */}
+                {galleryImagePreview && (
+                  <div className="relative rounded-lg overflow-hidden border border-border">
+                    <img src={galleryImagePreview} alt="Reference" className="w-full h-40 object-cover" />
+                    <button
+                      onClick={() => { setGalleryImagePreview(null); if (imageGalleryRef.current) imageGalleryRef.current.value = ""; }}
+                      className="absolute top-2 right-2 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-black/80"
+                      data-testid="button-remove-gallery-image"
+                    >
+                      ×
+                    </button>
+                    <div className="absolute bottom-2 left-2">
+                      <Badge variant="secondary" className="text-xs">Reference image</Badge>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <Button
+                    size="lg"
+                    className="flex-1"
+                    onClick={() => generateImageMutation.mutate({ prompt: imagePrompt, style: selectedStyle })}
+                    disabled={generateImageMutation.isPending || !imagePrompt.trim()}
+                    data-testid="button-generate-image"
+                  >
+                    {generateImageMutation.isPending ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+                    ) : (
+                      <><Wand2 className="h-4 w-4 mr-2" />Generate (2 credits)</>
+                    )}
+                  </Button>
+                  <input
+                    ref={imageGalleryRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleGalleryImageSelect}
+                    data-testid="input-gallery-image"
+                  />
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    onClick={() => imageGalleryRef.current?.click()}
+                    title="Open image from gallery"
+                    data-testid="button-gallery-image"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
@@ -333,21 +399,59 @@ export default function ImageGenAdvanced() {
                 {(user as any)?.subscriptionTier === 'premium' || user?.email === 'felixahuruonye@gmail.com' ? (
                   <>
                     <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg text-sm text-purple-300">
-                      <strong>Note:</strong> Each video costs 5 credits.
+                      <strong>Note:</strong> Each video costs 5 credits and takes ~60 seconds.
                     </div>
-                    <Button
-                      size="lg"
-                      className="w-full bg-purple-600 hover:bg-purple-500 text-white"
-                      onClick={() => generateVideoMutation.mutate(videoPrompt)}
-                      disabled={generateVideoMutation.isPending || !videoPrompt.trim()}
-                      data-testid="button-generate-video"
-                    >
-                      {generateVideoMutation.isPending ? (
-                        <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
-                      ) : (
-                        <><Film className="h-4 w-4 mr-2" />Generate Video (5 credits)</>
-                      )}
-                    </Button>
+
+                    {/* Gallery reference video preview */}
+                    {galleryVideoPreview && (
+                      <div className="relative rounded-lg overflow-hidden border border-border">
+                        <video src={galleryVideoPreview} className="w-full h-36 object-cover bg-black" />
+                        <button
+                          onClick={() => { setGalleryVideoPreview(null); if (videoGalleryRef.current) videoGalleryRef.current.value = ""; }}
+                          className="absolute top-2 right-2 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-black/80"
+                          data-testid="button-remove-gallery-video"
+                        >
+                          ×
+                        </button>
+                        <div className="absolute bottom-2 left-2">
+                          <Badge variant="secondary" className="text-xs">Reference video</Badge>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button
+                        size="lg"
+                        className="flex-1 bg-purple-600 hover:bg-purple-500 text-white"
+                        onClick={() => generateVideoMutation.mutate(videoPrompt)}
+                        disabled={generateVideoMutation.isPending || !videoPrompt.trim()}
+                        data-testid="button-generate-video"
+                      >
+                        {generateVideoMutation.isPending ? (
+                          <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+                        ) : (
+                          <><Film className="h-4 w-4 mr-2" />Generate (5 credits)</>
+                        )}
+                      </Button>
+                      <input
+                        ref={videoGalleryRef}
+                        type="file"
+                        accept="video/*"
+                        className="hidden"
+                        onChange={handleGalleryVideoSelect}
+                        data-testid="input-gallery-video"
+                      />
+                      <Button
+                        size="lg"
+                        variant="outline"
+                        onClick={() => videoGalleryRef.current?.click()}
+                        title="Open video from gallery"
+                        className="border-purple-500/40 text-purple-400 hover:bg-purple-500/10"
+                        data-testid="button-gallery-video"
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </>
                 ) : (
                   <>
