@@ -8,7 +8,7 @@ import os from "os";
 import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
-import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier } from "./adminTools";
+import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits } from "./creditsStore";
 import { storage } from "./storage";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
@@ -955,6 +955,21 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
     } catch (error) {
       logAdminError("/api/admin/api-usage", error);
       res.status(500).json({ message: "Failed to fetch API usage" });
+    }
+  });
+
+  // Provider balance dashboard — admin only, results cached 5 min server-side
+  app.get('/api/admin/provider-balances', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const data = await getProviderBalances();
+      res.json(data);
+    } catch (error) {
+      logAdminError("/api/admin/provider-balances", error);
+      res.status(500).json({ message: "Failed to fetch provider balances" });
     }
   });
 

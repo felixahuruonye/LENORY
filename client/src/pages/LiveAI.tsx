@@ -871,7 +871,7 @@ export default function LiveAI() {
                     {vapi.status === "idle" || vapi.status === "error" ? (
                       <Button
                         size="sm"
-                        onClick={vapi.startCall}
+                        onClick={() => vapi.startCall()}
                         className="gap-1"
                         data-testid="button-start-vapi-call"
                       >

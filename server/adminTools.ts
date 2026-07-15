@@ -101,6 +101,138 @@ export async function getModelUsageByTier() {
   }
 }
 
+// ── Provider balance dashboard ───────────────────────────────────────────────
+// Rough cost-per-call estimates (USD). Clearly labeled as estimates in the UI —
+// we never claim these are exact charges, just budget planning numbers.
+const PROVIDER_COST_PER_CALL_USD: Record<string, number> = {
+  "gemini":             0.0001,  // Gemini Flash: ~$0.10/1M tokens, ~1k tokens/call
+  "openrouter-deepseek":0.0003,  // DeepSeek-R1 via OpenRouter: ~$0.30/1M tokens
+  "stability-image":    0.04,    // ~$0.04/image (4 credits at ~$0.01/credit)
+  "replicate-video":    0.15,    // Video gen: ~$0.15/run
+  "groq":               0.00005, // Whisper STT on Groq: ~$0.05/1M tokens
+  "assemblyai":         0.005,   // AssemblyAI: ~$0.005/min
+  "vapi":               0.05,    // VAPI: ~$0.05/min average session
+};
+
+export interface ProviderBalanceEntry {
+  provider: string;
+  displayName: string;
+  hasRealApi: boolean;
+  balance?: number;
+  balanceUnit?: string;
+  balanceError?: string;
+  dashboardUrl: string;
+  weeklyCallCount: number;
+  monthlyCallCount: number;
+  estimatedWeeklyCostUsd: number;
+  estimatedMonthlyCostUsd: number;
+  status: "green" | "yellow" | "red" | "unknown";
+}
+
+export interface ProviderBalancesResult {
+  providers: ProviderBalanceEntry[];
+  totalMonthlyBurnUsd: number;
+  fetchedAt: string;
+  fromCache: boolean;
+}
+
+let cachedProviderBalances: (ProviderBalancesResult & { expiresAt: number }) | null = null;
+const PROVIDER_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function getProviderBalances(): Promise<ProviderBalancesResult> {
+  if (cachedProviderBalances && cachedProviderBalances.expiresAt > Date.now()) {
+    return {
+      providers: cachedProviderBalances.providers,
+      totalMonthlyBurnUsd: cachedProviderBalances.totalMonthlyBurnUsd,
+      fetchedAt: cachedProviderBalances.fetchedAt,
+      fromCache: true,
+    };
+  }
+
+  const since7d  = new Date(Date.now() - 7  * 24 * 60 * 60 * 1000).toISOString();
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  let weeklyByProvider:  Record<string, number> = {};
+  let monthlyByProvider: Record<string, number> = {};
+
+  if (supabaseDb) {
+    try {
+      const countBy = (rows: any[] | null) => {
+        const c: Record<string, number> = {};
+        (rows || []).forEach((r) => { c[r.provider] = (c[r.provider] || 0) + 1; });
+        return c;
+      };
+      const [w, m] = await Promise.all([
+        supabaseDb.from("api_usage_events").select("provider").gte("created_at", since7d),
+        supabaseDb.from("api_usage_events").select("provider").gte("created_at", since30d),
+      ]);
+      weeklyByProvider  = countBy(w.data);
+      monthlyByProvider = countBy(m.data);
+    } catch { /* non-fatal — usage data just shows 0 */ }
+  }
+
+  // Stability is the only provider with a real balance API we can call server-side.
+  const stabilityResult = await getStabilityBalance();
+
+  const PROVIDER_DEFS: { provider: string; displayName: string; hasRealApi: boolean; dashboardUrl: string }[] = [
+    { provider: "gemini",              displayName: "Gemini (Google AI)",  hasRealApi: false, dashboardUrl: "https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas" },
+    { provider: "stability-image",     displayName: "Stability AI",        hasRealApi: true,  dashboardUrl: "https://platform.stability.ai/account/credits" },
+    { provider: "replicate-video",     displayName: "Replicate",           hasRealApi: false, dashboardUrl: "https://replicate.com/account/billing" },
+    { provider: "vapi",                displayName: "VAPI (Voice AI)",     hasRealApi: false, dashboardUrl: "https://dashboard.vapi.ai/billing" },
+    { provider: "groq",                displayName: "Groq (Whisper STT)",  hasRealApi: false, dashboardUrl: "https://console.groq.com/settings/billing" },
+    { provider: "openrouter-deepseek", displayName: "OpenRouter",          hasRealApi: false, dashboardUrl: "https://openrouter.ai/settings/credits" },
+  ];
+
+  const fetchedAt = new Date().toISOString();
+  let totalMonthlyBurnUsd = 0;
+
+  const providers: ProviderBalanceEntry[] = PROVIDER_DEFS.map((def) => {
+    const weeklyCallCount  = weeklyByProvider[def.provider]  || 0;
+    const monthlyCallCount = monthlyByProvider[def.provider] || 0;
+    const costPerCall = PROVIDER_COST_PER_CALL_USD[def.provider] || 0;
+    const estimatedWeeklyCostUsd  = parseFloat((weeklyCallCount  * costPerCall).toFixed(4));
+    const estimatedMonthlyCostUsd = parseFloat((monthlyCallCount * costPerCall).toFixed(4));
+    totalMonthlyBurnUsd += estimatedMonthlyCostUsd;
+
+    let balance: number | undefined;
+    let balanceUnit: string | undefined;
+    let balanceError: string | undefined;
+    let status: ProviderBalanceEntry["status"] = "unknown";
+
+    if (def.provider === "stability-image") {
+      if (stabilityResult.available) {
+        balance     = stabilityResult.credits;
+        balanceUnit = "credits";
+        // 1000 Stability credits ≈ $10. Thresholds: <100 = critical, <500 = warning
+        status = (balance ?? 0) < 100 ? "red" : (balance ?? 0) < 500 ? "yellow" : "green";
+      } else {
+        balanceError = stabilityResult.error;
+        status = "red";
+      }
+    } else {
+      // No real balance API — status based on whether it has been called recently
+      status = monthlyCallCount > 0 ? "green" : "unknown";
+    }
+
+    return {
+      ...def,
+      balance,
+      balanceUnit,
+      balanceError,
+      weeklyCallCount,
+      monthlyCallCount,
+      estimatedWeeklyCostUsd,
+      estimatedMonthlyCostUsd,
+      status,
+    };
+  });
+
+  totalMonthlyBurnUsd = parseFloat(totalMonthlyBurnUsd.toFixed(4));
+
+  const result: ProviderBalancesResult = { providers, totalMonthlyBurnUsd, fetchedAt, fromCache: false };
+  cachedProviderBalances = { ...result, expiresAt: Date.now() + PROVIDER_CACHE_MS };
+  return result;
+}
+
 // ── API key registry ─────────────────────────────────────────────────────────
 // Add new keys here as the app grows — this is the single source of truth.
 const KEY_REGISTRY: { name: string; envVar: string; usedFor: string; critical: boolean }[] = [

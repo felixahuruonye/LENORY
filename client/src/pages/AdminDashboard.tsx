@@ -8,16 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
-  Users, DollarSign, TrendingUp, ShieldAlert, Loader2, Lock,
-  Coins, Crown, MessageSquare, BarChart3, RefreshCcw, Shield,
-  Search, UserCheck, Edit3, ChevronDown, ArrowLeft,
+  Users, DollarSign, TrendingUp, Loader2,
+  Coins, Crown, BarChart3, RefreshCcw, Shield,
+  Search, ArrowLeft, ExternalLink, AlertTriangle,
+  CheckCircle2, XCircle, HelpCircle, Zap, Clock,
 } from "lucide-react";
 import { Link } from "wouter";
 
 export default function AdminDashboard() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"overview" | "users" | "credits">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "users" | "credits" | "providers">("overview");
   const [searchUser, setSearchUser] = useState("");
   const [editingUser, setEditingUser] = useState<any>(null);
   const [creditAction, setCreditAction] = useState<{ userId: string; action: string; amount: string } | null>(null);
@@ -34,6 +35,37 @@ export default function AdminDashboard() {
   const { data: stats = { revenue: 0, activeUsers: 0 } } = useQuery({
     queryKey: ["/api/admin/stats"],
     enabled: isAuthorized,
+  });
+
+  const {
+    data: providerData,
+    isLoading: providersLoading,
+    refetch: refetchProviders,
+    dataUpdatedAt: providersUpdatedAt,
+  } = useQuery<{
+    providers: {
+      provider: string;
+      displayName: string;
+      hasRealApi: boolean;
+      balance?: number;
+      balanceUnit?: string;
+      balanceError?: string;
+      dashboardUrl: string;
+      weeklyCallCount: number;
+      monthlyCallCount: number;
+      estimatedWeeklyCostUsd: number;
+      estimatedMonthlyCostUsd: number;
+      status: "green" | "yellow" | "red" | "unknown";
+    }[];
+    totalMonthlyBurnUsd: number;
+    fetchedAt: string;
+    fromCache: boolean;
+  }>({
+    queryKey: ["/api/admin/provider-balances"],
+    enabled: isAuthorized,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   });
 
   const adjustCreditsMutation = useMutation({
@@ -180,11 +212,12 @@ export default function AdminDashboard() {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex gap-2 border-b border-border">
+        <div className="flex gap-2 border-b border-border overflow-x-auto">
           {[
-            { id: "overview" as const, label: "Overview", icon: BarChart3 },
-            { id: "users" as const, label: "Users", icon: Users },
-            { id: "credits" as const, label: "Credits", icon: Coins },
+            { id: "overview"   as const, label: "Overview",  icon: BarChart3 },
+            { id: "users"      as const, label: "Users",     icon: Users },
+            { id: "credits"    as const, label: "Credits",   icon: Coins },
+            { id: "providers"  as const, label: "Providers", icon: Zap },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -338,6 +371,166 @@ export default function AdminDashboard() {
                 )}
               </CardContent>
             </Card>
+          </div>
+        )}
+
+        {/* Providers Tab */}
+        {activeTab === "providers" && (
+          <div className="space-y-6">
+            {/* Burn estimate header */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <DollarSign className="h-5 w-5 text-emerald-500" />
+                      Total Monthly Burn Estimate
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Based on call counts × rough per-call cost averages from <code>api_usage_events</code>. 
+                      These are estimates only — actual charges may differ.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetchProviders()}
+                    disabled={providersLoading}
+                    data-testid="button-refresh-providers"
+                  >
+                    {providersLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCcw className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {providersLoading && !providerData ? (
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span className="text-sm">Fetching provider data…</span>
+                  </div>
+                ) : (
+                  <div className="flex items-end gap-4 flex-wrap">
+                    <div>
+                      <span className="text-4xl font-bold text-emerald-500">
+                        ~${providerData?.totalMonthlyBurnUsd?.toFixed(2) ?? "0.00"}
+                      </span>
+                      <span className="text-sm text-muted-foreground ml-2">USD / month (estimate)</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {providerData?.fromCache ? "Cached · " : "Live · "}
+                      refreshes every 5 min
+                      {providerData?.fetchedAt && (
+                        <span> · fetched {new Date(providerData.fetchedAt).toLocaleTimeString()}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Provider cards */}
+            {providersLoading && !providerData ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {(providerData?.providers ?? []).map((p) => {
+                  const StatusIcon =
+                    p.status === "green"   ? CheckCircle2  :
+                    p.status === "yellow"  ? AlertTriangle :
+                    p.status === "red"     ? XCircle       : HelpCircle;
+                  const statusColor =
+                    p.status === "green"   ? "text-emerald-500" :
+                    p.status === "yellow"  ? "text-yellow-500"  :
+                    p.status === "red"     ? "text-red-500"     : "text-muted-foreground";
+                  const statusLabel =
+                    p.status === "green"   ? "OK"           :
+                    p.status === "yellow"  ? "Low"          :
+                    p.status === "red"     ? "Critical"     : "Unknown";
+
+                  return (
+                    <Card key={p.provider} data-testid={`card-provider-${p.provider}`}>
+                      <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
+                        <div className="min-w-0">
+                          <CardTitle className="text-base leading-snug">{p.displayName}</CardTitle>
+                          <p className="text-xs text-muted-foreground mt-0.5 font-mono">{p.provider}</p>
+                        </div>
+                        <div className={`flex items-center gap-1 shrink-0 ${statusColor}`}>
+                          <StatusIcon className="h-4 w-4" />
+                          <span className="text-xs font-semibold">{statusLabel}</span>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {/* Balance row */}
+                        <div className="rounded-lg bg-muted/40 px-3 py-2">
+                          <p className="text-xs text-muted-foreground mb-1 font-medium">Balance</p>
+                          {p.hasRealApi ? (
+                            p.balance !== undefined ? (
+                              <p className="text-lg font-bold">
+                                {p.balance.toLocaleString()}
+                                <span className="text-xs font-normal text-muted-foreground ml-1">{p.balanceUnit}</span>
+                              </p>
+                            ) : (
+                              <p className="text-sm text-red-500 flex items-center gap-1">
+                                <XCircle className="h-3 w-3" />
+                                {p.balanceError ?? "Unreachable"}
+                              </p>
+                            )
+                          ) : (
+                            <p className="text-sm text-muted-foreground italic">
+                              No balance API — check dashboard manually
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Usage this week / this month */}
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div className="rounded-md bg-muted/20 px-2 py-1.5 text-center">
+                            <p className="text-xs text-muted-foreground">This week</p>
+                            <p className="font-semibold">{p.weeklyCallCount.toLocaleString()} calls</p>
+                            <p className="text-xs text-muted-foreground">
+                              ~${p.estimatedWeeklyCostUsd.toFixed(3)}
+                            </p>
+                          </div>
+                          <div className="rounded-md bg-muted/20 px-2 py-1.5 text-center">
+                            <p className="text-xs text-muted-foreground">This month</p>
+                            <p className="font-semibold">{p.monthlyCallCount.toLocaleString()} calls</p>
+                            <p className="text-xs text-muted-foreground">
+                              ~${p.estimatedMonthlyCostUsd.toFixed(3)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Dashboard link */}
+                        <a
+                          href={p.dashboardUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                          data-testid={`link-provider-dashboard-${p.provider}`}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Open provider dashboard
+                        </a>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Disclaimer */}
+            <p className="text-xs text-muted-foreground text-center px-4">
+              Cost estimates are calculated from call counts in <code>api_usage_events</code> multiplied by fixed per-call 
+              averages. Actual billed amounts may differ based on token length, model version, and provider pricing changes.
+              Only Stability AI reports a verified credit balance via API. All other providers require manual dashboard checks.
+            </p>
           </div>
         )}
 
