@@ -60,12 +60,6 @@ import {
   PinOff,
   Pencil,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -458,11 +452,19 @@ export default function Chat() {
         toast({ title: failures.length === filesToSend.length ? "Analysis failed" : "Some files failed", description: failures.map(f => (f as any).error).join(" | "), variant: "destructive" });
       }
 
+      const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
+      const userChatContent = userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel;
+
       if (analyses.length > 0) {
-        const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
+        // Build assistant reply — prepend failure notes for any files that errored
+        const failureNotes = failures.map(f => `**${f.file.name}:** Could not analyze — ${(f as any).error}`);
+        const allContent = [...failureNotes, ...analyses].join("\n\n");
+        await handleSendMessageWithContent(userChatContent, allContent);
+      } else {
+        // All files failed — still save the user's message so it isn't lost
         await handleSendMessageWithContent(
-          userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel,
-          analyses.join("\n\n")
+          userChatContent,
+          `I wasn't able to analyze ${filesToSend.length === 1 ? "the attached file" : "any of the attached files"} (${fileNames}). Please try again with a smaller file or check the format.`
         );
       }
     } finally {
@@ -666,8 +668,10 @@ export default function Chat() {
     // Files attached — send them with whatever prompt (or default) is typed
     if (pendingFiles.length > 0) {
       const userPrompt = message.trim();
-      resetInput();
+      // Clear input AFTER analysis so the message stays visible if something fails.
+      // isLoading=true (set inside sendPendingFilesWithPrompt) prevents double-sends.
       await sendPendingFilesWithPrompt(userPrompt);
+      resetInput();
       return;
     }
 

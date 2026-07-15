@@ -2,3 +2,6 @@
 - [LENORY identity update](lenory-identity.md) — AI is no longer a "tutor only"; admin mode for felixahuruonye@gmail.com, general AI for all users
 - [Auth security pattern](auth-security.md) — No service role key on frontend; all admin ops via backend; ADMIN_EMAIL constant in routes.ts credit system
 - [Credits API](credits-api.md) — /api/user/credits (chat UI alias) + /api/credits (original); getOrCreateCredits() in routes.ts; in-memory, not Supabase
+- [Vision upload bugs](vision-upload-bugs.md) — Root causes of "Analyzing…then vanish": body limit 5MB→50MB, resetInput() before analysis, duplicate DropdownMenu import crash, double-Gemini per file
+- [Image tier enforcement](image-tier-enforcement.md) — /api/generate-image now enforces monthly limits: free=5, pro=50, premium=unlimited; checks storage.getGeneratedImagesByUser monthly count
+- [Subscription downgrade flow](subscription-downgrade.md) — /api/subscription/downgrade endpoint; Pricing.tsx shows real subscriptionTier from useAuth, dynamic Current Plan/Downgrade/Upgrade buttons

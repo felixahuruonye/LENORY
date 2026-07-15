@@ -77,17 +77,17 @@ const TOPUP_PACKS = [
   { amount: 100, naira: 10000, label: "Pro Bundle", color: "border-amber-500/30 bg-amber-500/5" },
 ];
 
+const TIER_RANK: Record<string, number> = { free: 0, pro: 1, premium: 2 };
+
 export default function Pricing() {
   const { user } = useAuth();
   const { credits, topup, isTopupPending } = useCredits();
   const { toast } = useToast();
   const [loading, setLoading] = useState("");
 
-  const handleSubscribe = async (tierId: string) => {
-    if (tierId === "free") {
-      toast({ title: "Already on Free plan", description: "Top up credits or upgrade to Pro for more." });
-      return;
-    }
+  const currentTier = (user as any)?.subscriptionTier || "free";
+
+  const handleUpgrade = async (tierId: string) => {
     setLoading(tierId);
     try {
       const response = await apiRequest("POST", "/api/payments/initialize", { tierId, email: user?.email });
@@ -99,6 +99,25 @@ export default function Pricing() {
       }
     } catch {
       toast({ title: "Error", description: "Payment initialization failed", variant: "destructive" });
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const handleDowngrade = async (tierId: string) => {
+    setLoading(tierId);
+    try {
+      const response = await apiRequest("POST", "/api/subscription/downgrade", { targetTier: tierId });
+      const data = await response.json();
+      if (data.success) {
+        toast({ title: "Plan changed", description: `You are now on the ${tierId} plan. Changes take effect immediately.` });
+        // Force a page reload so useAuth reflects the new tier
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        toast({ title: "Error", description: data.message || "Failed to downgrade", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Downgrade failed", variant: "destructive" });
     } finally {
       setLoading("");
     }
@@ -216,15 +235,43 @@ export default function Pricing() {
               </CardHeader>
 
               <CardContent className="space-y-6">
-                <Button
-                  className="w-full"
-                  variant={tier.id === "free" ? "outline" : "default"}
-                  onClick={() => handleSubscribe(tier.id)}
-                  disabled={loading !== "" && loading !== tier.id}
-                  data-testid={`button-subscribe-${tier.id}`}
-                >
-                  {loading === tier.id ? "Processing..." : tier.cta}
-                </Button>
+                {(() => {
+                  const isCurrent = tier.id === currentTier;
+                  const isLower = (TIER_RANK[tier.id] ?? 0) < (TIER_RANK[currentTier] ?? 0);
+                  const isHigher = (TIER_RANK[tier.id] ?? 0) > (TIER_RANK[currentTier] ?? 0);
+                  if (isCurrent) {
+                    return (
+                      <Button className="w-full" variant="outline" disabled data-testid={`button-subscribe-${tier.id}`}>
+                        Current Plan
+                      </Button>
+                    );
+                  }
+                  if (isLower) {
+                    return (
+                      <Button
+                        className="w-full"
+                        variant="ghost"
+                        onClick={() => handleDowngrade(tier.id)}
+                        disabled={loading !== ""}
+                        data-testid={`button-subscribe-${tier.id}`}
+                      >
+                        {loading === tier.id ? "Switching..." : `Downgrade to ${tier.name}`}
+                      </Button>
+                    );
+                  }
+                  // isHigher — upgrade via Paystack
+                  return (
+                    <Button
+                      className="w-full"
+                      variant="default"
+                      onClick={() => handleUpgrade(tier.id)}
+                      disabled={loading !== ""}
+                      data-testid={`button-subscribe-${tier.id}`}
+                    >
+                      {loading === tier.id ? "Processing..." : tier.cta}
+                    </Button>
+                  );
+                })()}
 
                 <div className="space-y-2">
                   {tier.features.map((feature, idx) => (
