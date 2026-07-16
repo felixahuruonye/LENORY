@@ -59,6 +59,8 @@ import {
   Pin,
   PinOff,
   Pencil,
+  Maximize2,
+  Download,
 } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -94,9 +96,10 @@ function TypingIndicator() {
   );
 }
 
-// ─── Code block with copy button ─────────────────────────────────────────────
+// ─── Code block with copy / expand / download ─────────────────────────────────
 function CodeBlock({ children, className }: { children: string; className?: string }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const lang = className?.replace("language-", "") || "code";
 
   const copy = async () => {
@@ -105,23 +108,79 @@ function CodeBlock({ children, className }: { children: string; className?: stri
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const download = () => {
+    const ext: Record<string, string> = { javascript: "js", typescript: "ts", python: "py", html: "html", css: "css", json: "json", bash: "sh", shell: "sh" };
+    const extension = ext[lang] || lang || "txt";
+    const blob = new Blob([children], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `code.${extension}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="relative group my-3 rounded-xl overflow-hidden border border-border/50">
-      <div className="flex items-center justify-between px-4 py-2 bg-muted/80 border-b border-border/40">
-        <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
-        <button
-          onClick={copy}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          data-testid="button-copy-code"
-        >
-          {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span>{copied ? "Copied!" : "Copy"}</span>
-        </button>
+    <>
+      <div className="relative group my-3 rounded-xl overflow-hidden border border-border/50">
+        <div className="flex items-center justify-between px-4 py-2 bg-muted/80 border-b border-border/40">
+          <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={download}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-download-code"
+              title="Download file"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setExpanded(true)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-expand-code"
+              title="Expand"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={copy}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-copy-code"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copied ? "Copied!" : "Copy"}</span>
+            </button>
+          </div>
+        </div>
+        <pre className="p-4 text-sm bg-muted/30 font-mono leading-relaxed whitespace-pre-wrap break-words">
+          <code>{children}</code>
+        </pre>
       </div>
-      <pre className="overflow-x-auto p-4 text-sm bg-muted/30 font-mono leading-relaxed">
-        <code>{children}</code>
-      </pre>
-    </div>
+
+      {/* Expanded full-screen overlay */}
+      {expanded && (
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col" data-testid="overlay-code-expanded">
+          <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-muted/60">
+            <span className="text-sm font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
+            <div className="flex items-center gap-3">
+              <button onClick={download} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-download-code-expanded">
+                <Download className="w-4 h-4" /><span>Download</span>
+              </button>
+              <button onClick={copy} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-copy-code-expanded">
+                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                <span>{copied ? "Copied!" : "Copy"}</span>
+              </button>
+              <button onClick={() => setExpanded(false)} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-expanded">
+                <X className="w-4 h-4" /><span>Close</span>
+              </button>
+            </div>
+          </div>
+          <pre className="flex-1 overflow-auto p-6 text-sm font-mono leading-relaxed whitespace-pre-wrap break-words">
+            <code>{children}</code>
+          </pre>
+        </div>
+      )}
+    </>
   );
 }
 

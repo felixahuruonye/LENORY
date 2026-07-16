@@ -776,9 +776,14 @@ export async function analyzeFileWithGeminiVision(buffer: Buffer, mimeType: stri
     }
 
     const base64Data = buffer.toString('base64');
-    console.log(`📄 Analyzing file with Gemini Vision: ${fileName}`);
+    console.log(`📄 Analyzing file with Gemini Vision: ${fileName} (${Math.round(buffer.length / 1024)}KB)`);
 
-    const response = await ai.models.generateContent({
+    // 25-second hard timeout — prevents the 45s frontend timeout from firing first
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("GEMINI_TIMEOUT: Vision analysis took too long — try a smaller file")), 25000)
+    );
+
+    const analysisPromise = ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
         {
@@ -788,17 +793,22 @@ export async function analyzeFileWithGeminiVision(buffer: Buffer, mimeType: stri
           }
         },
         {
-          text: "Extract and return all text content from this file. If it's an image, describe the content. If it's a PDF or document, extract the text."
+          text: "Extract and return all text content from this file. If it's an image, describe the content in detail. If it's a PDF or document, extract the full text. Be thorough."
         }
-      ] as any
+      ] as any,
+      config: { thinkingConfig: { thinkingBudget: 0 } } as any,
     });
 
-    const extractedText = response.text || "";
-    console.log(`✅ Extracted ${extractedText.length} characters`);
+    const response = await Promise.race([analysisPromise, timeoutPromise]);
+    const extractedText = (response as any).text || "";
+    console.log(`✅ Vision extracted ${extractedText.length} characters from ${fileName}`);
 
     return { extractedText };
   } catch (error) {
-    console.error("Gemini Vision analysis error:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("Gemini Vision analysis error:", msg);
+    // Propagate timeout message so the API route can surface it clearly
+    if (msg.includes("GEMINI_TIMEOUT")) throw error;
     return { extractedText: "" };
   }
 }

@@ -368,9 +368,17 @@ export default function SettingsPanel() {
                       ))}
                     </select>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => speak(`Testing ${selectedVoice} voice`)} data-testid="button-test-voice">
-                    Test Voice
-                  </Button>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => speak(`Testing ${selectedVoice} voice`)} data-testid="button-test-voice">
+                      Test Voice
+                    </Button>
+                    <Button size="sm" variant="outline" asChild data-testid="button-open-voice-gallery">
+                      <a href="/voice-gallery">Browse Voice Gallery</a>
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Visit Voice Gallery to preview all available LENORY voices and set your default.
+                  </p>
                 </CardContent>
               </Card>
             )}

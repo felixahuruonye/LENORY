@@ -81,6 +81,19 @@ export default function AdminDashboard() {
     onError: () => toast({ title: "Failed", variant: "destructive" }),
   });
 
+  const resetMonthlyMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", `/api/admin/credits/${userId}/reset-monthly`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Monthly credits reset", description: `New balance: ${data.newBalance}` });
+      setCreditAction(null);
+      refetchUsers();
+    },
+    onError: () => toast({ title: "Reset failed", variant: "destructive" }),
+  });
+
   const handleAuthorize = () => {
     // Real auth is enforced server-side by email check on every /api/admin/* call.
     // This client-side gate is just for UI — no bypass code exists or should exist here.
@@ -337,7 +350,7 @@ export default function AdminDashboard() {
                 {creditAction && (
                   <div className="border border-primary/20 rounded-lg p-4 space-y-3">
                     <p className="font-medium text-sm">Adjusting credits for: <span className="font-mono text-xs">{creditAction.userId.slice(0, 16)}...</span></p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       {["add", "set", "deduct"].map((a) => (
                         <Button
                           key={a}
@@ -349,6 +362,15 @@ export default function AdminDashboard() {
                           {a.charAt(0).toUpperCase() + a.slice(1)}
                         </Button>
                       ))}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => resetMonthlyMutation.mutate(creditAction.userId)}
+                        disabled={resetMonthlyMutation.isPending}
+                        data-testid="button-reset-monthly-credits"
+                      >
+                        {resetMonthlyMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Reset Monthly"}
+                      </Button>
                     </div>
                     <div className="flex gap-2">
                       <Input

@@ -154,6 +154,59 @@ export async function deductCredits(userId: string, amount: number): Promise<num
   }
 }
 
+// ── Reusable credit gate ─────────────────────────────────────────────────────
+// All features call this before executing. Returns allowed:true for admin, or
+// checks balance and returns a user-facing message if the check fails.
+export async function checkCreditGate(
+  userId: string,
+  userEmail: string | null | undefined,
+  tier: string,
+  cost: number,
+  featureName: string,
+): Promise<{ allowed: boolean; balance?: number; message?: string; error?: string }> {
+  if (userEmail === "felixahuruonye@gmail.com") return { allowed: true };
+  const credits = await getOrCreateCredits(userId, tier);
+  if (credits.balance < cost) {
+    return {
+      allowed: false,
+      balance: credits.balance,
+      error: "INSUFFICIENT_CREDITS",
+      message: `${featureName} costs ${cost} credit${cost !== 1 ? "s" : ""}. Your balance is ${credits.balance} — top up or upgrade your plan to continue.`,
+    };
+  }
+  return { allowed: true, balance: credits.balance };
+}
+
+// Reset a user's monthly credit usage + restore their daily allowance (admin action).
+export async function resetMonthlyCredits(userId: string, tier: string): Promise<CreditRecord | null> {
+  const limits = getTierLimits(tier);
+  const today = todayKey();
+  const currentMonth = monthKey();
+  if (!supabaseDb) {
+    const rec = emergencyFallbackStore.get(userId);
+    if (rec) {
+      rec.monthlyUsed = 0;
+      rec.lastMonthlyReset = currentMonth;
+      rec.balance = limits.dailyAdd;
+      rec.lastDailyReset = today;
+    }
+    return rec || null;
+  }
+  try {
+    const { data } = await supabaseDb
+      .from("user_credits")
+      .update({ monthly_used: 0, last_monthly_reset: currentMonth, balance: limits.dailyAdd, last_daily_reset: today, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .select()
+      .single();
+    if (!data) return null;
+    return { balance: data.balance, monthlyUsed: data.monthly_used, dailyGiven: data.daily_given, lastDailyReset: data.last_daily_reset, lastMonthlyReset: data.last_monthly_reset };
+  } catch (e) {
+    console.error("resetMonthlyCredits error:", e);
+    return null;
+  }
+}
+
 // Add credits (Paystack top-up, admin adjustment). Caps at the tier's maxBalance
 // unless uncapped is explicitly requested (e.g. an admin override).
 export async function addCredits(userId: string, amount: number, tier: string = "free", uncapped = false): Promise<number | null> {

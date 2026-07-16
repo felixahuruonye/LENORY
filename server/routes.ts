@@ -9,7 +9,7 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances } from "./adminTools";
-import { getOrCreateCredits, deductCredits, addCredits, getTierLimits } from "./creditsStore";
+import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits } from "./creditsStore";
 import { storage } from "./storage";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
@@ -1636,6 +1636,20 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
         return res.status(400).json({ message: "Prompt is required" });
       }
 
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+
+      // Website gen is a Pro+ feature (10 credits)
+      if (tier === 'free') {
+        return res.status(403).json({
+          message: "Website Builder is available on Pro and Premium plans. Upgrade to unlock it.",
+          error: "TIER_LOCKED",
+          requiredTier: "pro",
+        });
+      }
+      const gate = await checkCreditGate(userId, user?.email, tier, 10, "Website generation");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
+
       // Generate website using Gemini
       const generated = await generateWebsiteWithGemini(prompt);
 
@@ -1651,6 +1665,11 @@ CREATE POLICY IF NOT EXISTS "Service role bypass lessons" ON public.generated_le
         tags: [],
         isFavorite: false,
       });
+
+      // Deduct 10 credits after successful generation (admin already bypassed above)
+      if (user?.email !== ADMIN_EMAIL) {
+        await deductCredits(userId, 10);
+      }
 
       res.json(website);
     } catch (error) {
@@ -2214,9 +2233,19 @@ Generate a syllabus with:
   app.post('/api/courses/generate-syllabus', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { topic } = req.body;
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+
+      // Course syllabus generation: 5 credits
+      const gate = await checkCreditGate(userId, user?.email, tier, 5, "Course syllabus generation");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
 
       // Use AI to generate syllabus
       const syllabus = await generateSyllabus(topic);
+
+      // Deduct 5 credits after successful generation
+      if (user?.email !== ADMIN_EMAIL) await deductCredits(userId, 5);
 
       res.json(syllabus);
     } catch (error) {
@@ -3475,13 +3504,24 @@ KEY_WORDS: [keywords separated by commas]`,
   app.post('/api/cbt/generate-questions', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { examType, subject, count = 250 } = req.body;
+      const userId = req.userId;
 
       if (!examType || !subject) {
         return res.status(400).json({ message: 'Exam type and subject required' });
       }
 
+      // CBT question generation: 5 credits per 50-question set
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, user?.email, tier, 5, "CBT question generation");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
+
       console.log(`📚 Generating ${count} questions for ${subject} (${examType})...`);
       const questions = await generateQuestionsWithLENORY(examType, subject, Math.min(count, 250));
+
+      // Deduct 5 credits after successful generation
+      if (user?.email !== ADMIN_EMAIL) await deductCredits(userId, 5);
+
       res.json({ questions });
     } catch (error: any) {
       console.error("Question generation error:", error);
@@ -4168,6 +4208,22 @@ KEY_WORDS: [keywords separated by commas]`,
     }
   });
 
+  // Admin: reset a user's monthly credits + restore daily allowance
+  app.post('/api/admin/credits/:userId/reset-monthly', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const adminUser = await storage.getUser(req.userId);
+      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      const tier = (targetUser as any)?.subscriptionTier || 'free';
+      const result = await resetMonthlyCredits(userId, tier);
+      if (!result) return res.status(500).json({ message: "Reset failed" });
+      res.json({ success: true, newBalance: result.balance, monthlyUsed: result.monthlyUsed, tier });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to reset monthly credits" });
+    }
+  });
+
   app.post('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
@@ -4224,7 +4280,13 @@ KEY_WORDS: [keywords separated by commas]`,
       if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
 
       const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const response = await ai.models.generateContent({
+
+      // 25-second server-side timeout — prevents the 45s frontend timeout from misfiring
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 25000)
+      );
+
+      const analysisPromise = ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: [{
           parts: [
@@ -4234,12 +4296,18 @@ KEY_WORDS: [keywords separated by commas]`,
         }] as any,
       });
 
+      const response = await Promise.race([analysisPromise, timeoutPromise]);
+
       const analysis = (response as any).text || "I could not extract content from this file.";
       console.log(`✅ Vision analysis complete for ${fileName || 'file'} (${analysis.length} chars)`);
       res.json({ analysis });
     } catch (error: any) {
-      console.error("Vision analyze error:", error?.message || error);
-      res.status(500).json({ error: "Failed to analyze file", detail: error?.message });
+      const msg: string = error?.message || String(error);
+      console.error("Vision analyze error:", msg);
+      if (msg.includes("GEMINI_TIMEOUT")) {
+        return res.status(408).json({ error: "File analysis timed out — try a smaller or simpler file.", detail: "TIMEOUT" });
+      }
+      res.status(500).json({ error: "Failed to analyze file", detail: msg });
     }
   });
 
@@ -4271,6 +4339,33 @@ KEY_WORDS: [keywords separated by commas]`,
   // ─────────────────────────────────────────────────────────────────────────────
   // VOICE CREDIT TRACKING
   // ─────────────────────────────────────────────────────────────────────────────
+  // Heartbeat — called every 10 seconds during an active VAPI call.
+  // Charges proportionally so partial minutes are billed immediately.
+  // Rate: 20 credits/minute = ~3.33 credits/10s (round to 4 for safety margin).
+  app.post('/api/voice/heartbeat', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      if (user?.email === ADMIN_EMAIL) {
+        return res.json({ success: true, creditsDeducted: 0, newBalance: null });
+      }
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const CREDITS_PER_10S = Math.round(20 / 60 * 10); // 3 credits per 10 seconds
+      const credits = await getOrCreateCredits(userId, tier);
+      if (credits.balance < CREDITS_PER_10S) {
+        return res.status(402).json({
+          error: "INSUFFICIENT_CREDITS",
+          balance: credits.balance,
+          message: "Not enough credits to continue — voice call will end.",
+        });
+      }
+      const newBalance = await deductCredits(userId, CREDITS_PER_10S);
+      res.json({ success: true, creditsDeducted: CREDITS_PER_10S, newBalance });
+    } catch (error) {
+      res.status(500).json({ message: "Heartbeat failed" });
+    }
+  });
+
   // Called by the frontend when a VAPI/voice call ends. Deducts 20 credits/minute.
   app.post('/api/voice/end-call', supabaseAuth, async (req: any, res: Response) => {
     try {

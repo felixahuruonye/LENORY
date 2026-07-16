@@ -1,0 +1,231 @@
+MASTER FIX PROMPT — LENORY AI
+Work through every section below IN ORDER. For each item, after you fix it, 
+ACTUALLY TEST IT YOURSELF (not just re-read the code) and paste me the real 
+result — a log line, a screenshot description, an actual API response. 
+Do not mark anything as done without proof. Several previous "fixes" were 
+reported as working but were not — I will be checking every single one.
+
+FIRST: Run `git pull origin main` and confirm the latest commit before 
+starting.
+
+DO NOT rewrite: server/creditsStore.ts's core function signatures 
+(getOrCreateCredits, deductCredits, addCredits) — extend/call them, don't 
+replace their logic. Don't touch server/adminTools.ts's existing 
+getAdminOverview or the provider dashboard you just built (that one works, 
+leave it alone).
+
+ADMIN BYPASS: felixahuruonye@gmail.com must bypass every single limit built 
+below, on every feature, for testing. Verify this explicitly for each 
+feature you touch.
+
+═══════════════════════════════════════════════════════════
+SECTION 1 — CREDIT SYSTEM (HIGHEST PRIORITY — THIS IS COSTING REAL MONEY)
+═══════════════════════════════════════════════════════════
+
+Right now credits are NOT being deducted for most features, and balances 
+don't update in real time on the user's dashboard or the admin page. This 
+must be fixed everywhere credits are supposed to apply:
+- Chat messages (text)
+- Image generation
+- Video generation
+- CBT question generation (50 questions = its own credit cost — find and 
+  verify this specific rate)
+- Website generator
+- Memory storage features
+- Course builder
+- Live session
+- Live AI voice calls
+
+For EACH of these, you must:
+1. Find the actual backend endpoint
+2. Confirm it calls deductCredits() from server/creditsStore.ts with the 
+   correct amount BEFORE or immediately after the action completes
+3. Confirm the deduction actually writes to the Supabase user_credits 
+   table (not just an in-memory variable that resets)
+4. Test it: perform the action as a test user, check their credit balance 
+   in Supabase directly before and after — show me the before/after numbers
+
+CRITICAL BUG — Live AI voice charging: currently it waits until a user 
+hits 1 full minute before charging anything. This must charge 
+proportionally as the call progresses (e.g., every 5-10 seconds of call 
+duration), not wait for a full minute threshold — seconds cost us real 
+money the moment they happen. Rate: 20 credits per minute of voice, 
+charged proportionally (e.g., ~1.67 credits per 6 seconds).
+
+BUILD A "CREDIT GATE CALCULATOR": before ANY feature runs, check the 
+user's tier + current balance against that feature's cost, and BLOCK the 
+action with a clear upgrade/top-up message if they can't afford it — 
+don't let the feature run first and fail/charge afterward. This must be 
+a single reusable function all features check before executing, not 
+copy-pasted per feature.
+
+REAL-TIME SYNC: after every deduction, the user's own dashboard AND the 
+Settings > Credits page must reflect the new balance immediately (refetch 
+or invalidate the relevant query), not just on next page load.
+
+ADMIN CONTROLS: on the admin page, admin must be able to:
+- Top up any user's credit balance manually
+- Reset a user's MONTHLY credit limit (not just daily) — this control 
+  doesn't exist yet, build it
+
+═══════════════════════════════════════════════════════════
+SECTION 2 — TIER RESTRICTIONS (exact spec — implement precisely)
+═══════════════════════════════════════════════════════════
+
+FREE tier:
+- 10 AI credits/day, 30/month max (admin-adjustable numbers, not hardcoded)
+- Basic AI tutor chat — must hit rate limits on heavy hourly use (similar 
+  to how Claude.ai rate-limits free usage)
+- 5 image generations/month — at 5, the Generate button in the image tab 
+  must actually lock/disable with an upgrade message, not just let them 
+  keep clicking
+- 2 projects max — creating a 3rd must be blocked with an upgrade prompt
+- Study memory: enabled
+- CBT practice: enabled, uses its own credit cost per 50-question 
+  generation (find/confirm this rate, don't guess)
+- File uploads in Ask LENORY: max 3 files per message
+
+PRO tier:
+- Everything in Free, plus:
+- 50 credits/day (admin-resettable), no daily reset beyond that — this 
+  means once granted, those 50 are it until the admin resets or the month 
+  rolls over (re-read this carefully: NOT unlimited monthly, just no 
+  additional daily top-up beyond the initial 50)
+- Advanced AI tutor with Gemini — unlocks the faster/more capable model 
+  tier, user can switch between fast and vision models
+- 50 image generations/month
+- 20 projects max
+- Website generator UNLOCKED (currently the Build button should be locked 
+  for Free with an upgrade message — verify this is actually enforced)
+- Voice features UNLOCKED
+- CBT simulation (JAMB/WAEC/NECO)
+- Priority support (flag only, no special backend needed yet)
+- File uploads in Ask LENORY: max 6 files per message
+
+PREMIUM tier:
+- Everything in Pro, plus:
+- 500 credits total in balance (not unlimited — cap it at 500)
+- 500 projects max, 200 image generations max, 200 video generations max 
+  (NOT unlimited — these are real caps, enforce them)
+- Team management: build a basic version — premium account can invite up 
+  to 5 sub-users who share the premium account's features
+- Advanced learning analytics: rebuild the analytics dashboard for 
+  Premium users to look genuinely more polished/advanced than the current 
+  one — this is a visual/UX task, make it look premium
+- Custom branding: build a settings section where Premium users can 
+  upload a logo and set a brand color that appears in their view of the 
+  app
+- API access: just add a placeholder page saying "Coming soon for schools 
+  and organizations" — do not build real API access yet
+- Dedicated support: flag only for now
+- Video generation UNLOCKED
+- File uploads in Ask LENORY: max 10 files per message
+
+FOR EVERY LOCKED FEATURE: when a Free or Pro user hits a limit or tries a 
+locked feature, they must see a clear, specific message (not a generic 
+error) telling them what plan unlocks it, with a button to the Pricing 
+page. Test each lock as a non-admin test account and confirm it actually 
+blocks, not just displays a warning while still letting the action through.
+
+═══════════════════════════════════════════════════════════
+SECTION 3 — ASK LENORY FILE UPLOADS (currently broken/timing out)
+═══════════════════════════════════════════════════════════
+
+Real bug: uploading files results in "Analysis failed — took too long to 
+analyze" — Gemini is timing out or not processing correctly. Debug this 
+for real:
+1. Reproduce it — upload 2-3 images with a prompt, watch server logs live
+2. Check: is the base64 payload too large? Is Gemini's vision API call 
+   itself slow, or is something upstream of it hanging first?
+3. Check server/gemini.ts's vision analysis function — does it have a 
+   reasonable timeout with a RETRY, not just a hard fail?
+4. Enforce the per-tier file count limits from Section 2 at the point of 
+   file selection — show a clear "Free plan allows 3 files max" message 
+   the moment a user tries to select more, don't let them select then 
+   fail silently
+5. Fix it so it actually returns a real analysis, tested with real files, 
+   not just "no longer times out but also doesn't respond"
+
+═══════════════════════════════════════════════════════════
+SECTION 4 — CHAT SESSION / SUPABASE SYNC BUGS (serious data integrity issue)
+═══════════════════════════════════════════════════════════
+
+Bug 1: Admin's chat sessions are showing up when a completely different 
+user creates a new chat. These are different Supabase user accounts — 
+chat session queries MUST filter strictly by the authenticated user's ID 
+from their Supabase Auth session, never mixing data between accounts. 
+Find wherever chat sessions are fetched and confirm the userId filter is 
+actually applied correctly — this sounds like a query returning 
+unfiltered or wrongly-scoped results.
+
+Bug 2: Old chats are disappearing when a user creates a new one — this 
+means chat sessions are NOT persisting to Supabase, they're in memory 
+and getting overwritten/evicted. Find the chat session storage code, 
+confirm every session write goes to Supabase (not an in-memory array/map 
+with a max size), and confirm reads pull the full real history from 
+Supabase, not a local cache.
+
+Bug 3: In the admin's own account, Ask LENORY sometimes doesn't respond 
+at all to messages. Debug this specifically for the admin account — check 
+if the admin data block (provider balances, usage stats) added to every 
+admin message is now slow BECAUSE the new provider dashboard fetches 
+several APIs — if so, make sure that data is cached (not fetched fresh 
+on every single chat message) so it can't add latency or hang the 
+admin's actual conversation.
+
+═══════════════════════════════════════════════════════════
+SECTION 5 — VOICE GALLERY (built but not connected)
+═══════════════════════════════════════════════════════════
+
+You said you built a Voice Gallery page, but it is NOT appearing in 
+Settings > Voice. Find wherever the Voice Gallery component/page was 
+created, and confirm it's actually imported and rendered inside the 
+Settings > Voice tab — this sounds like the page exists as a file but 
+was never wired into the route/tab that displays it. Fix the routing/
+import so it actually shows up, and test by navigating there yourself.
+
+═══════════════════════════════════════════════════════════
+SECTION 6 — IMAGE/VIDEO GALLERY PICKER BUTTON (still not showing)
+═══════════════════════════════════════════════════════════
+
+You said you added a +/± button in the image and video generation chat 
+boxes to let users pick an existing photo/video for editing. This is not 
+visible anywhere. Find where this was supposedly added, confirm it's 
+actually rendered in the UI (not just written in a file that isn't 
+imported/used), and show me exactly where in the component tree it sits. 
+Test it yourself: does tapping it actually open a file/gallery picker?
+
+═══════════════════════════════════════════════════════════
+SECTION 7 — CODE BLOCK DISPLAY + VOICE READ-ALOUD
+═══════════════════════════════════════════════════════════
+
+Code block bug: when the AI writes code in Ask LENORY, it currently 
+requires horizontal swiping to read — this is bad UX. Fix it so code 
+blocks:
+- Render in a bordered box, wrapping text properly (not requiring 
+  horizontal scroll for normal-width code)
+- Have a copy button
+- Have an expand icon to view the full code/text in a larger view
+- Have a download button that saves the code/text as a file to the 
+  user's device
+
+Read-aloud bug: currently uses the browser's built-in speech synthesis 
+(Web Speech API / SpeechSynthesis), which sounds robotic and ignores the 
+user's chosen voice. Replace this entirely: when a user taps "read aloud" 
+on an AI text response, it must use the SAME voice the user selected in 
+Settings > Voice (the Voice Gallery from Section 5), routed through 
+whatever TTS provider that voice belongs to (YarnGPT or VAPI's TTS), not 
+the browser's native voice. Remove the browser SpeechSynthesis fallback 
+entirely.
+
+═══════════════════════════════════════════════════════════
+FINAL STEP
+═══════════════════════════════════════════════════════════
+
+After completing all sections, give me a section-by-section report: what 
+you found was actually broken (root cause, not assumption), what you 
+changed, and the actual test you ran to confirm it now works. Then:
+
+git add -A
+git commit -m "Master fix: credits, tier enforcement, file uploads, chat sync, voice gallery, code blocks"
+git push origin main

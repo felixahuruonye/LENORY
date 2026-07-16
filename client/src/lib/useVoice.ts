@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
-// Gemini 2.0 voices (Multimodal Live API)
 export const GEMINI_VOICES = [
   { id: "Aoede", name: "Aoede", description: "Bright & melodic", gender: "female", lang: "en-US" },
   { id: "Charon", name: "Charon", description: "Deep & authoritative", gender: "male", lang: "en-US" },
@@ -9,39 +9,39 @@ export const GEMINI_VOICES = [
   { id: "Puck", name: "Puck", description: "Playful & energetic", gender: "neutral", lang: "en-US" },
 ];
 
-// Legacy browser TTS voices (fallback)
 export const AVAILABLE_VOICES = GEMINI_VOICES;
 
 const DEFAULT_VOICE = "Aoede";
 
-// Text preprocessing function - removes formatting, keeps only text
+// Nigerian YarnGPT speaker IDs — routed through our TTS proxy, not browser speech
+const YARNGPT_SPEAKERS = new Set([
+  "idera", "temi", "jide", "chidi",
+  "yoruba_female", "yoruba_male",
+  "igbo_female", "igbo_male",
+  "hausa_male", "hausa_female",
+  "pidgin",
+]);
+
 function preprocessTextForSpeech(text: string): string {
   let processed = text;
-  
-  // Convert LENORY to lowercase so it's read as a word, not spelled
   processed = processed.replace(/LENORY/g, "learnory");
-  
-  // Remove markdown formatting
   processed = processed
-    .replace(/\*\*(.+?)\*\*/g, "$1") // Remove **bold**
-    .replace(/\*(.+?)\*/g, "$1") // Remove *italic*
-    .replace(/```[\s\S]*?```/g, "") // Remove code blocks
-    .replace(/`(.+?)`/g, "$1") // Remove inline code
-    .replace(/#{1,6}\s+/g, "") // Remove heading markers
-    .replace(/^\s*[-•*]\s+/gm, "") // Remove bullet points
-    .replace(/^\s*\d+\.\s+/gm, "") // Remove numbered lists
-    .replace(/\n\n+/g, " ") // Collapse multiple newlines to space
-    .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1") // Remove markdown links [text](url) -> text
-    .replace(/___/g, "") // Remove horizontal rules
-    .replace(/--/g, "-") // Normalize dashes
-    .replace(/~/g, "") // Remove strikethrough markers
-    .replace(/\|/g, "") // Remove table pipes
-    .replace(/[🎓😊👋🌟]/g, "") // Remove emojis
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/#{1,6}\s+/g, "")
+    .replace(/^\s*[-•*]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\n\n+/g, " ")
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
+    .replace(/___/g, "")
+    .replace(/--/g, "-")
+    .replace(/~/g, "")
+    .replace(/\|/g, "")
+    .replace(/[🎓😊👋🌟]/g, "")
     .trim();
-  
-  // Remove extra whitespace
   processed = processed.replace(/\s+/g, " ").trim();
-  
   return processed;
 }
 
@@ -55,88 +55,112 @@ export function useVoice() {
   const [isPlaying, setIsPlaying] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+  const yarngptAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize speech synthesis
   useEffect(() => {
     if (typeof window !== "undefined") {
       synthRef.current = window.speechSynthesis || (window as any).webkitSpeechSynthesis;
     }
   }, []);
 
-  // Save voice preference to localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem("selectedVoice", selectedVoice);
     }
   }, [selectedVoice]);
 
-  const speak = useCallback(
-    (text: string) => {
-      if (!synthRef.current) return;
+  // Browser SpeechSynthesis fallback
+  const browserSpeak = useCallback((processedText: string, voiceName: string) => {
+    if (!synthRef.current) return;
+    synthRef.current.cancel();
+    const utterance = new SpeechSynthesisUtterance(processedText);
+    const voiceInfo = AVAILABLE_VOICES.find((v) => v.name === voiceName);
+    utterance.lang = voiceInfo?.lang || "en-US";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    const allVoices = synthRef.current.getVoices();
+    const matchedVoice = allVoices.find(
+      (v: SpeechSynthesisVoice) =>
+        v.name.toLowerCase().includes(voiceName.toLowerCase()) ||
+        (v.lang === utterance.lang && v.name.length < 20)
+    );
+    if (matchedVoice) utterance.voice = matchedVoice;
+    utterance.onstart = () => setIsPlaying(true);
+    utterance.onend = () => setIsPlaying(false);
+    utterance.onerror = () => setIsPlaying(false);
+    utteranceRef.current = utterance;
+    synthRef.current.speak(utterance);
+  }, []);
 
+  const speak = useCallback(
+    async (text: string) => {
       const processedText = preprocessTextForSpeech(text);
-      if (!processedText.trim()) {
-        setIsPlaying(false);
+      if (!processedText.trim()) { setIsPlaying(false); return; }
+
+      // User's Voice Gallery choice overrides the Settings dropdown selection
+      const preferredVoice = (typeof window !== "undefined" && localStorage.getItem("lenory_default_voice")) || selectedVoice;
+
+      // Nigerian YarnGPT voices go through our TTS API proxy
+      if (YARNGPT_SPEAKERS.has(preferredVoice)) {
+        try {
+          // Stop any existing audio
+          if (yarngptAudioRef.current) {
+            yarngptAudioRef.current.pause();
+            yarngptAudioRef.current = null;
+          }
+          if (synthRef.current) synthRef.current.cancel();
+          setIsPlaying(true);
+
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token || "";
+
+          const resp = await fetch("/api/tts/yarngpt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ text: processedText.slice(0, 500), speaker: preferredVoice }),
+          });
+
+          if (!resp.ok) throw new Error("YarnGPT TTS failed");
+          const data = await resp.json();
+          const audioUrl = data.audioUrl || data.url || data.audio;
+
+          if (audioUrl) {
+            const audio = new Audio(audioUrl);
+            yarngptAudioRef.current = audio;
+            audio.onended = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
+            audio.onerror = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
+            audio.play();
+          } else {
+            setIsPlaying(false);
+          }
+        } catch (err) {
+          console.warn("YarnGPT TTS error, falling back to browser speech:", err);
+          setIsPlaying(false);
+          browserSpeak(processedText, selectedVoice);
+        }
         return;
       }
 
-      // Cancel any ongoing speech
-      synthRef.current.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(processedText);
-
-      // Get voice info and set properties
-      const voiceInfo = AVAILABLE_VOICES.find((v) => v.name === selectedVoice);
-      utterance.lang = voiceInfo?.lang || "en-US";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-
-      // Try to match voice by name or language
-      const allVoices = synthRef.current.getVoices();
-      const matchedVoice = allVoices.find(
-        (v: SpeechSynthesisVoice) =>
-          v.name.toLowerCase().includes(selectedVoice.toLowerCase()) ||
-          (v.lang === voiceInfo?.lang && v.name.length < 20)
-      );
-      
-      if (matchedVoice) {
-        utterance.voice = matchedVoice;
-      }
-
-      utterance.onstart = () => {
-        setIsPlaying(true);
-      };
-
-      utterance.onend = () => {
-        setIsPlaying(false);
-      };
-
-      utterance.onerror = (event) => {
-        console.error("Speech error:", event.error);
-        setIsPlaying(false);
-      };
-
-      utteranceRef.current = utterance;
-      synthRef.current.speak(utterance);
+      // Gemini / international voices — browser SpeechSynthesis
+      browserSpeak(processedText, preferredVoice);
     },
-    [selectedVoice]
+    [selectedVoice, browserSpeak]
   );
 
   const stop = useCallback(() => {
-    if (synthRef.current) {
-      synthRef.current.cancel();
+    if (synthRef.current) synthRef.current.cancel();
+    if (yarngptAudioRef.current) {
+      yarngptAudioRef.current.pause();
+      yarngptAudioRef.current = null;
     }
     setIsPlaying(false);
   }, []);
 
   const toggleSpeak = useCallback(
     (text: string) => {
-      if (isPlaying) {
-        stop();
-      } else {
-        speak(text);
-      }
+      if (isPlaying) { stop(); }
+      else { speak(text); }
     },
     [isPlaying, speak, stop]
   );

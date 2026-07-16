@@ -23,6 +23,7 @@ export function useVapi(): UseVapiReturn {
   const vapiRef = useRef<any>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const startDurationTimer = () => {
     callStartTimeRef.current = Date.now();
@@ -37,6 +38,33 @@ export function useVapi(): UseVapiReturn {
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
       durationIntervalRef.current = null;
+    }
+  };
+
+  const startHeartbeat = (token: string) => {
+    // Charge proportionally every 10 seconds (~3 credits per 10s = 18 credits/min ≈ 20/min)
+    heartbeatIntervalRef.current = setInterval(async () => {
+      try {
+        const resp = await fetch("/api/voice/heartbeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({}),
+        });
+        if (resp.status === 402) {
+          // Insufficient credits — stop call immediately
+          console.warn("Voice call stopped: insufficient credits");
+          stopCall();
+        }
+      } catch {
+        // Non-fatal: keep the call going
+      }
+    }, 10000);
+  };
+
+  const stopHeartbeat = () => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
     }
   };
 
@@ -103,6 +131,7 @@ ${chatContext && chatContext.length > 0 ? `\nThis conversation has context from 
       vapi.on("call-start", () => {
         setStatus("active");
         startDurationTimer();
+        startHeartbeat(token);
       });
 
       vapi.on("call-end", async () => {
@@ -140,6 +169,7 @@ ${chatContext && chatContext.length > 0 ? `\nThis conversation has context from 
           setStatus("error");
         }
         stopDurationTimer();
+        stopHeartbeat();
       });
 
       await vapi.start({
@@ -173,6 +203,7 @@ ${chatContext && chatContext.length > 0 ? `\nThis conversation has context from 
 
   const stopCall = useCallback(async () => {
     stopDurationTimer();
+    stopHeartbeat();
     const duration = callStartTimeRef.current
       ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
       : 0;
@@ -180,6 +211,7 @@ ${chatContext && chatContext.length > 0 ? `\nThis conversation has context from 
       vapiRef.current.stop();
       vapiRef.current = null;
     }
+    // Report remaining (non-heartbeat) seconds for final reconciliation
     if (duration > 0) {
       await reportCallEndToServer(duration);
     }
@@ -198,6 +230,7 @@ ${chatContext && chatContext.length > 0 ? `\nThis conversation has context from 
   useEffect(() => {
     return () => {
       stopDurationTimer();
+      stopHeartbeat();
       if (vapiRef.current) vapiRef.current.stop();
     };
   }, []);
