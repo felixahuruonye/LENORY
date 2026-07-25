@@ -367,8 +367,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const currentSessionMessages = sessionId ? await storage.getChatMessagesBySession(sessionId) : [];
       const history = [...currentSessionMessages];
 
-      const userProgress = await storage.getUserProgressByUser(userId);
-      const examResults = await storage.getExamResultsByUser(userId);
+      // ─── FIX: Wrap progress/exam queries in try/catch to prevent chat crash ───
+      let userProgress: any[] = [];
+      let examResults: any[] = [];
+      try {
+        userProgress = await storage.getUserProgressByUser(userId);
+        examResults = await storage.getExamResultsByUser(userId);
+      } catch (e) {
+        console.error("Non-critical: failed to load progress/exam context:", e);
+      }
 
       let systemMessage = `You are LENORY — a powerful AI learning system built in Nigeria by Alaoma Obinna Felix known as MR.Felix. You are speaking with ${userName}.`;
       
@@ -457,7 +464,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
       res.json({ success: true, message: aiResponse });
     } catch (error) {
-      // ─── FIX: Added detailed error logging ───
       console.error("🔥 /api/chat/send crashed:", error);
       logAdminError("/api/chat/send", error);
       res.status(500).json({ message: "Failed to send message. Please try again." });
