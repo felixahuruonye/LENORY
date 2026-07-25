@@ -2,7 +2,7 @@
 // Real, persistent credit tracking. Supabase is the source of truth — a server
 // restart, deploy, or crash must never reset anyone's balance again.
 
-import { supabaseDb } from "./supabase";
+import { supabaseAdmin } from "./supabase";
 
 export interface CreditRecord {
   balance: number;
@@ -66,20 +66,20 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
   const today = todayKey();
   const limits = getTierLimits(tier);
 
-  if (!supabaseDb) {
+  if (!supabaseAdmin) {
     console.warn("⚠️ Supabase unavailable — using emergency in-memory credits fallback");
     return fallbackGetOrCreate(userId, tier);
   }
 
   try {
-    let { data, error } = await supabaseDb
+    let { data, error } = await supabaseAdmin
       .from("user_credits")
       .select("*")
       .eq("user_id", userId)
       .single();
 
     if (error || !data) {
-      const inserted = await supabaseDb
+      const inserted = await supabaseAdmin
         .from("user_credits")
         .insert({
           user_id: userId,
@@ -100,7 +100,7 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
       const newBalance = Math.min(data.balance + limits.dailyAdd, limits.maxBalance);
       const currentMonth = monthKey();
       const isNewMonth = data.last_monthly_reset !== currentMonth;
-      const updated = await supabaseDb
+      const updated = await supabaseAdmin
         .from("user_credits")
         .update({
           balance: newBalance,
@@ -132,16 +132,16 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
 // Returns the new balance, or null if the write failed (caller should treat
 // this conservatively — we already checked balance was sufficient before acting).
 export async function deductCredits(userId: string, amount: number): Promise<number | null> {
-  if (!supabaseDb) {
+  if (!supabaseAdmin) {
     const rec = emergencyFallbackStore.get(userId);
     if (rec) { rec.balance -= amount; rec.monthlyUsed += amount; return rec.balance; }
     return null;
   }
   try {
-    const { data } = await supabaseDb.from("user_credits").select("balance, monthly_used").eq("user_id", userId).single();
+    const { data } = await supabaseAdmin.from("user_credits").select("balance, monthly_used").eq("user_id", userId).single();
     if (!data) return null;
     const newBalance = data.balance - amount;
-    const { data: updated } = await supabaseDb
+    const { data: updated } = await supabaseAdmin
       .from("user_credits")
       .update({ balance: newBalance, monthly_used: data.monthly_used + amount, updated_at: new Date().toISOString() })
       .eq("user_id", userId)
@@ -182,7 +182,7 @@ export async function resetMonthlyCredits(userId: string, tier: string): Promise
   const limits = getTierLimits(tier);
   const today = todayKey();
   const currentMonth = monthKey();
-  if (!supabaseDb) {
+  if (!supabaseAdmin) {
     const rec = emergencyFallbackStore.get(userId);
     if (rec) {
       rec.monthlyUsed = 0;
@@ -193,7 +193,7 @@ export async function resetMonthlyCredits(userId: string, tier: string): Promise
     return rec || null;
   }
   try {
-    const { data } = await supabaseDb
+    const { data } = await supabaseAdmin
       .from("user_credits")
       .update({ monthly_used: 0, last_monthly_reset: currentMonth, balance: limits.dailyAdd, last_daily_reset: today, updated_at: new Date().toISOString() })
       .eq("user_id", userId)
@@ -211,16 +211,16 @@ export async function resetMonthlyCredits(userId: string, tier: string): Promise
 // unless uncapped is explicitly requested (e.g. an admin override).
 export async function addCredits(userId: string, amount: number, tier: string = "free", uncapped = false): Promise<number | null> {
   const limits = getTierLimits(tier);
-  if (!supabaseDb) {
+  if (!supabaseAdmin) {
     const rec = emergencyFallbackStore.get(userId);
     if (rec) { rec.balance = uncapped ? rec.balance + amount : Math.min(rec.balance + amount, limits.maxBalance); return rec.balance; }
     return null;
   }
   try {
-    const { data } = await supabaseDb.from("user_credits").select("balance").eq("user_id", userId).single();
+    const { data } = await supabaseAdmin.from("user_credits").select("balance").eq("user_id", userId).single();
     const current = data?.balance ?? 0;
     const newBalance = uncapped ? current + amount : Math.min(current + amount, limits.maxBalance);
-    const { data: updated } = await supabaseDb
+    const { data: updated } = await supabaseAdmin
       .from("user_credits")
       .upsert({ user_id: userId, balance: newBalance, updated_at: new Date().toISOString() })
       .select()
