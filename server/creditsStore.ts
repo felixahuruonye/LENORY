@@ -60,6 +60,18 @@ function fallbackGetOrCreate(userId: string, tier: string): CreditRecord {
   return rec;
 }
 
+// Small helper so every Supabase error gets logged the same detailed way
+// instead of being silently swallowed or replaced with a generic message.
+function logSupabaseError(context: string, error: any) {
+  console.error(
+    `[creditsStore] ${context} failed:`,
+    "message=", error?.message,
+    "details=", error?.details,
+    "hint=", error?.hint,
+    "code=", error?.code,
+  );
+}
+
 // Fetch (or create) a user's credit record, applying the daily top-up if a new
 // day has started. This is the ONLY function that should read credit state.
 export async function getOrCreateCredits(userId: string, tier: string = "free"): Promise<CreditRecord> {
@@ -78,6 +90,12 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
       .eq("user_id", userId)
       .single();
 
+    // PGRST116 = "no rows found" from .single() — that's expected for a brand
+    // new user and is NOT a real error. Anything else is worth logging.
+    if (error && error.code !== "PGRST116") {
+      logSupabaseError("select user_credits", error);
+    }
+
     if (error || !data) {
       const inserted = await supabaseAdmin
         .from("user_credits")
@@ -91,8 +109,13 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
         })
         .select()
         .single();
+
+      if (inserted.error) {
+        logSupabaseError("insert user_credits", inserted.error);
+        throw new Error(`Failed to create credit record: ${inserted.error.message}`);
+      }
       data = inserted.data;
-      if (!data) throw new Error("Failed to create credit record");
+      if (!data) throw new Error("Failed to create credit record: insert returned no data");
     }
 
     // Daily reset
@@ -112,6 +135,10 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
         .eq("user_id", userId)
         .select()
         .single();
+
+      if (updated.error) {
+        logSupabaseError("daily reset update user_credits", updated.error);
+      }
       data = updated.data || data;
     }
 
@@ -138,15 +165,23 @@ export async function deductCredits(userId: string, amount: number): Promise<num
     return null;
   }
   try {
-    const { data } = await supabaseAdmin.from("user_credits").select("balance, monthly_used").eq("user_id", userId).single();
+    const { data, error } = await supabaseAdmin
+      .from("user_credits")
+      .select("balance, monthly_used")
+      .eq("user_id", userId)
+      .single();
+    if (error) logSupabaseError("select before deductCredits", error);
     if (!data) return null;
+
     const newBalance = data.balance - amount;
-    const { data: updated } = await supabaseAdmin
+    const { data: updated, error: updateError } = await supabaseAdmin
       .from("user_credits")
       .update({ balance: newBalance, monthly_used: data.monthly_used + amount, updated_at: new Date().toISOString() })
       .eq("user_id", userId)
       .select()
       .single();
+    if (updateError) logSupabaseError("update in deductCredits", updateError);
+
     return updated?.balance ?? newBalance;
   } catch (e) {
     console.error("deductCredits Supabase error:", e);
@@ -193,12 +228,13 @@ export async function resetMonthlyCredits(userId: string, tier: string): Promise
     return rec || null;
   }
   try {
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("user_credits")
       .update({ monthly_used: 0, last_monthly_reset: currentMonth, balance: limits.dailyAdd, last_daily_reset: today, updated_at: new Date().toISOString() })
       .eq("user_id", userId)
       .select()
       .single();
+    if (error) logSupabaseError("resetMonthlyCredits update", error);
     if (!data) return null;
     return { balance: data.balance, monthlyUsed: data.monthly_used, dailyGiven: data.daily_given, lastDailyReset: data.last_daily_reset, lastMonthlyReset: data.last_monthly_reset };
   } catch (e) {
@@ -217,14 +253,22 @@ export async function addCredits(userId: string, amount: number, tier: string = 
     return null;
   }
   try {
-    const { data } = await supabaseAdmin.from("user_credits").select("balance").eq("user_id", userId).single();
+    const { data, error } = await supabaseAdmin
+      .from("user_credits")
+      .select("balance")
+      .eq("user_id", userId)
+      .single();
+    if (error && error.code !== "PGRST116") logSupabaseError("select before addCredits", error);
+
     const current = data?.balance ?? 0;
     const newBalance = uncapped ? current + amount : Math.min(current + amount, limits.maxBalance);
-    const { data: updated } = await supabaseAdmin
+    const { data: updated, error: upsertError } = await supabaseAdmin
       .from("user_credits")
       .upsert({ user_id: userId, balance: newBalance, updated_at: new Date().toISOString() })
       .select()
       .single();
+    if (upsertError) logSupabaseError("upsert in addCredits", upsertError);
+
     return updated?.balance ?? newBalance;
   } catch (e) {
     console.error("addCredits Supabase error:", e);
