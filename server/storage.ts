@@ -30,6 +30,7 @@ import {
 } from "@shared/schema";
 import { db, supabaseDb } from "./db";
 import { eq, desc, and } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 export interface IStorage {
   // User operations
@@ -869,6 +870,16 @@ export class DatabaseStorage implements IStorage {
 }
 
 // ─── Supabase-backed Storage ──────────────────────────────────────────────────
+// CRITICAL FIX: createChatSession, createChatMessage, createFileUpload,
+// createMemoryEntry, createGeneratedLesson, upsertUser, and updateUser
+// used to call super.xxx() first, which routes through the FAKE stub `db`
+// object in db.ts (every method on it just returns []). That made
+// `[newSession] = await db.insert(...).returning()` always come back
+// undefined, which crashed the moment the code tried to read `.id` off it.
+//
+// Fix: generate the ID ourselves and write directly to the REAL Supabase
+// client (`supabaseDb`), which is the one thing in this file that actually
+// works. No more routing through the fake db at all for these paths.
 class SupabaseStorage extends DatabaseStorage {
   // ── Users ───────────────────────────────────────────────────────────────────
   async getUsers(): Promise<User[]> {
@@ -892,7 +903,7 @@ class SupabaseStorage extends DatabaseStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const memUser = await super.upsertUser(userData);
+    const now = new Date().toISOString();
     if (supabaseDb) {
       try {
         const row = {
@@ -903,16 +914,34 @@ class SupabaseStorage extends DatabaseStorage {
           profile_image_url: userData.profileImageUrl || null,
           role: 'student',
           subscription_tier: 'free',
-          updated_at: new Date().toISOString(),
+          updated_at: now,
         };
-        await supabaseDb.from('users').upsert(row, { onConflict: 'id' });
-      } catch {}
+        const { data, error } = await supabaseDb.from('users').upsert(row, { onConflict: 'id' }).select().single();
+        if (error) console.error("🔥 Failed to upsert user to Supabase:", error.message, error.details, error.hint);
+        if (!error && data) return mapSupabaseUser(data);
+      } catch (e) {
+        console.error("🔥 upsertUser Supabase error:", e);
+      }
     }
-    return memUser;
+    // Fallback so the caller never gets undefined, even if Supabase failed
+    return {
+      id: userData.id,
+      email: userData.email || '',
+      firstName: userData.firstName || null,
+      lastName: userData.lastName || null,
+      profileImageUrl: userData.profileImageUrl || null,
+      role: 'student',
+      schoolId: null,
+      subscriptionTier: 'free',
+      subscriptionExpiresAt: null,
+      paystackCustomerId: null,
+      lenoryId: null,
+      createdAt: new Date(now),
+      updatedAt: new Date(now),
+    } as User;
   }
 
   async updateUser(id: string, updates: any): Promise<User | undefined> {
-    const memUser = await super.updateUser(id, updates);
     if (supabaseDb) {
       try {
         const row: any = { updated_at: new Date().toISOString() };
@@ -920,33 +949,52 @@ class SupabaseStorage extends DatabaseStorage {
         if (updates.lastName !== undefined) row.last_name = updates.lastName;
         if (updates.profileImageUrl !== undefined) row.profile_image_url = updates.profileImageUrl;
         if (updates.subscriptionTier !== undefined) row.subscription_tier = updates.subscriptionTier;
-        await supabaseDb.from('users').update(row).eq('id', id);
-      } catch {}
+        if (updates.subscriptionExpiresAt !== undefined) row.subscription_expires_at = updates.subscriptionExpiresAt;
+        if (updates.paystackCustomerId !== undefined) row.paystack_customer_id = updates.paystackCustomerId;
+        const { data, error } = await supabaseDb.from('users').update(row).eq('id', id).select().single();
+        if (error) console.error("🔥 Failed to update user in Supabase:", error.message, error.details, error.hint);
+        if (!error && data) return mapSupabaseUser(data);
+      } catch (e) {
+        console.error("🔥 updateUser Supabase error:", e);
+      }
     }
-    return memUser;
+    return this.getUser(id);
   }
 
   // ── Chat Sessions ───────────────────────────────────────────────────────────
   async createChatSession(session: InsertChatSession): Promise<ChatSession> {
-    const memSession = await super.createChatSession(session);
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const sessionRow = {
+      id,
+      user_id: session.userId,
+      title: session.title || 'New Chat',
+      mode: session.mode || 'chat',
+      summary: session.summary || '',
+      is_bookmarked: (session as any).isBookmarked || false,
+      message_count: 0,
+      created_at: now,
+      updated_at: now,
+    };
     if (supabaseDb) {
       try {
-        await supabaseDb.from('chat_sessions').upsert({
-          id: memSession.id,
-          user_id: session.userId,
-          title: session.title || 'New Chat',
-          mode: session.mode || 'chat',
-          summary: session.summary || '',
-          is_bookmarked: (session as any).isBookmarked || false,
-          message_count: 0,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+        const { error } = await supabaseDb.from('chat_sessions').upsert(sessionRow);
+        if (error) console.error("🔥 Failed to save chat session to Supabase:", error.message, error.details, error.hint);
       } catch (e) {
-        console.error("🔥 Failed to save chat session to Supabase:", e);
+        console.error("🔥 createChatSession Supabase error:", e);
       }
     }
-    return memSession;
+    return {
+      id,
+      userId: session.userId,
+      title: sessionRow.title,
+      mode: sessionRow.mode,
+      summary: sessionRow.summary,
+      messageCount: 0,
+      isBookmarked: sessionRow.is_bookmarked,
+      createdAt: new Date(now),
+      updatedAt: new Date(now),
+    } as ChatSession;
   }
 
   async getChatSessionsByUser(userId: string): Promise<ChatSession[]> {
@@ -956,7 +1004,7 @@ class SupabaseStorage extends DatabaseStorage {
           .from('chat_sessions').select('*').eq('user_id', userId)
           .order('is_bookmarked', { ascending: false })
           .order('updated_at', { ascending: false });
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map((s: any) => ({
             id: s.id, userId: s.user_id, title: s.title, mode: s.mode,
             summary: s.summary || '', messageCount: s.message_count || 0,
@@ -966,7 +1014,7 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getChatSessionsByUser(userId);
+    return [];
   }
 
   async getChatSession(id: string): Promise<ChatSession | undefined> {
@@ -983,11 +1031,10 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getChatSession(id);
+    return undefined;
   }
 
   async updateChatSession(id: string, updates: Partial<InsertChatSession>): Promise<ChatSession | undefined> {
-    const mem = await super.updateChatSession(id, updates);
     if (supabaseDb) {
       try {
         const updateData: any = { updated_at: new Date().toISOString() };
@@ -995,49 +1042,63 @@ class SupabaseStorage extends DatabaseStorage {
         if (updates.mode !== undefined) updateData.mode = updates.mode;
         if (updates.summary !== undefined) updateData.summary = updates.summary;
         if ((updates as any).isBookmarked !== undefined) updateData.is_bookmarked = (updates as any).isBookmarked;
-        await supabaseDb.from('chat_sessions').update(updateData).eq('id', id);
-      } catch {}
+        const { error } = await supabaseDb.from('chat_sessions').update(updateData).eq('id', id);
+        if (error) console.error("🔥 Failed to update chat session in Supabase:", error.message, error.details, error.hint);
+      } catch (e) {
+        console.error("🔥 updateChatSession Supabase error:", e);
+      }
     }
-    return mem;
+    return this.getChatSession(id);
   }
 
   async deleteChatSession(id: string): Promise<void> {
-    await super.deleteChatSession(id);
     if (supabaseDb) {
       try {
         await supabaseDb.from('chat_sessions').delete().eq('id', id);
         await supabaseDb.from('chat_messages').delete().eq('session_id', id);
-      } catch {}
+      } catch (e) {
+        console.error("🔥 deleteChatSession Supabase error:", e);
+      }
     }
   }
 
   // ── Chat Messages ───────────────────────────────────────────────────────────
   async createChatMessage(msg: InsertChatMessage): Promise<ChatMessage> {
-    const memMsg = await super.createChatMessage(msg);
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const messageRow = {
+      id,
+      user_id: msg.userId,
+      session_id: msg.sessionId || null,
+      role: msg.role,
+      content: msg.content,
+      attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+      created_at: now,
+    };
     if (supabaseDb) {
       try {
-        const { error } = await supabaseDb.from('chat_messages').insert({
-          id: memMsg.id,
-          user_id: msg.userId,
-          session_id: msg.sessionId || null,
-          role: msg.role,
-          content: msg.content,
-          attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
-          created_at: new Date().toISOString(),
-        });
+        const { error } = await supabaseDb.from('chat_messages').insert(messageRow);
         if (error) console.error("🔥 Failed to save chat message to Supabase:", error.message, error.details, error.hint);
         if (msg.sessionId) {
           try {
             await supabaseDb.rpc('increment_message_count', { session_id: msg.sessionId });
           } catch (e) {
-            console.error("🔥 increment_message_count RPC failed:", e);
+            console.error("🔥 increment_message_count RPC failed (non-critical):", e);
           }
         }
       } catch (e) {
         console.error("🔥 createChatMessage Supabase error:", e);
       }
     }
-    return memMsg;
+    return {
+      id,
+      userId: msg.userId,
+      sessionId: msg.sessionId || null,
+      role: msg.role,
+      content: msg.content,
+      attachments: msg.attachments || null,
+      createdAt: new Date(now),
+    } as ChatMessage;
   }
 
   async getChatMessagesBySession(sessionId: string): Promise<ChatMessage[]> {
@@ -1046,7 +1107,7 @@ class SupabaseStorage extends DatabaseStorage {
         const { data, error } = await supabaseDb
           .from('chat_messages').select('*').eq('session_id', sessionId)
           .order('created_at', { ascending: true });
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, sessionId: m.session_id, role: m.role, content: m.content,
             attachments: m.attachments ? (typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments) : null,
@@ -1055,7 +1116,7 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getChatMessagesBySession(sessionId);
+    return [];
   }
 
   async getChatMessagesByUser(userId: string, limit = 500): Promise<ChatMessage[]> {
@@ -1064,7 +1125,7 @@ class SupabaseStorage extends DatabaseStorage {
         const { data, error } = await supabaseDb
           .from('chat_messages').select('*').eq('user_id', userId)
           .order('created_at', { ascending: false }).limit(limit);
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, sessionId: m.session_id, role: m.role, content: m.content,
             attachments: m.attachments ? (typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments) : null,
@@ -1073,16 +1134,27 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getChatMessagesByUser(userId, limit);
+    return [];
+  }
+
+  async deleteChatMessagesByUser(userId: string): Promise<void> {
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('chat_messages').delete().eq('user_id', userId);
+      } catch (e) {
+        console.error("🔥 deleteChatMessagesByUser Supabase error:", e);
+      }
+    }
   }
 
   // ── Generated Lessons ───────────────────────────────────────────────────────
   async createGeneratedLesson(l: InsertGeneratedLesson): Promise<GeneratedLesson> {
-    const memLesson = await super.createGeneratedLesson(l);
+    const id = nanoid();
+    const now = new Date().toISOString();
     if (supabaseDb) {
       try {
-        await supabaseDb.from('generated_lessons').insert({
-          id: memLesson.id,
+        const { error } = await supabaseDb.from('generated_lessons').insert({
+          id,
           user_id: l.userId,
           recording_id: l.recordingId || null,
           title: l.title,
@@ -1090,11 +1162,18 @@ class SupabaseStorage extends DatabaseStorage {
           key_points: l.keyPoints || [],
           summary: l.summary || '',
           original_text: l.originalText || null,
-          created_at: new Date().toISOString(),
+          created_at: now,
         });
-      } catch {}
+        if (error) console.error("🔥 Failed to save generated lesson to Supabase:", error.message, error.details, error.hint);
+      } catch (e) {
+        console.error("🔥 createGeneratedLesson Supabase error:", e);
+      }
     }
-    return memLesson;
+    return {
+      id, userId: l.userId, recordingId: l.recordingId || null, title: l.title,
+      objectives: l.objectives || [], keyPoints: l.keyPoints || [], summary: l.summary || '',
+      originalText: l.originalText || null, createdAt: new Date(now),
+    } as GeneratedLesson;
   }
 
   async getGeneratedLessonsByUser(userId: string): Promise<GeneratedLesson[]> {
@@ -1103,7 +1182,7 @@ class SupabaseStorage extends DatabaseStorage {
         const { data, error } = await supabaseDb
           .from('generated_lessons').select('*').eq('user_id', userId)
           .order('created_at', { ascending: false });
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map((l: any) => ({
             id: l.id, userId: l.user_id, recordingId: l.recording_id,
             title: l.title, objectives: l.objectives || [],
@@ -1113,33 +1192,41 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getGeneratedLessonsByUser(userId);
+    return [];
   }
 
   async deleteGeneratedLesson(id: string): Promise<void> {
-    await super.deleteGeneratedLesson(id);
     if (supabaseDb) {
-      try { await supabaseDb.from('generated_lessons').delete().eq('id', id); } catch {}
+      try { await supabaseDb.from('generated_lessons').delete().eq('id', id); } catch (e) {
+        console.error("🔥 deleteGeneratedLesson Supabase error:", e);
+      }
     }
   }
 
   // ── Memory Entries ──────────────────────────────────────────────────────────
   async createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry> {
-    const memEntry = await super.createMemoryEntry(entry);
+    const id = nanoid();
+    const now = new Date().toISOString();
     if (supabaseDb) {
       try {
-        await supabaseDb.from('memory_entries').insert({
-          id: memEntry.id,
+        const { error } = await supabaseDb.from('memory_entries').insert({
+          id,
           user_id: entry.userId,
           type: (entry as any).type || 'note',
           subject: (entry as any).subject || null,
           content: (entry as any).content || ((entry as any).data ? JSON.stringify((entry as any).data) : ''),
           importance: (entry as any).importance || 1,
-          created_at: new Date().toISOString(),
+          created_at: now,
         });
-      } catch {}
+        if (error) console.error("🔥 Failed to save memory entry to Supabase:", error.message, error.details, error.hint);
+      } catch (e) {
+        console.error("🔥 createMemoryEntry Supabase error:", e);
+      }
     }
-    return memEntry;
+    return {
+      id, userId: entry.userId, type: (entry as any).type,
+      data: (entry as any).data || {}, createdAt: new Date(now),
+    } as unknown as MemoryEntry;
   }
 
   async getMemoryEntriesByUser(userId: string): Promise<MemoryEntry[]> {
@@ -1148,7 +1235,7 @@ class SupabaseStorage extends DatabaseStorage {
         const { data, error } = await supabaseDb
           .from('memory_entries').select('*').eq('user_id', userId)
           .order('created_at', { ascending: false });
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, type: m.type, subject: m.subject,
             data: m.content ? { content: m.content } : {},
@@ -1157,16 +1244,17 @@ class SupabaseStorage extends DatabaseStorage {
         }
       } catch {}
     }
-    return super.getMemoryEntriesByUser(userId);
+    return [];
   }
 
   // ── File Uploads ────────────────────────────────────────────────────────────
   async createFileUpload(upload: InsertFileUpload): Promise<FileUpload> {
-    const memUpload = await super.createFileUpload(upload);
+    const id = nanoid();
+    const now = new Date().toISOString();
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb.from('document_uploads').insert({
-          id: memUpload.id,
+          id,
           user_id: upload.userId,
           file_name: upload.fileName,
           file_type: upload.fileType,
@@ -1174,7 +1262,7 @@ class SupabaseStorage extends DatabaseStorage {
           file_url: upload.fileUrl,
           extracted_text: upload.extractedText || null,
           is_processing: upload.processingStatus === 'pending',
-          created_at: new Date().toISOString(),
+          created_at: now,
         }).select().single();
         if (error) console.error("🔥 Failed to save file upload to Supabase:", error.message, error.details, error.hint);
         if (!error && data) return mapDocumentUploadRow(data);
@@ -1182,7 +1270,11 @@ class SupabaseStorage extends DatabaseStorage {
         console.error("🔥 createFileUpload Supabase error:", e);
       }
     }
-    return memUpload;
+    return {
+      id, userId: upload.userId, fileName: upload.fileName, fileType: upload.fileType,
+      fileSize: upload.fileSize, fileUrl: upload.fileUrl, extractedText: upload.extractedText || null,
+      processingStatus: upload.processingStatus || 'pending', createdAt: new Date(now),
+    } as FileUpload;
   }
 
   async getFileUploadsByUser(userId: string): Promise<FileUpload[]> {
@@ -1194,7 +1286,7 @@ class SupabaseStorage extends DatabaseStorage {
         if (!error && data) return data.map(mapDocumentUploadRow);
       } catch {}
     }
-    return super.getFileUploadsByUser(userId);
+    return [];
   }
 
   async getFileUpload(id: string): Promise<FileUpload | undefined> {
@@ -1204,7 +1296,7 @@ class SupabaseStorage extends DatabaseStorage {
         if (!error && data) return mapDocumentUploadRow(data);
       } catch {}
     }
-    return super.getFileUpload(id);
+    return undefined;
   }
 
   async updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined> {
@@ -1213,20 +1305,59 @@ class SupabaseStorage extends DatabaseStorage {
         const updateData: any = { is_processing: status === 'pending' };
         if (extractedText) updateData.extracted_text = extractedText;
         const { data, error } = await supabaseDb.from('document_uploads').update(updateData).eq('id', id).select().single();
+        if (error) console.error("🔥 Failed to update file upload in Supabase:", error.message, error.details, error.hint);
         if (!error && data) return mapDocumentUploadRow(data);
-      } catch {}
+      } catch (e) {
+        console.error("🔥 updateFileUploadStatus Supabase error:", e);
+      }
     }
-    return super.updateFileUploadStatus(id, status, extractedText);
+    return this.getFileUpload(id);
   }
 
   async deleteFileUpload(id: string): Promise<void> {
     if (supabaseDb) {
       try {
         await supabaseDb.from('document_uploads').delete().eq('id', id);
-        return;
-      } catch {}
+      } catch (e) {
+        console.error("🔥 deleteFileUpload Supabase error:", e);
+      }
     }
-    return super.deleteFileUpload(id);
+  }
+
+  // ── Exam Results & User Progress ────────────────────────────────────────────
+  // These previously had NO override at all, so they fell through to the base
+  // DatabaseStorage methods, which call the FAKE db stub's `.orderBy()` —
+  // a method that stub doesn't even have. That was your other crash:
+  // "db.select(...).from(...).where(...).orderBy is not a function".
+  // NOTE: this assumes Supabase tables named `exam_results` / `user_progress`
+  // with a `user_id` column — adjust the table/column names below if yours differ.
+  async getExamResultsByUser(userId: string): Promise<ExamResult[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('exam_results').select('*').eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data) return data as any;
+        if (error) console.error("🔥 getExamResultsByUser Supabase error:", error.message);
+      } catch (e) {
+        console.error("🔥 getExamResultsByUser Supabase error:", e);
+      }
+    }
+    return [];
+  }
+
+  async getUserProgressByUser(userId: string): Promise<UserProgress[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('user_progress').select('*').eq('user_id', userId);
+        if (!error && data) return data as any;
+        if (error) console.error("🔥 getUserProgressByUser Supabase error:", error.message);
+      } catch (e) {
+        console.error("🔥 getUserProgressByUser Supabase error:", e);
+      }
+    }
+    return [];
   }
 }
 
