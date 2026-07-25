@@ -7,8 +7,6 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('❌ Missing Supabase environment variables!');
-  console.error('VITE_SUPABASE_URL:', supabaseUrl ? '✅ Set' : '❌ Missing');
-  console.error('VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? '✅ Set' : '❌ Missing');
 }
 
 // This is the CLIENT-SIDE instance - uses ANON key only
@@ -27,12 +25,6 @@ export const signInWithGoogle = async () => {
   return { data, error };
 };
 
-// Sign out
-export const signOut = async () => {
-  const { error } = await supabase.auth.signOut();
-  return { error };
-};
-
 // Sign in with email/password
 export const signInWithEmail = async (email: string, password: string) => {
   const { data, error } = await supabase.auth.signInWithPassword({
@@ -40,6 +32,16 @@ export const signInWithEmail = async (email: string, password: string) => {
     password,
   });
   return { data, error };
+};
+
+// ═══ FIX: Alias for Login.tsx ════════════════════════════════
+export const signInWithEmailPassword = signInWithEmail;
+// ═════════════════════════════════════════════════════════════
+
+// Sign out
+export const signOut = async () => {
+  const { error } = await supabase.auth.signOut();
+  return { error };
 };
 
 // Sign up with email/password
