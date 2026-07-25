@@ -1,9 +1,7 @@
+// client/src/hooks/useSupabaseAuth.ts
 import { useEffect, useState } from 'react';
 import { User } from '@supabase/supabase-js';
-import { supabase } from '../../lib/supabase'; // This should be your CLIENT-side Supabase instance
-
-// This file should ONLY use the ANON key client, NEVER the admin client
-// The admin client stays in server/ folder only
+import { supabase } from '@/lib/supabase';
 
 export function useSupabaseAuth() {
   const [user, setUser] = useState<User | null>(null);
@@ -11,13 +9,11 @@ export function useSupabaseAuth() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
     });
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         setUser(session?.user ?? null);
@@ -28,14 +24,10 @@ export function useSupabaseAuth() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Sign in with email/password
   const signIn = async (email: string, password: string) => {
     try {
       setError(null);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       return { user: data.user, session: data.session, error: null };
     } catch (err: any) {
@@ -44,7 +36,6 @@ export function useSupabaseAuth() {
     }
   };
 
-  // Sign up with email/password
   const signUp = async (email: string, password: string, metadata?: any) => {
     try {
       setError(null);
@@ -61,7 +52,6 @@ export function useSupabaseAuth() {
     }
   };
 
-  // Sign out
   const signOut = async () => {
     try {
       setError(null);
@@ -74,7 +64,6 @@ export function useSupabaseAuth() {
     }
   };
 
-  // Reset password
   const resetPassword = async (email: string) => {
     try {
       setError(null);
@@ -87,15 +76,7 @@ export function useSupabaseAuth() {
     }
   };
 
-  // UPDATE: This is the KEY change - use the ANON client, NOT admin
-  // Any admin operations (like checking email existence across all users)
-  // should be done via a server API endpoint, NOT client-side!
   const checkEmailExists = async (email: string) => {
-    // ❌ DON'T DO THIS CLIENT-SIDE:
-    // Use supabaseAdmin - THIS WOULD EXPOSE YOUR SERVICE ROLE KEY!
-    
-    // ✅ DO THIS INSTEAD:
-    // Call your server API endpoint
     try {
       const response = await fetch('/api/auth/check-email', {
         method: 'POST',
@@ -117,6 +98,6 @@ export function useSupabaseAuth() {
     signUp,
     signOut,
     resetPassword,
-    checkEmailExists, // Calls the server API
+    checkEmailExists,
   };
 }

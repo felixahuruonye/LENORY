@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQueryClient } from "@tanstack/react-query";
-import { supabase, signInWithGoogle as supabaseGoogleSignIn, signOut as supabaseSignOut } from '@/lib/supabase';
+import { 
+  supabase, 
+  signInWithGoogle as supabaseGoogleSignIn, 
+  signOut as supabaseSignOut,
+  signInWithEmail,
+  signUpWithEmail,
+  resetPassword,
+  getSession,
+  getUser
+} from '@/lib/supabase';
 import type { User } from "@shared/schema";
 
 // Build a User object directly from Supabase Auth session data (no DB call needed)
@@ -116,11 +125,36 @@ export function useAuth() {
     return { error: error ? new Error(error.message) : null };
   }, [queryClient]);
 
+  // ─── NEW: Email/Password Auth Functions ──────────────────
+  const signIn = useCallback(async (email: string, password: string) => {
+    const { data, error } = await signInWithEmail(email, password);
+    if (error) {
+      return { user: null, error: new Error(error.message) };
+    }
+    return { user: data.user, error: null };
+  }, []);
+
+  const signUp = useCallback(async (email: string, password: string, metadata?: any) => {
+    const { data, error } = await signUpWithEmail(email, password, metadata);
+    if (error) {
+      return { user: null, error: new Error(error.message) };
+    }
+    return { user: data.user, error: null };
+  }, []);
+
+  const resetPasswordRequest = useCallback(async (email: string) => {
+    const { error } = await resetPassword(email);
+    return { error: error ? new Error(error.message) : null };
+  }, []);
+
   return {
     user,
     isLoading,
     isAuthenticated: !!user,
     signInWithGoogle,
     signOut,
+    signIn,
+    signUp,
+    resetPassword: resetPasswordRequest,
   };
 }
