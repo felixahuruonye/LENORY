@@ -229,12 +229,10 @@ export async function processLearningInteraction(
       userId,
       subject,
       topic,
-      difficulty: performance > 80 ? "easy" : performance > 60 ? "medium" : "hard",
+      mode: performance > 80 ? "easy" : performance > 60 ? "medium" : "hard",
       duration: 30, // Would be tracked from actual time
-      completed: true,
+      performance: `${performance}%`,
       notes: `${interactionType} completed with ${performance}% score`,
-      tags: [subject, interactionType],
-      rating: performance > 80 ? 5 : performance > 60 ? 3 : 2,
     });
   } catch (error) {
     console.error("Error processing learning interaction:", error);
@@ -270,16 +268,16 @@ export async function getUserLearningDashboard(userId: string): Promise<any> {
     const subjectsStudied = new Set(learningHistory.map(h => h.subject)).size;
     const topicsLearned = new Set(learningHistory.map(h => h.topic)).size;
     
-    // Identify weak topics
+    // Identify weak topics (use performance < 60% as proxy since rating not in schema)
     const weakTopics = learningHistory
-      .filter(h => (h.rating || 0) < 3)
+      .filter(h => h.performance && parseInt(h.performance) < 60)
       .map(h => h.topic);
 
     return {
       totalHoursStudied,
       subjectsStudied,
       topicsLearned,
-      weakTopics: [...new Set(weakTopics)].slice(0, 5),
+      weakTopics: Array.from(new Set(weakTopics)).slice(0, 5),
       recentTopics: learningHistory.slice(0, 5).map(h => ({ topic: h.topic, subject: h.subject })),
       insights,
       progress,

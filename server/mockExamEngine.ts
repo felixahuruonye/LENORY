@@ -132,7 +132,7 @@ export function markExam(
     }
     topicPerformance[q.topic].total++;
 
-    const isCorrect = userAnswer.toLowerCase() === q.correctAnswer.toLowerCase();
+    const isCorrect = userAnswer.toLowerCase() === String(q.correctAnswer).toLowerCase();
     if (isCorrect) {
       correctCount++;
       topicPerformance[q.topic].correct++;

@@ -1,239 +1,221 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useRef, useState, useCallback } from "react";
 
-type VapiStatus = "idle" | "connecting" | "active" | "error";
+// ============================================================
+// TYPES
+// ============================================================
 
-interface UseVapiReturn {
-  status: VapiStatus;
-  isSpeaking: boolean;
-  transcript: string;
-  callDurationSeconds: number;
-  startCall: (chatContext?: { role: string; content: string }[]) => Promise<void>;
-  stopCall: () => void;
-  sendMessage: (text: string) => void;
-  error: string | null;
+export interface VapiMessage {
+  role?: "user" | "assistant" | "system";
+  content?: string;
+  transcript?: string;
+  transcriptText?: string;
+  text?: string;
+  transcriptType?: "final" | "interim";
+  type?: string;
+  output?: string | { content?: string; text?: string };
+  conversation?: Array<{ role: string; content: string }>;
 }
 
-export function useVapi(): UseVapiReturn {
-  const [status, setStatus] = useState<VapiStatus>("idle");
-  const [isSpeaking, setIsSpeaking] = useState(false);
+export interface UseVapiReturn {
+  isCallActive: boolean;
+  transcript: string;
+  messages: VapiMessage[];
+  error: string | null;
+  isInitialized: boolean;
+  start: (options?: { customData?: any }) => Promise<void>;
+  stop: () => void;
+  toggle: () => void;
+  clearMessages: () => void;
+}
+
+// Vapi SDK types (simplified)
+interface VapiSDK {
+  on(event: string, callback: (data: any) => void): void;
+  start(options?: { customData?: any }): Promise<void>;
+  stop(): void;
+  send(data: any): void;
+}
+
+// ============================================================
+// HOOK
+// ============================================================
+
+export function useVapi(publicKey?: string): UseVapiReturn {
+  const [isCallActive, setIsCallActive] = useState(false);
   const [transcript, setTranscript] = useState("");
+  const [messages, setMessages] = useState<VapiMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [callDurationSeconds, setCallDurationSeconds] = useState(0);
-  const vapiRef = useRef<any>(null);
-  const callStartTimeRef = useRef<number | null>(null);
-  const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  const startDurationTimer = () => {
-    callStartTimeRef.current = Date.now();
-    durationIntervalRef.current = setInterval(() => {
-      if (callStartTimeRef.current) {
-        setCallDurationSeconds(Math.floor((Date.now() - callStartTimeRef.current) / 1000));
+  const vapiRef = useRef<VapiSDK | null>(null);
+  const onMessageRef = useRef<((msg: VapiMessage) => void) | null>(null);
+
+  // ============================================================
+  // START CALL
+  // ============================================================
+  const start = useCallback(
+    async (options?: { customData?: any }) => {
+      if (!vapiRef.current) {
+        setError("Vapi not initialized. Call init first.");
+        return;
       }
-    }, 1000);
-  };
-
-  const stopDurationTimer = () => {
-    if (durationIntervalRef.current) {
-      clearInterval(durationIntervalRef.current);
-      durationIntervalRef.current = null;
-    }
-  };
-
-  const startHeartbeat = (token: string) => {
-    // Charge proportionally every 10 seconds (~3 credits per 10s = 18 credits/min ≈ 20/min)
-    heartbeatIntervalRef.current = setInterval(async () => {
       try {
-        const resp = await fetch("/api/voice/heartbeat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({}),
-        });
-        if (resp.status === 402) {
-          // Insufficient credits — stop call immediately
-          console.warn("Voice call stopped: insufficient credits");
-          stopCall();
-        }
-      } catch {
-        // Non-fatal: keep the call going
+        await vapiRef.current.start(options);
+        setIsCallActive(true);
+        setError(null);
+      } catch (err: any) {
+        setError(err.message || "Failed to start call");
+        console.error("Vapi start error:", err);
       }
-    }, 10000);
-  };
+    },
+    []
+  );
 
-  const stopHeartbeat = () => {
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current);
-      heartbeatIntervalRef.current = null;
-    }
-  };
-
-  const reportCallEndToServer = async (durationSecs: number) => {
-    if (durationSecs <= 0) return;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || "";
-      await fetch("/api/voice/end-call", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ durationSeconds: durationSecs }),
-      });
-    } catch (err) {
-      console.warn("Could not report voice call credits:", err);
-    }
-  };
-
-  const startCall = useCallback(async (chatContext?: { role: string; content: string }[]) => {
-    try {
-      setStatus("connecting");
-      setError(null);
-      setCallDurationSeconds(0);
-
-      // Check microphone permission first
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((t) => t.stop());
-      } catch {
-        throw new Error("Microphone access denied. Please allow microphone access and try again.");
-      }
-
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || "";
-
-      const res = await fetch("/api/vapi-config", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Voice service not configured. Please contact support.");
-      const { publicKey } = await res.json();
-      if (!publicKey) throw new Error("Voice public key missing.");
-
-      const { default: Vapi } = await import("@vapi-ai/web");
-      const vapi = new Vapi(publicKey);
-      vapiRef.current = vapi;
-
-      // Build context from previous chat messages (last 6 to stay within token limits)
-      const contextMessages = chatContext?.slice(-6).map((m) => ({
-        role: m.role as "user" | "assistant" | "system",
-        content: m.content,
-      })) || [];
-
-      const systemPrompt = `You are LENORY — a powerful AI assistant built in Nigeria by Alaoma Obinna Felix. You are warm, direct, and genuinely helpful. You understand Nigerian culture, language and context.
-
-You can help with: coding, research, writing, mathematics, science, cybersecurity, Nigerian exams (JAMB, WAEC, NECO), creative tasks, and much more.
-
-For voice responses: keep answers concise (2-3 sentences) unless asked to elaborate. Speak naturally, not like a reading machine.
-
-${chatContext && chatContext.length > 0 ? `\nThis conversation has context from the user's existing chat. Continue naturally from where we left off.` : ""}`;
-
-      vapi.on("call-start", () => {
-        setStatus("active");
-        startDurationTimer();
-        startHeartbeat(token);
-      });
-
-      vapi.on("call-end", async () => {
-        stopDurationTimer();
-        const duration = callStartTimeRef.current
-          ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
-          : 0;
-        await reportCallEndToServer(duration);
-        setStatus("idle");
-        setIsSpeaking(false);
-        callStartTimeRef.current = null;
-      });
-
-      vapi.on("speech-start", () => setIsSpeaking(true));
-      vapi.on("speech-end", () => setIsSpeaking(false));
-
-      vapi.on("message", (msg: any) => {
-        if (msg.type === "transcript" && msg.transcript) {
-          setTranscript(msg.transcript);
-        }
-      });
-
-      vapi.on("error", (err: any) => {
-        const msg = err?.message || err?.error || String(err);
-        console.error("VAPI error:", msg);
-        // Friendly messages for common errors
-        if (msg.includes("Meeting has ended") || msg.includes("call has ended")) {
-          setStatus("idle");
-        } else {
-          setError(
-            msg.includes("playht") || msg.includes("voice")
-              ? "Voice provider error. The call will still work with default voice."
-              : msg || "Voice call error"
-          );
-          setStatus("error");
-        }
-        stopDurationTimer();
-        stopHeartbeat();
-      });
-
-      await vapi.start({
-        name: "LENORY Voice AI",
-        firstMessage: "Hello! I'm LENORY, your AI assistant. How can I help you?",
-        transcriber: {
-          provider: "deepgram",
-          model: "nova-2",
-          language: "en",
-        },
-        voice: {
-          provider: "openai",
-          voiceId: "alloy",
-        },
-        model: {
-          provider: "openai",
-          model: "gpt-3.5-turbo",
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...contextMessages,
-          ],
-        },
-      });
-    } catch (err: any) {
-      console.error("VAPI start error:", err);
-      setError(err?.message || "Failed to start voice call");
-      setStatus("error");
-      stopDurationTimer();
-    }
-  }, []);
-
-  const stopCall = useCallback(async () => {
-    stopDurationTimer();
-    stopHeartbeat();
-    const duration = callStartTimeRef.current
-      ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
-      : 0;
+  // ============================================================
+  // STOP CALL
+  // ============================================================
+  const stop = useCallback(() => {
     if (vapiRef.current) {
       vapiRef.current.stop();
-      vapiRef.current = null;
+      setIsCallActive(false);
     }
-    // Report remaining (non-heartbeat) seconds for final reconciliation
-    if (duration > 0) {
-      await reportCallEndToServer(duration);
-    }
-    callStartTimeRef.current = null;
-    setStatus("idle");
-    setIsSpeaking(false);
-    setCallDurationSeconds(0);
   }, []);
 
-  const sendMessage = useCallback((text: string) => {
-    if (vapiRef.current && status === "active") {
-      vapiRef.current.send({ type: "add-message", message: { role: "user", content: text } });
+  // ============================================================
+  // TOGGLE
+  // ============================================================
+  const toggle = useCallback(() => {
+    if (isCallActive) {
+      stop();
+    } else {
+      start();
     }
-  }, [status]);
+  }, [isCallActive, start, stop]);
 
+  // ============================================================
+  // CLEAR MESSAGES
+  // ============================================================
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setTranscript("");
+  }, []);
+
+  // ============================================================
+  // INITIALIZE VAPI
+  // ============================================================
   useEffect(() => {
-    return () => {
-      stopDurationTimer();
-      stopHeartbeat();
-      if (vapiRef.current) vapiRef.current.stop();
-    };
-  }, []);
+    const key = publicKey || import.meta.env.VITE_VAPI_PUBLIC_KEY || "";
 
-  return { status, isSpeaking, transcript, callDurationSeconds, startCall, stopCall, sendMessage, error };
+    if (!key) {
+      setError("Vapi public key is missing. Please provide it.");
+      return;
+    }
+
+    // Try to get Vapi from window (CDN) or global scope
+    const VapiClass = (window as any).Vapi || (typeof Vapi !== "undefined" && Vapi);
+
+    if (!VapiClass) {
+      setError("Vapi SDK not loaded. Ensure the script is included.");
+      return;
+    }
+
+    try {
+      const vapi = new VapiClass(key) as VapiSDK;
+      vapiRef.current = vapi;
+      setIsInitialized(true);
+      setError(null);
+
+      // ─── EVENT: call-start ─────────────────────────────────
+      vapi.on("call-start", () => {
+        setIsCallActive(true);
+        setError(null);
+        setTranscript("");
+        setMessages([]);
+      });
+
+      // ─── EVENT: call-end ───────────────────────────────────
+      vapi.on("call-end", () => {
+        setIsCallActive(false);
+      });
+
+      // ─── EVENT: error ──────────────────────────────────────
+      vapi.on("error", (err: any) => {
+        setError(err.message || "Vapi error occurred");
+        console.error("Vapi error:", err);
+      });
+
+      // ─── EVENT: message (FIXED) ────────────────────────────
+      vapi.on("message", (msg: VapiMessage) => {
+        // 1. Transcript handling
+        const transcriptText = msg.transcript || msg.transcriptText || msg.text || "";
+        const isFinal = msg.transcriptType === "final" || (msg.type === "transcript" && msg.role);
+        const role = msg.role === "assistant" ? "assistant" : "user";
+
+        if (transcriptText && transcriptText.trim()) {
+          setTranscript(transcriptText);
+          if (isFinal) {
+            const newMsg: VapiMessage = { role, content: transcriptText.trim() };
+            setMessages((prev) => [...prev, newMsg]);
+            onMessageRef.current?.(newMsg);
+          }
+        }
+
+        // 2. Model output (final assistant response)
+        if (msg.type === "model-output" && msg.output) {
+          const text =
+            typeof msg.output === "string"
+              ? msg.output
+              : msg.output?.content || msg.output?.text || "";
+          if (text.trim()) {
+            const newMsg: VapiMessage = { role: "assistant", content: text.trim() };
+            setMessages((prev) => [...prev, newMsg]);
+            onMessageRef.current?.(newMsg);
+          }
+        }
+
+        // 3. Conversation update (batched messages)
+        if (msg.type === "conversation-update" && Array.isArray(msg.conversation)) {
+          const lastMsg = msg.conversation[msg.conversation.length - 1];
+          if (lastMsg && lastMsg.role === "assistant" && lastMsg.content?.trim()) {
+            const newMsg: VapiMessage = { role: "assistant", content: lastMsg.content.trim() };
+            setMessages((prev) => [...prev, newMsg]);
+            onMessageRef.current?.(newMsg);
+          }
+        }
+      });
+
+      console.log("✅ Vapi initialized successfully");
+    } catch (err: any) {
+      setError(err.message || "Failed to initialize Vapi");
+      console.error("Vapi init error:", err);
+    }
+
+    // ─── CLEANUP ──────────────────────────────────────────────
+    return () => {
+      if (vapiRef.current) {
+        try {
+          vapiRef.current.stop();
+        } catch (_) {
+          // Ignore stop errors on cleanup
+        }
+        vapiRef.current = null;
+        setIsInitialized(false);
+      }
+    };
+  }, [publicKey]);
+
+  // ============================================================
+  // RETURN
+  // ============================================================
+  return {
+    isCallActive,
+    transcript,
+    messages,
+    error,
+    isInitialized,
+    start,
+    stop,
+    toggle,
+    clearMessages,
+  };
 }

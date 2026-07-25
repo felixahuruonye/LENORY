@@ -1,95 +1,36 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
-
-if (!supabaseUrl) {
-  console.warn('SUPABASE_URL not set. Supabase features will not work.');
-}
-
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
-
-export const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
-
-export async function verifySupabaseToken(token: string) {
-  try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    if (error) throw error;
-    return user;
-  } catch (error) {
-    console.error('Token verification failed:', error);
-    return null;
-  }
-}
-
-export async function getUserFromSupabase(userId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('users')
-    .select('*')
-    .eq('id', userId)
-    .single();
-  
-  if (error) {
-    console.error('Error fetching user from Supabase:', error);
-    return null;
-  }
-  return data;
-}
-
 export async function checkEmailExists(email: string): Promise<{ exists: boolean; error?: string }> {
   try {
-    // Use getUserByEmail instead of listUsers for security (single lookup, not full list)
-    const { data, error } = await supabaseAdmin.auth.admin.getUserByEmail(email);
-    
-    if (error) {
-      // "User not found" means email doesn't exist - this is expected
-      if (error.message.includes('not found') || error.message.includes('User not found')) {
-        return { exists: false };
+    // Check database first
+    const { data: dbUser } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (dbUser) {
+      return { exists: true };
+    }
+
+    // Use listUsers and filter (getUserByEmail doesn't exist in Supabase Admin API)
+    let page = 1;
+    const perPage = 1000;
+    while (true) {
+      const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+      if (error) {
+        console.error('Error checking email:', error);
+        return { exists: false, error: error.message };
       }
-      console.error('Error checking email:', error);
-      return { exists: false, error: error.message };
+      
+      const userFound = data.users.some((u) => u.email?.toLowerCase() === email.toLowerCase());
+      if (userFound) return { exists: true };
+      
+      if (data.users.length < perPage) break;
+      page++;
     }
     
-    return { exists: !!data?.user };
+    return { exists: false };
   } catch (error: any) {
-    // Handle "user not found" as expected case
-    if (error.message?.includes('not found')) {
-      return { exists: false };
-    }
     console.error('Error checking email existence:', error);
     return { exists: false, error: error.message };
   }
-}
-
-export async function upsertUserToSupabase(user: {
-  id: string;
-  email?: string;
-  firstName?: string;
-  lastName?: string;
-  profileImageUrl?: string;
-}) {
-  const { data, error } = await supabaseAdmin
-    .from('users')
-    .upsert({
-      id: user.id,
-      email: user.email,
-      first_name: user.firstName,
-      last_name: user.lastName,
-      profile_image_url: user.profileImageUrl,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' })
-    .select()
-    .single();
-  
-  if (error) {
-    console.error('Error upserting user to Supabase:', error);
-    return null;
-  }
-  return data;
 }

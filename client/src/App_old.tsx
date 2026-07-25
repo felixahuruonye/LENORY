@@ -23,7 +23,7 @@ import ViewWebsite from "@/pages/ViewWebsite";
 import WebsiteMenu from "@/pages/WebsiteMenu";
 import WebsiteLearn from "@/pages/WebsiteLearn";
 import WebsiteDebug from "@/pages/WebsiteDebug";
-import NotFound from "@/pages/not-found";
+import NotFound from "@/pages/NotFound";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();

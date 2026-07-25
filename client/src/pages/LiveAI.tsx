@@ -56,8 +56,13 @@ export default function LiveAI() {
   const [isGeminiConnected, setIsGeminiConnected] = useState(false);
   const [showVapiPanel, setShowVapiPanel] = useState(false);
 
-  // VAPI Live voice call
-  const vapi = useVapi();
+  // Use a ref so we can populate the callback after addMessage/saveMessageToDatabase are defined
+  const vapiMessageHandlerRef = useRef<((msg: { role: "user" | "assistant"; content: string }) => void) | undefined>(undefined);
+
+  // VAPI Live voice call — wire transcripts directly into chat messages via ref callback
+  const vapi = useVapi({
+    onMessage: (msg) => vapiMessageHandlerRef.current?.(msg),
+  });
 
   // Note: MediaRecorder refs removed - all audio uses PCM streaming via ScriptProcessor
   const messageCountRef = useRef(0);
@@ -580,6 +585,12 @@ export default function LiveAI() {
     } catch (error) {
       console.error("Failed to save message to database:", error);
     }
+  };
+
+  // Wire VAPI message handler now that addMessage and saveMessageToDatabase are defined
+  vapiMessageHandlerRef.current = (msg) => {
+    addMessage(msg.role, msg.content);
+    saveMessageToDatabase(msg.role, msg.content).catch(console.error);
   };
 
   // Clean text for speech (remove all markdown, special characters)

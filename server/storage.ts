@@ -1,156 +1,77 @@
 // Database integration blueprint reference: javascript_database
 // Replit Auth integration blueprint reference: javascript_log_in_with_replit
 import {
-  users,
-  courses,
-  lessons,
-  liveSessions,
-  transcripts,
-  quizzes,
-  quizAttempts,
-  chatMessages,
-  chatSessions,
-  memoryEntries,
-  purchases,
-  analyticsEvents,
-  fileUploads,
-  studentProfiles,
-  schools,
-  studyPlans,
-  userProgress,
-  codeSnippets,
-  examResults,
-  generatedWebsites,
-  learningHistory,
-  generatedImages,
-  topicExplanations,
-  notifications,
-  voiceConversations,
-  documentUploads,
-  liveAiFeatures,
-  cbtExams,
-  cbtQuestions,
-  cbtSessions,
-  cbtAnswers,
-  cbtExamHistory,
-  cbtAnalytics,
-  cbtQuestionLicensing,
-  recordings,
-  generatedLessons,
-  type User,
-  type UpsertUser,
-  type Course,
-  type InsertCourse,
-  type Lesson,
-  type InsertLesson,
-  type LiveSession,
-  type InsertLiveSession,
-  type Transcript,
-  type InsertTranscript,
-  type Quiz,
-  type InsertQuiz,
-  type QuizAttempt,
-  type InsertQuizAttempt,
-  type ChatMessage,
-  type InsertChatMessage,
-  type ChatSession,
-  type InsertChatSession,
-  type MemoryEntry,
-  type InsertMemoryEntry,
-  type Purchase,
-  type InsertPurchase,
-  type AnalyticsEvent,
-  type InsertAnalyticsEvent,
-  type FileUpload,
-  type InsertFileUpload,
-  type StudentProfile,
-  type InsertStudentProfile,
-  type School,
-  type InsertSchool,
-  type StudyPlan,
-  type InsertStudyPlan,
-  type UserProgress,
-  type InsertUserProgress,
-  type CodeSnippet,
-  type InsertCodeSnippet,
-  type ExamResult,
-  type InsertExamResult,
-  type GeneratedWebsite,
-  type InsertGeneratedWebsite,
-  type LearningHistory,
-  type InsertLearningHistory,
-  type GeneratedImage,
-  type InsertGeneratedImage,
-  type TopicExplanation,
-  type InsertTopicExplanation,
-  type Notification,
-  type InsertNotification,
-  type VoiceConversation,
-  type InsertVoiceConversation,
-  type DocumentUpload,
-  type InsertDocumentUpload,
-  type LiveAiFeature,
-  type InsertLiveAiFeature,
-  type CbtExam,
-  type InsertCbtExam,
-  type CbtQuestion,
-  type InsertCbtQuestion,
-  type CbtSession,
-  type InsertCbtSession,
-  type CbtAnswer,
-  type InsertCbtAnswer,
-  type CbtExamHistory,
-  type InsertCbtExamHistory,
-  type CbtAnalytics,
-  type InsertCbtAnalytics,
-  type CbtQuestionLicensing,
-  type InsertCbtQuestionLicensing,
-  type Recording,
-  type InsertRecording,
-  type GeneratedLesson,
-  type InsertGeneratedLesson,
+  users, courses, lessons, liveSessions, transcripts, quizzes, quizAttempts,
+  chatMessages, chatSessions, memoryEntries, purchases, analyticsEvents,
+  fileUploads, studentProfiles, schools, studyPlans, userProgress,
+  codeSnippets, examResults, generatedWebsites, learningHistory,
+  generatedImages, topicExplanations, notifications, voiceConversations,
+  documentUploads, liveAiFeatures, cbtExams, cbtQuestions, cbtSessions,
+  cbtAnswers, cbtExamHistory, cbtAnalytics, cbtQuestionLicensing,
+  recordings, generatedLessons,
+  type User, type UpsertUser, type Course, type InsertCourse,
+  type Lesson, type InsertLesson, type LiveSession, type InsertLiveSession,
+  type Transcript, type InsertTranscript, type Quiz, type InsertQuiz,
+  type QuizAttempt, type InsertQuizAttempt, type ChatMessage, type InsertChatMessage,
+  type ChatSession, type InsertChatSession, type MemoryEntry, type InsertMemoryEntry,
+  type Purchase, type InsertPurchase, type AnalyticsEvent, type InsertAnalyticsEvent,
+  type FileUpload, type InsertFileUpload, type StudentProfile, type InsertStudentProfile,
+  type School, type InsertSchool, type StudyPlan, type InsertStudyPlan,
+  type UserProgress, type InsertUserProgress, type CodeSnippet, type InsertCodeSnippet,
+  type ExamResult, type InsertExamResult, type GeneratedWebsite, type InsertGeneratedWebsite,
+  type LearningHistory, type InsertLearningHistory, type GeneratedImage, type InsertGeneratedImage,
+  type TopicExplanation, type InsertTopicExplanation, type Notification, type InsertNotification,
+  type VoiceConversation, type InsertVoiceConversation, type DocumentUpload, type InsertDocumentUpload,
+  type LiveAiFeature, type InsertLiveAiFeature, type CbtExam, type InsertCbtExam,
+  type CbtQuestion, type InsertCbtQuestion, type CbtSession, type InsertCbtSession,
+  type CbtAnswer, type InsertCbtAnswer, type CbtExamHistory, type InsertCbtExamHistory,
+  type CbtAnalytics, type InsertCbtAnalytics, type CbtQuestionLicensing, type InsertCbtQuestionLicensing,
+  type Recording, type InsertRecording, type GeneratedLesson, type InsertGeneratedLesson,
 } from "@shared/schema";
 import { db, supabaseDb } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 
 export interface IStorage {
-  // User operations (required for Replit Auth)
+  // User operations
   getUser(id: string): Promise<User | undefined>;
+  getUsers(): Promise<User[]>;
   upsertUser(user: UpsertUser): Promise<User>;
-  
+  updateUser(id: string, updates: any): Promise<User | undefined>;
+
   // Course operations
   getCourse(id: string): Promise<Course | undefined>;
   getCoursesByTeacher(teacherId: string): Promise<Course[]>;
   getAllCourses(): Promise<Course[]>;
   createCourse(course: InsertCourse): Promise<Course>;
   updateCourse(id: string, updates: Partial<InsertCourse>): Promise<Course | undefined>;
-  
+
   // Lesson operations
   getLesson(id: string): Promise<Lesson | undefined>;
   getLessonsByCourse(courseId: string): Promise<Lesson[]>;
   createLesson(lesson: InsertLesson): Promise<Lesson>;
-  
+
   // Live session operations
   getLiveSession(id: string): Promise<LiveSession | undefined>;
   getLiveSessionsByHost(hostId: string): Promise<LiveSession[]>;
+  getLiveSessionsByTeacher(teacherId: string): Promise<LiveSession[]>;
   createLiveSession(session: InsertLiveSession): Promise<LiveSession>;
   updateLiveSession(id: string, updates: Partial<InsertLiveSession>): Promise<LiveSession | undefined>;
-  
+
   // Transcript operations
   getTranscript(id: string): Promise<Transcript | undefined>;
   getTranscriptsBySession(sessionId: string): Promise<Transcript[]>;
   createTranscript(transcript: InsertTranscript): Promise<Transcript>;
-  
+
   // Quiz operations
   getQuiz(id: string): Promise<Quiz | undefined>;
   getQuizzesByCourse(courseId: string): Promise<Quiz[]>;
   createQuiz(quiz: InsertQuiz): Promise<Quiz>;
-  
+
   // Quiz attempt operations
   getQuizAttempt(id: string): Promise<QuizAttempt | undefined>;
   getQuizAttemptsByStudent(studentId: string): Promise<QuizAttempt[]>;
   createQuizAttempt(attempt: InsertQuizAttempt): Promise<QuizAttempt>;
-  
+
   // Chat message operations
   getChatMessagesByUser(userId: string, limit?: number): Promise<ChatMessage[]>;
   getChatMessagesBySession(sessionId: string): Promise<ChatMessage[]>;
@@ -163,20 +84,21 @@ export interface IStorage {
   createChatSession(session: InsertChatSession): Promise<ChatSession>;
   updateChatSession(id: string, updates: Partial<InsertChatSession>): Promise<ChatSession | undefined>;
   deleteChatSession(id: string): Promise<void>;
-  
+
   // Memory entry operations
   getMemoryEntriesByUser(userId: string): Promise<MemoryEntry[]>;
   createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry>;
-  
+
   // Purchase operations
   getPurchase(id: string): Promise<Purchase | undefined>;
   getPurchasesByBuyer(buyerId: string): Promise<Purchase[]>;
+  getPurchasesByUser(userId: string): Promise<Purchase[]>;
   createPurchase(purchase: InsertPurchase): Promise<Purchase>;
   updatePurchaseStatus(id: string, status: string): Promise<Purchase | undefined>;
-  
+
   // Analytics operations
   createAnalyticsEvent(event: InsertAnalyticsEvent): Promise<AnalyticsEvent>;
-  
+
   // File upload operations
   getFileUpload(id: string): Promise<FileUpload | undefined>;
   getFileUploadsByUser(userId: string): Promise<FileUpload[]>;
@@ -258,19 +180,14 @@ export interface IStorage {
   getGeneratedLessonsByUser(userId: string): Promise<GeneratedLesson[]>;
   deleteGeneratedLesson(id: string): Promise<void>;
 
-  // User management for admin
-  getUsers(): Promise<User[]>;
-
   // Project Workspace operations
   getProjectsByUser(userId: string): Promise<any[]>;
   createProject(project: any): Promise<any>;
   updateProject(id: string, updates: any): Promise<any>;
   deleteProject(id: string): Promise<void>;
-  
   getFilesByProject(projectId: string): Promise<any[]>;
   createFile(file: any): Promise<any>;
   deleteFile(id: string): Promise<void>;
-  
   getTasksByProject(projectId: string): Promise<any[]>;
   createTask(task: any): Promise<any>;
   updateTask(id: string, updates: any): Promise<any>;
@@ -286,12 +203,21 @@ export interface IStorage {
   createCbtQuestionLicensing(licensing: any): Promise<any>;
   getCbtQuestionLicensing(questionId: string): Promise<any>;
 
-  // User update operation
-  updateUser(id: string, updates: any): Promise<User | undefined>;
+  // CBT Mode operations
+  getCbtExam(id: string): Promise<CbtExam | undefined>;
+  getAllCbtExams(): Promise<CbtExam[]>;
+  createCbtExam(exam: InsertCbtExam): Promise<CbtExam>;
+  getCbtQuestions(examId: string): Promise<CbtQuestion[]>;
+  createCbtSession(session: InsertCbtSession): Promise<CbtSession>;
+  getCbtSession(id: string): Promise<CbtSession | undefined>;
+  getCbtSessionsByUser(userId: string): Promise<CbtSession[]>;
+  updateCbtSession(id: string, updates: Partial<InsertCbtSession>): Promise<CbtSession | undefined>;
+  createCbtAnswer(answer: InsertCbtAnswer): Promise<CbtAnswer>;
+  getCbtAnswersBySession(sessionId: string): Promise<CbtAnswer[]>;
 }
 
 export class DatabaseStorage implements IStorage {
-  // User operations (required for Replit Auth)
+  // User operations
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
@@ -302,18 +228,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
+    const [user] = await db.insert(users).values(userData).onConflictDoUpdate({
+      target: users.id,
+      set: { ...userData, updatedAt: new Date() },
+    }).returning();
     return user;
+  }
+
+  async updateUser(id: string, updates: any): Promise<User | undefined> {
+    const [updated] = await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, id)).returning();
+    return updated;
   }
 
   // Course operations
@@ -336,11 +260,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateCourse(id: string, updates: Partial<InsertCourse>): Promise<Course | undefined> {
-    const [updated] = await db
-      .update(courses)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(courses.id, id))
-      .returning();
+    const [updated] = await db.update(courses).set({ ...updates, updatedAt: new Date() }).where(eq(courses.id, id)).returning();
     return updated;
   }
 
@@ -369,17 +289,17 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(liveSessions).where(eq(liveSessions.hostId, hostId)).orderBy(desc(liveSessions.startedAt));
   }
 
+  async getLiveSessionsByTeacher(teacherId: string): Promise<LiveSession[]> {
+    return await this.getLiveSessionsByHost(teacherId);
+  }
+
   async createLiveSession(session: InsertLiveSession): Promise<LiveSession> {
     const [newSession] = await db.insert(liveSessions).values(session).returning();
     return newSession;
   }
 
   async updateLiveSession(id: string, updates: Partial<InsertLiveSession>): Promise<LiveSession | undefined> {
-    const [updated] = await db
-      .update(liveSessions)
-      .set(updates)
-      .where(eq(liveSessions.id, id))
-      .returning();
+    const [updated] = await db.update(liveSessions).set(updates).where(eq(liveSessions.id, id)).returning();
     return updated;
   }
 
@@ -430,20 +350,11 @@ export class DatabaseStorage implements IStorage {
 
   // Chat message operations
   async getChatMessagesByUser(userId: string, limit: number = 50): Promise<ChatMessage[]> {
-    return await db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.userId, userId))
-      .orderBy(chatMessages.createdAt)
-      .limit(limit);
+    return await db.select().from(chatMessages).where(eq(chatMessages.userId, userId)).orderBy(chatMessages.createdAt).limit(limit);
   }
 
   async getChatMessagesBySession(sessionId: string): Promise<ChatMessage[]> {
-    return await db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.sessionId, sessionId))
-      .orderBy(chatMessages.createdAt);
+    return await db.select().from(chatMessages).where(eq(chatMessages.sessionId, sessionId)).orderBy(chatMessages.createdAt);
   }
 
   async createChatMessage(message: InsertChatMessage): Promise<ChatMessage> {
@@ -499,17 +410,17 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(purchases).where(eq(purchases.buyerId, buyerId));
   }
 
+  async getPurchasesByUser(userId: string): Promise<Purchase[]> {
+    return await this.getPurchasesByBuyer(userId);
+  }
+
   async createPurchase(purchase: InsertPurchase): Promise<Purchase> {
     const [newPurchase] = await db.insert(purchases).values(purchase).returning();
     return newPurchase;
   }
 
   async updatePurchaseStatus(id: string, status: string): Promise<Purchase | undefined> {
-    const [updated] = await db
-      .update(purchases)
-      .set({ paymentStatus: status as any })
-      .where(eq(purchases.id, id))
-      .returning();
+    const [updated] = await db.update(purchases).set({ paymentStatus: status as any }).where(eq(purchases.id, id)).returning();
     return updated;
   }
 
@@ -536,15 +447,13 @@ export class DatabaseStorage implements IStorage {
 
   async updateFileUploadStatus(id: string, status: string, extractedText?: string): Promise<FileUpload | undefined> {
     const updateData: any = { processingStatus: status };
-    if (extractedText) {
-      updateData.extractedText = extractedText;
-    }
-    const [updated] = await db
-      .update(fileUploads)
-      .set(updateData)
-      .where(eq(fileUploads.id, id))
-      .returning();
+    if (extractedText) updateData.extractedText = extractedText;
+    const [updated] = await db.update(fileUploads).set(updateData).where(eq(fileUploads.id, id)).returning();
     return updated;
+  }
+
+  async deleteFileUpload(id: string): Promise<void> {
+    await db.delete(fileUploads).where(eq(fileUploads.id, id));
   }
 
   // Study plan operations
@@ -682,18 +591,12 @@ export class DatabaseStorage implements IStorage {
 
   async getGeneratedImagesByUser(userId: string): Promise<GeneratedImage[]> {
     const images = await db.select().from(generatedImages).where(eq(generatedImages.userId, userId)).orderBy(desc(generatedImages.createdAt));
-    return images.map(img => ({
-      ...img,
-      imageUrl: (img as any).imageUrl
-    })) as GeneratedImage[];
+    return images.map((img: any) => ({ ...img, imageUrl: (img as any).imageUrl })) as GeneratedImage[];
   }
 
   async getGeneratedImagesByTopic(userId: string, topic: string): Promise<GeneratedImage[]> {
     const images = await db.select().from(generatedImages).where(and(eq(generatedImages.userId, userId), eq(generatedImages.relatedTopic, topic))).orderBy(desc(generatedImages.createdAt));
-    return images.map(img => ({
-      ...img,
-      imageUrl: (img as any).imageUrl
-    })) as GeneratedImage[];
+    return images.map((img: any) => ({ ...img, imageUrl: (img as any).imageUrl })) as GeneratedImage[];
   }
 
   async deleteGeneratedImage(userId: string, imageId: string): Promise<void> {
@@ -815,6 +718,56 @@ export class DatabaseStorage implements IStorage {
     return newAnswer;
   }
 
+  async getCbtAnswersBySession(sessionId: string): Promise<CbtAnswer[]> {
+    return await db.select().from(cbtAnswers).where(eq(cbtAnswers.sessionId, sessionId));
+  }
+
+  // CBT Exam History operations
+  async createCbtExamHistory(exam: any): Promise<any> {
+    const [newExam] = await db.insert(cbtExamHistory).values(exam).returning();
+    return newExam;
+  }
+
+  async getCbtExamHistoryByUser(userId: string): Promise<any[]> {
+    return await db.select().from(cbtExamHistory).where(eq(cbtExamHistory.userId, userId)).orderBy(desc(cbtExamHistory.createdAt));
+  }
+
+  async deleteCbtExamHistory(id: string): Promise<void> {
+    await db.delete(cbtExamHistory).where(eq(cbtExamHistory.id, id));
+  }
+
+  // CBT Analytics operations
+  async updateCbtAnalytics(userId: string, topic: string, isStrong: boolean): Promise<any> {
+    const existing = await db.select().from(cbtAnalytics).where(and(eq(cbtAnalytics.userId, userId), eq(cbtAnalytics.topic, topic)));
+    if (existing.length > 0) {
+      const [updated] = await db.update(cbtAnalytics).set({ isStrong, updatedAt: new Date() }).where(and(eq(cbtAnalytics.userId, userId), eq(cbtAnalytics.topic, topic))).returning();
+      return updated;
+    } else {
+      const [newAnalytics] = await db.insert(cbtAnalytics).values({ userId, topic, isStrong }).returning();
+      return newAnalytics;
+    }
+  }
+
+  async getCbtAnalyticsByUser(userId: string): Promise<any> {
+    return await db.select().from(cbtAnalytics).where(eq(cbtAnalytics.userId, userId));
+  }
+
+  // CBT Question operations
+  async createCbtQuestion(question: any): Promise<any> {
+    const [newQuestion] = await db.insert(cbtQuestions).values(question).returning();
+    return newQuestion;
+  }
+
+  async createCbtQuestionLicensing(licensing: any): Promise<any> {
+    const [newLicensing] = await db.insert(cbtQuestionLicensing).values(licensing).returning();
+    return newLicensing;
+  }
+
+  async getCbtQuestionLicensing(questionId: string): Promise<any> {
+    const [licensing] = await db.select().from(cbtQuestionLicensing).where(eq(cbtQuestionLicensing.questionId, questionId));
+    return licensing;
+  }
+
   // Recording operations
   async createRecording(recording: InsertRecording): Promise<Recording> {
     const [newRecording] = await db.insert(recordings).values(recording).returning();
@@ -843,73 +796,7 @@ export class DatabaseStorage implements IStorage {
     await db.delete(generatedLessons).where(eq(generatedLessons.id, id));
   }
 
-  async getCbtAnswersBySession(sessionId: string): Promise<CbtAnswer[]> {
-    return await db.select().from(cbtAnswers).where(eq(cbtAnswers.sessionId, sessionId));
-  }
-
-  // CBT Exam History operations
-  async createCbtExamHistory(exam: any): Promise<any> {
-    const [newExam] = await db.insert(cbtExamHistory).values(exam).returning();
-    return newExam;
-  }
-
-  async getCbtExamHistoryByUser(userId: string): Promise<any[]> {
-    return await db.select().from(cbtExamHistory).where(eq(cbtExamHistory.userId, userId)).orderBy(desc(cbtExamHistory.completedAt));
-  }
-
-  async deleteCbtExamHistory(id: string): Promise<void> {
-    await db.delete(cbtExamHistory).where(eq(cbtExamHistory.id, id));
-  }
-
-  // CBT Analytics operations
-  async updateCbtAnalytics(userId: string, topic: string, isStrong: boolean): Promise<any> {
-    const existing = await db.select().from(cbtAnalytics)
-      .where(and(eq(cbtAnalytics.userId, userId), eq(cbtAnalytics.topic, topic)));
-    
-    if (existing.length > 0) {
-      const [updated] = await db.update(cbtAnalytics)
-        .set({ isStrong, updatedAt: new Date() })
-        .where(and(eq(cbtAnalytics.userId, userId), eq(cbtAnalytics.topic, topic)))
-        .returning();
-      return updated;
-    } else {
-      const [newAnalytics] = await db.insert(cbtAnalytics)
-        .values({ userId, topic, isStrong })
-        .returning();
-      return newAnalytics;
-    }
-  }
-
-  async getCbtAnalyticsByUser(userId: string): Promise<any> {
-    return await db.select().from(cbtAnalytics).where(eq(cbtAnalytics.userId, userId));
-  }
-
-  // CBT Question operations
-  async createCbtQuestion(question: any): Promise<any> {
-    const [newQuestion] = await db.insert(cbtQuestions).values(question).returning();
-    return newQuestion;
-  }
-
-  async createCbtQuestionLicensing(licensing: any): Promise<any> {
-    const [newLicensing] = await db.insert(cbtQuestionLicensing).values(licensing).returning();
-    return newLicensing;
-  }
-
-  async getCbtQuestionLicensing(questionId: string): Promise<any> {
-    const [licensing] = await db.select().from(cbtQuestionLicensing).where(eq(cbtQuestionLicensing.questionId, questionId));
-    return licensing;
-  }
-
-  // User update operation
-  async updateUser(id: string, updates: any): Promise<User | undefined> {
-    const [updated] = await db.update(users)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(users.id, id))
-      .returning();
-    return updated;
-  }
-
-  // Project workspace operations (in-memory cache within DatabaseStorage for now)
+  // Project workspace operations (in-memory cache)
   private projectCache = new Map<string, any>();
   private projectFileCache = new Map<string, any>();
   private projectTaskCache = new Map<string, any>();
@@ -981,554 +868,33 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-// Fallback in-memory storage when database is unavailable
-class MemoryStorage implements IStorage {
-  private data: any = {
-    users: new Map(),
-    chatMessages: new Map(),
-    chatSessions: new Map(),
-    memoryEntries: new Map(),
-    generatedImages: new Map(),
-    generatedWebsites: new Map(),
-    generatedLessons: new Map(),
-    userProgress: new Map(),
-    examResults: new Map(),
-    cbtExamHistory: new Map(),
-    cbtAnalytics: new Map(),
-    notifications: new Map(),
-    projects: new Map(),
-    projectFiles: new Map(),
-    projectTasks: new Map(),
-  };
-  private idCounter = { users: 0, messages: 0, sessions: 0, images: 0, websites: 0, exams: 0, analytics: 0, notifications: 0, projects: 0, files: 0, tasks: 0, lessons: 0 };
-
-  // User operations
-  async getUser(id: string) {
-    return this.data.users.get(id);
-  }
-
-  async upsertUser(user: UpsertUser) {
-    const id = user.id || `user_${++this.idCounter.users}`;
-    const fullUser = { id, ...user, updatedAt: new Date() };
-    this.data.users.set(id, fullUser);
-    return fullUser;
-  }
-
-  // Chat message operations
-  async createChatMessage(msg: InsertChatMessage) {
-    const id = `msg_${++this.idCounter.messages}`;
-    const message = { id, ...msg, createdAt: new Date() };
-    this.data.chatMessages.set(id, message);
-    return message;
-  }
-
-  async getChatMessagesBySession(sessionId: string) {
-    return Array.from(this.data.chatMessages.values()).filter(m => m.sessionId === sessionId);
-  }
-
-  async getChatMessagesByUser(userId: string, limit = 500) {
-    return Array.from(this.data.chatMessages.values()).filter(m => m.userId === userId).slice(0, limit);
-  }
-
-  async deleteChatMessagesByUser(userId: string) {
-    for (const [id, msg] of this.data.chatMessages) {
-      if (msg.userId === userId) this.data.chatMessages.delete(id);
-    }
-  }
-
-  async saveChatMessage(msg: InsertChatMessage) {
-    return this.createChatMessage(msg);
-  }
-
-  // Chat session operations
-  async getChatSession(id: string) {
-    return this.data.chatSessions.get(id);
-  }
-
-  async getChatSessionsByUser(userId: string) {
-    return Array.from(this.data.chatSessions.values()).filter(s => s.userId === userId);
-  }
-
-  async createChatSession(session: InsertChatSession) {
-    const id = `session_${++this.idCounter.sessions}`;
-    const fullSession = { id, ...session, createdAt: new Date(), updatedAt: new Date(), messageCount: 0 };
-    this.data.chatSessions.set(id, fullSession);
-    return fullSession;
-  }
-
-  async updateChatSession(id: string, updates: Partial<InsertChatSession>) {
-    const session = this.data.chatSessions.get(id);
-    if (session) {
-      const updated = { ...session, ...updates, updatedAt: new Date() };
-      this.data.chatSessions.set(id, updated);
-      return updated;
-    }
-  }
-
-  async deleteChatSession(id: string) {
-    this.data.chatSessions.delete(id);
-  }
-
-  // Memory entries
-  async createMemoryEntry(entry: InsertMemoryEntry) {
-    const id = `mem_${++this.idCounter.messages}`;
-    const fullEntry = { id, ...entry, createdAt: new Date() };
-    this.data.memoryEntries.set(id, fullEntry);
-    return fullEntry;
-  }
-
-  async getMemoryEntriesByUser(userId: string) {
-    return Array.from(this.data.memoryEntries.values()).filter(m => m.userId === userId);
-  }
-
-  // User progress
-  async getUserProgressByUser(userId: string) {
-    return this.data.userProgress.get(userId) || [];
-  }
-
-  // Generated images
-  async createGeneratedImage(img: InsertGeneratedImage) {
-    const id = `img_${++this.idCounter.images}`;
-    const fullImg = { id, ...img, createdAt: new Date() };
-    this.data.generatedImages.set(id, fullImg);
-    return fullImg;
-  }
-
-  async getGeneratedImagesByUser(userId: string) {
-    return Array.from(this.data.generatedImages.values())
-      .filter(i => i.userId === userId)
-      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }
-
-  async deleteGeneratedImage(id: string) {
-    this.data.generatedImages.delete(id);
-  }
-
-  // Exam results
-  async getExamResultsByUser(userId: string) {
-    return this.data.examResults.get(userId) || [];
-  }
-
-  // CBT Exam History - STORES exam attempts with results
-  async createCbtExamHistory(history: InsertCbtExamHistory): Promise<CbtExamHistory> {
-    const id = `cbt_${++this.idCounter.exams}`;
-    const fullHistory = { 
-      id, 
-      ...history, 
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    } as CbtExamHistory;
-    
-    // Store exam directly with ID
-    this.data.cbtExamHistory.set(id, fullHistory);
-    
-    console.log(`✅ CBT Exam saved: ${history.examType} - ${fullHistory.score}% (User: ${history.userId})`);
-    return fullHistory;
-  }
-
-  // CBT Analytics - TRACKS topic performance across exams
-  async updateCbtAnalytics(userId: string, topic: string, isStrong: boolean): Promise<CbtAnalytics | undefined> {
-    const key = `${userId}_${topic}`;
-    let analytics = this.data.cbtAnalytics.get(key);
-    
-    if (!analytics) {
-      analytics = {
-        id: `analytics_${++this.idCounter.analytics}`,
-        userId,
-        subject: topic.split(' ')[0], // Extract subject from topic
-        topic,
-        attemptCount: 0,
-        correctCount: 0,
-        averageScore: 0,
-        strengthLevel: 'unknown',
-        lastAttempt: new Date(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-    }
-    
-    analytics.attemptCount++;
-    if (isStrong) {
-      analytics.correctCount++;
-    }
-    analytics.averageScore = Math.round((analytics.correctCount / analytics.attemptCount) * 100);
-    analytics.strengthLevel = analytics.averageScore >= 70 ? 'strong' : 'weak';
-    analytics.lastAttempt = new Date();
-    analytics.updatedAt = new Date();
-    
-    this.data.cbtAnalytics.set(key, analytics);
-    console.log(`📊 Analytics updated: ${topic} - ${analytics.strengthLevel} (${analytics.averageScore}%)`);
-    return analytics;
-  }
-
-  // Get exam history by user
-  async getCbtExamHistoryByUser(userId: string): Promise<CbtExamHistory[]> {
-    return Array.from(this.data.cbtExamHistory.values())
-      .filter((exam: any) => exam && exam.userId === userId)
-      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }
-
-  // Delete exam from history
-  async deleteCbtExamHistory(examId: string): Promise<void> {
-    this.data.cbtExamHistory.delete(examId);
-    console.log(`✅ Exam ${examId} deleted from history`);
-  }
-
-  // Get analytics by user
-  async getCbtAnalyticsByUser(userId: string): Promise<CbtAnalytics[]> {
-    return Array.from(this.data.cbtAnalytics.values())
-      .filter(a => a.userId === userId)
-      .sort((a: any, b: any) => b.averageScore - a.averageScore);
-  }
-
-  // Create notification
-  async createNotification(notification: InsertNotification): Promise<Notification> {
-    const id = `notif_${++this.idCounter.notifications}`;
-    const fullNotif = { 
-      id, 
-      ...notification, 
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      read: notification.read ?? false,
-    } as Notification;
-    
-    this.data.notifications.set(id, fullNotif);
-    console.log(`🔔 Notification created: ${notification.title}`);
-    return fullNotif;
-  }
-
-  // Get notifications by user
-  async getNotificationsByUser(userId: string, limit = 50): Promise<Notification[]> {
-    return Array.from(this.data.notifications.values())
-      .filter(n => n.userId === userId)
-      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, limit);
-  }
-
-  // Mark notification as read
-  async markNotificationAsRead(id: string): Promise<Notification | undefined> {
-    const notif = this.data.notifications.get(id);
-    if (notif) {
-      notif.read = true;
-      notif.updatedAt = new Date();
-      this.data.notifications.set(id, notif);
-    }
-    return notif;
-  }
-
-  // Delete notification
-  async deleteNotification(id: string): Promise<void> {
-    this.data.notifications.delete(id);
-  }
-
-  // Stub implementations for other methods
-  async getCourse() { return undefined; }
-  async getCoursesByTeacher() { return []; }
-  async getAllCourses() { return []; }
-  async createCourse(c: any) { return c as Course; }
-  async updateCourse() { return undefined; }
-  async getLesson() { return undefined; }
-  async getLessonsByCourse() { return []; }
-  async createLesson(l: any) { return l as Lesson; }
-  async getLiveSession() { return undefined; }
-  async getLiveSessionsByTeacher() { return []; }
-  async createLiveSession(s: any) { return s as LiveSession; }
-  async getTranscript() { return undefined; }
-  async getTranscriptsBySession() { return []; }
-  async createTranscript(t: any) { return t as Transcript; }
-  async getQuiz() { return undefined; }
-  async getQuizzesByCourse() { return []; }
-  async createQuiz(q: any) { return q as Quiz; }
-  async getQuizAttempt() { return undefined; }
-  async createQuizAttempt(a: any) { return a as QuizAttempt; }
-  async getAnalyticsEvents() { return []; }
-  async createAnalyticsEvent() { return {} as AnalyticsEvent; }
-  async getPurchasesByUser() { return []; }
-  async createPurchase(p: any) { return p as Purchase; }
-  async getFileUploadsByUser() { return []; }
-  async createFileUpload(f: any) { return f as FileUpload; }
-  async deleteFileUpload() { return; }
-  async getStudentProfileByUser() { return undefined; }
-  async upsertStudentProfile(p: any) { return p as StudentProfile; }
-  async getSchool() { return undefined; }
-  async getAllSchools() { return []; }
-  async createSchool(s: any) { return s as School; }
-  async getStudyPlan() { return undefined; }
-  async getStudyPlansByUser() { return []; }
-  async createStudyPlan(s: any) { return s as StudyPlan; }
-  async updateStudyPlan() { return undefined; }
-  async getCodeSnippet() { return undefined; }
-  async getCodeSnippetsByUser() { return []; }
-  async createCodeSnippet(c: any) { return c as CodeSnippet; }
-  async createExamResult(e: any) { return e as ExamResult; }
-  async getGeneratedWebsite(id: string) {
-    return this.data.generatedWebsites.get(id);
-  }
-  
-  async getGeneratedWebsitesByUser(userId: string) {
-    return Array.from(this.data.generatedWebsites.values())
-      .filter(w => w.userId === userId)
-      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }
-  
-  async createGeneratedWebsite(w: InsertGeneratedWebsite): Promise<GeneratedWebsite> {
-    const id = `web_${++this.idCounter.websites}`;
-    const website = { 
-      id, 
-      ...w, 
-      createdAt: new Date(), 
-      updatedAt: new Date(),
-      viewCount: 0,
-    } as GeneratedWebsite;
-    this.data.generatedWebsites.set(id, website);
-    console.log(`✅ Website saved to memory: ${website.title}`);
-    return website;
-  }
-  async getLearningHistory() { return undefined; }
-  async getLearningHistoryByUser() { return []; }
-  async createLearningHistory(l: any) { return l as LearningHistory; }
-  async getTopicExplanation() { return undefined; }
-  async createTopicExplanation(t: any) { return t as TopicExplanation; }
-  async createNotification(n: any) { return n as Notification; }
-  async getNotifications() { return []; }
-  async getVoiceConversation() { return undefined; }
-  async getVoiceConversationsByUser() { return []; }
-  async createVoiceConversation(v: any) { return v as VoiceConversation; }
-  async getDocumentUpload() { return undefined; }
-  async getDocumentUploadsByUser() { return []; }
-  async createDocumentUpload(d: any) { return d as DocumentUpload; }
-  async getLiveAiFeature() { return undefined; }
-  async getLiveAiFeaturesByUser() { return []; }
-  async createLiveAiFeature(f: any) { return f as LiveAiFeature; }
-  async getCbtExam() { return undefined; }
-  async getAllCbtExams() { return []; }
-  async createCbtExam(e: any) { return e as CbtExam; }
-  async getCbtQuestion() { return undefined; }
-  async getCbtQuestionsByExam() { return []; }
-  async createCbtQuestion(q: any) { return q as CbtQuestion; }
-  async getCbtSession() { return undefined; }
-  async getCbtSessionsByUser() { return []; }
-  async createCbtSession(s: any) { return s as CbtSession; }
-  async updateCbtSession() { return undefined; }
-  async getCbtAnswer() { return undefined; }
-  async createCbtAnswer(a: any) { return a as CbtAnswer; }
-  async createCbtQuestionLicensing(l: any) { return l as CbtQuestionLicensing; }
-  async getCbtQuestionLicensing() { return undefined; }
-  async getRecordingsByUser() { return []; }
-  async createRecording(r: any) { return r as Recording; }
-  async deleteRecording() { }
-  async createGeneratedLesson(l: any) {
-    const id = `lesson_${++this.idCounter.lessons}_${Date.now()}`;
-    const lesson = { id, ...l, createdAt: new Date() };
-    this.data.generatedLessons.set(id, lesson);
-    return lesson as GeneratedLesson;
-  }
-  async getGeneratedLessonsByUser(userId: string) {
-    return Array.from(this.data.generatedLessons.values())
-      .filter((l: any) => l.userId === userId)
-      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as GeneratedLesson[];
-  }
-  async deleteGeneratedLesson(id: string) {
-    this.data.generatedLessons.delete(id);
-  }
-  async getCbtAnswersBySession() { return []; }
-  async getNotification() { return undefined; }
-  async deleteGeneratedWebsite(id: string) {
-    this.data.generatedWebsites.delete(id);
-    console.log(`✅ Website deleted from memory: ${id}`);
-  }
-  
-  async toggleFavoriteWebsite(id: string) {
-    const website = this.data.generatedWebsites.get(id);
-    if (website) {
-      website.isFavorite = !website.isFavorite;
-      website.updatedAt = new Date();
-      this.data.generatedWebsites.set(id, website);
-      return website;
-    }
-    return undefined;
-  }
-  
-  async incrementViewCount(id: string) {
-    const website = this.data.generatedWebsites.get(id);
-    if (website) {
-      website.viewCount = (website.viewCount || 0) + 1;
-      website.updatedAt = new Date();
-      this.data.generatedWebsites.set(id, website);
-      return website;
-    }
-    return undefined;
-  }
-  
-  async updateGeneratedWebsite(id: string, updates: Partial<InsertGeneratedWebsite>) {
-    const website = this.data.generatedWebsites.get(id);
-    if (website) {
-      const updated = { ...website, ...updates, updatedAt: new Date() };
-      this.data.generatedWebsites.set(id, updated);
-      return updated;
-    }
-    return undefined;
-  }
-  async updateUserProgress() { return undefined; }
-  async getUserProgress() { return undefined; }
-  async updateCodeSnippet() { return undefined; }
-  async updatePurchaseStatus() { return undefined; }
-  async updateFileUploadStatus() { return undefined; }
-  async getLiveSessionsByTeacher() { return []; }
-  async getQuizAttemptsByStudent() { return []; }
-  async getTopicExplanationsByUser() { return []; }
-  async createAnalyticsEvent() { return {} as AnalyticsEvent; }
-  async createExamResult(e: any) { return e as ExamResult; }
-  async getGetFileUpload() { return undefined; }
-  async createTopicExplanation(t: any) { return t as TopicExplanation; }
-  async getLearningHistoryBySubject() { return []; }
-  async getGeneratedImagesByTopic() { return []; }
-  async getLiveAiFeaturesByUser() { return []; }
-  async updateLiveSession() { return undefined; }
-  async updateGeneratedLessonsStatus() { return undefined; }
-
-  // Project Workspace
-  async getProjectsByUser(userId: string) {
-    return Array.from(this.data.projects.values()).filter(p => p.userId === userId).sort((a: any, b: any) => b.createdAt - a.createdAt);
-  }
-
-  async createProject(project: any) {
-    const id = `proj_${++this.idCounter.projects}`;
-    const fullProject = { id, ...project, createdAt: new Date(), updatedAt: new Date() };
-    this.data.projects.set(id, fullProject);
-    return fullProject;
-  }
-
-  async updateProject(id: string, updates: any) {
-    const project = this.data.projects.get(id);
-    if (project) {
-      const updated = { ...project, ...updates, updatedAt: new Date() };
-      this.data.projects.set(id, updated);
-      return updated;
-    }
-  }
-
-  async deleteProject(id: string) {
-    this.data.projects.delete(id);
-  }
-
-  async getFilesByProject(projectId: string) {
-    return Array.from(this.data.projectFiles.values()).filter(f => f.projectId === projectId);
-  }
-
-  async createFile(file: any) {
-    const id = `file_${++this.idCounter.files}`;
-    const fullFile = { id, ...file, createdAt: new Date() };
-    this.data.projectFiles.set(id, fullFile);
-    return fullFile;
-  }
-
-  async deleteFile(id: string) {
-    this.data.projectFiles.delete(id);
-  }
-
-  async getTasksByProject(projectId: string) {
-    return Array.from(this.data.projectTasks.values()).filter(t => t.projectId === projectId);
-  }
-
-  async createTask(task: any) {
-    const id = `task_${++this.idCounter.tasks}`;
-    const fullTask = { id, ...task, createdAt: new Date() };
-    this.data.projectTasks.set(id, fullTask);
-    return fullTask;
-  }
-
-  async updateTask(id: string, updates: any) {
-    const task = this.data.projectTasks.get(id);
-    if (task) {
-      const updated = { ...task, ...updates, updatedAt: new Date() };
-      this.data.projectTasks.set(id, updated);
-      return updated;
-    }
-  }
-
-  async deleteTask(id: string) {
-    this.data.projectTasks.delete(id);
-  }
-
-  // CBT Question operations (not already defined above)
-  async createCbtQuestion(question: any) {
-    const id = `cbtq_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const fullQuestion = { id, ...question, createdAt: new Date() };
-    if (!this.data.cbtQuestions) this.data.cbtQuestions = new Map();
-    this.data.cbtQuestions.set(id, fullQuestion);
-    return fullQuestion;
-  }
-
-  async createCbtQuestionLicensing(licensing: any) {
-    const id = `cbtl_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const fullLicensing = { id, ...licensing, createdAt: new Date() };
-    if (!this.data.cbtLicensing) this.data.cbtLicensing = new Map();
-    this.data.cbtLicensing.set(id, fullLicensing);
-    return fullLicensing;
-  }
-
-  async getCbtQuestionLicensing(questionId: string) {
-    if (!this.data.cbtLicensing) return undefined;
-    return Array.from(this.data.cbtLicensing.values()).find((l: any) => l.questionId === questionId);
-  }
-
-  // User update operation
-  async updateUser(id: string, updates: any): Promise<User | undefined> {
-    const user = this.data.users.get(id);
-    if (user) {
-      const updated = { ...user, ...updates, updatedAt: new Date() };
-      this.data.users.set(id, updated);
-      return updated as User;
-    }
-    return undefined;
-  }
-}
-
 // ─── Supabase-backed Storage ──────────────────────────────────────────────────
-// Uses Supabase REST API for user persistence + in-memory for everything else
-
-class SupabaseStorage extends MemoryStorage {
-  // ── Users (persistent via Supabase REST) ────────────────────────────────────
+// CRITICAL FIX: Extends DatabaseStorage directly (NOT MemoryStorage)
+// This eliminates ALL duplicate method overwrites that were causing silent failures.
+class SupabaseStorage extends DatabaseStorage {
+  // ── Users ───────────────────────────────────────────────────────────────────
   async getUsers(): Promise<User[]> {
     if (supabaseDb) {
       try {
-        const { data, error } = await supabaseDb
-          .from('users')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (!error && data) {
-          return data.map(mapSupabaseUser);
-        }
-        console.error("getUsers Supabase error:", error);
-      } catch (e) {
-        console.error("getUsers Supabase exception:", e);
-      }
+        const { data, error } = await supabaseDb.from('users').select('*').order('created_at', { ascending: false });
+        if (!error && data) return data.map(mapSupabaseUser);
+      } catch (e) {}
     }
-    return [];
+    return super.getUsers();
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    // Try Supabase first
     if (supabaseDb) {
       try {
-        const { data, error } = await supabaseDb
-          .from('users')
-          .select('*')
-          .eq('id', id)
-          .single();
+        const { data, error } = await supabaseDb.from('users').select('*').eq('id', id).single();
         if (!error && data) return mapSupabaseUser(data);
       } catch {}
     }
-    // Fall back to memory
     return super.getUser(id);
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    // Write to memory immediately
     const memUser = await super.upsertUser(userData);
-
-    // Best-effort sync to Supabase
     if (supabaseDb) {
       try {
         const row = {
@@ -1562,7 +928,7 @@ class SupabaseStorage extends MemoryStorage {
     return memUser;
   }
 
-  // ── Chat Sessions (persistent via Supabase) ──────────────────────────────────
+  // ── Chat Sessions ───────────────────────────────────────────────────────────
   async createChatSession(session: InsertChatSession): Promise<ChatSession> {
     const memSession = await super.createChatSession(session);
     if (supabaseDb) {
@@ -1587,9 +953,7 @@ class SupabaseStorage extends MemoryStorage {
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb
-          .from('chat_sessions')
-          .select('*')
-          .eq('user_id', userId)
+          .from('chat_sessions').select('*').eq('user_id', userId)
           .order('is_bookmarked', { ascending: false })
           .order('updated_at', { ascending: false });
         if (!error && data && data.length > 0) {
@@ -1610,10 +974,12 @@ class SupabaseStorage extends MemoryStorage {
       try {
         const { data, error } = await supabaseDb.from('chat_sessions').select('*').eq('id', id).single();
         if (!error && data) {
-          return { id: data.id, userId: data.user_id, title: data.title, mode: data.mode,
+          return {
+            id: data.id, userId: data.user_id, title: data.title, mode: data.mode,
             summary: data.summary || '', messageCount: data.message_count || 0,
             isBookmarked: data.is_bookmarked || false,
-            createdAt: new Date(data.created_at), updatedAt: new Date(data.updated_at) } as ChatSession;
+            createdAt: new Date(data.created_at), updatedAt: new Date(data.updated_at),
+          } as ChatSession;
         }
       } catch {}
     }
@@ -1645,7 +1011,7 @@ class SupabaseStorage extends MemoryStorage {
     }
   }
 
-  // ── Chat Messages (persistent via Supabase) ──────────────────────────────────
+  // ── Chat Messages ───────────────────────────────────────────────────────────
   async createChatMessage(msg: InsertChatMessage): Promise<ChatMessage> {
     const memMsg = await super.createChatMessage(msg);
     if (supabaseDb) {
@@ -1659,13 +1025,10 @@ class SupabaseStorage extends MemoryStorage {
           attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
           created_at: new Date().toISOString(),
         });
-        // Update session message count
         if (msg.sessionId) {
-          await supabaseDb.rpc('increment_message_count', { session_id: msg.sessionId }).catch(() => {
-            supabaseDb!.from('chat_sessions').select('message_count').eq('id', msg.sessionId).single().then(({ data }) => {
-              if (data) supabaseDb!.from('chat_sessions').update({ message_count: (data.message_count || 0) + 1, updated_at: new Date().toISOString() }).eq('id', msg.sessionId!);
-            });
-          });
+          try {
+            await supabaseDb.rpc('increment_message_count', { session_id: msg.sessionId });
+          } catch {}
         }
       } catch {}
     }
@@ -1676,7 +1039,8 @@ class SupabaseStorage extends MemoryStorage {
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb
-          .from('chat_messages').select('*').eq('session_id', sessionId).order('created_at', { ascending: true });
+          .from('chat_messages').select('*').eq('session_id', sessionId)
+          .order('created_at', { ascending: true });
         if (!error && data && data.length > 0) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, sessionId: m.session_id, role: m.role, content: m.content,
@@ -1707,8 +1071,8 @@ class SupabaseStorage extends MemoryStorage {
     return super.getChatMessagesByUser(userId, limit);
   }
 
-  // ── Generated Lessons (persistent via Supabase) ──────────────────────────────
-  async createGeneratedLesson(l: any): Promise<GeneratedLesson> {
+  // ── Generated Lessons ───────────────────────────────────────────────────────
+  async createGeneratedLesson(l: InsertGeneratedLesson): Promise<GeneratedLesson> {
     const memLesson = await super.createGeneratedLesson(l);
     if (supabaseDb) {
       try {
@@ -1754,7 +1118,7 @@ class SupabaseStorage extends MemoryStorage {
     }
   }
 
-  // ── Memory Entries (persistent via Supabase) ─────────────────────────────────
+  // ── Memory Entries ──────────────────────────────────────────────────────────
   async createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry> {
     const memEntry = await super.createMemoryEntry(entry);
     if (supabaseDb) {
@@ -1764,7 +1128,7 @@ class SupabaseStorage extends MemoryStorage {
           user_id: entry.userId,
           type: (entry as any).type || 'note',
           subject: (entry as any).subject || null,
-          content: entry.content,
+          content: (entry as any).content || ((entry as any).data ? JSON.stringify((entry as any).data) : ''),
           importance: (entry as any).importance || 1,
           created_at: new Date().toISOString(),
         });
@@ -1782,16 +1146,16 @@ class SupabaseStorage extends MemoryStorage {
         if (!error && data && data.length > 0) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, type: m.type, subject: m.subject,
-            content: m.content, importance: m.importance || 1,
+            data: m.content ? { content: m.content } : {},
             createdAt: new Date(m.created_at),
-          })) as MemoryEntry[];
+          })) as unknown as MemoryEntry[];
         }
       } catch {}
     }
     return super.getMemoryEntriesByUser(userId);
   }
 
-  // Notes / Knowledge Base file uploads — backed by document_uploads table
+  // ── File Uploads ────────────────────────────────────────────────────────────
   async createFileUpload(upload: InsertFileUpload): Promise<FileUpload> {
     const memUpload = await super.createFileUpload(upload);
     if (supabaseDb) {
@@ -1807,9 +1171,7 @@ class SupabaseStorage extends MemoryStorage {
           is_processing: upload.processingStatus === 'pending',
           created_at: new Date().toISOString(),
         }).select().single();
-        if (!error && data) {
-          return mapDocumentUploadRow(data);
-        }
+        if (!error && data) return mapDocumentUploadRow(data);
       } catch {}
     }
     return memUpload;
@@ -1819,13 +1181,9 @@ class SupabaseStorage extends MemoryStorage {
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb
-          .from('document_uploads')
-          .select('*')
-          .eq('user_id', userId)
+          .from('document_uploads').select('*').eq('user_id', userId)
           .order('created_at', { ascending: false });
-        if (!error && data) {
-          return data.map(mapDocumentUploadRow);
-        }
+        if (!error && data) return data.map(mapDocumentUploadRow);
       } catch {}
     }
     return super.getFileUploadsByUser(userId);
@@ -1835,9 +1193,7 @@ class SupabaseStorage extends MemoryStorage {
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb.from('document_uploads').select('*').eq('id', id).single();
-        if (!error && data) {
-          return mapDocumentUploadRow(data);
-        }
+        if (!error && data) return mapDocumentUploadRow(data);
       } catch {}
     }
     return super.getFileUpload(id);
@@ -1848,15 +1204,8 @@ class SupabaseStorage extends MemoryStorage {
       try {
         const updateData: any = { is_processing: status === 'pending' };
         if (extractedText) updateData.extracted_text = extractedText;
-        const { data, error } = await supabaseDb
-          .from('document_uploads')
-          .update(updateData)
-          .eq('id', id)
-          .select()
-          .single();
-        if (!error && data) {
-          return mapDocumentUploadRow(data);
-        }
+        const { data, error } = await supabaseDb.from('document_uploads').update(updateData).eq('id', id).select().single();
+        if (!error && data) return mapDocumentUploadRow(data);
       } catch {}
     }
     return super.updateFileUploadStatus(id, status, extractedText);
@@ -1905,7 +1254,6 @@ function mapSupabaseUser(data: any): User {
   } as User;
 }
 
-// Initialize Supabase users table if it doesn't exist (called from server startup)
 export async function initSupabaseSchema() {
   if (!supabaseDb) return;
   try {
@@ -1920,4 +1268,4 @@ export async function initSupabaseSchema() {
 }
 
 export const storage = new SupabaseStorage();
-console.log('✅ Storage initialized (Supabase + in-memory hybrid)');
+console.log('✅ Storage initialized (Supabase + Database hybrid)');

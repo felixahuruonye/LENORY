@@ -1,155 +1,122 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase, signInWithGoogle, signInWithEmail, signOut as supabaseSignOut, SupabaseUser } from '@/lib/supabase';
-import type { User as AuthUser } from '@supabase/supabase-js';
-import type { User } from '@shared/schema';
+import { useEffect, useState } from 'react';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '../../lib/supabase'; // This should be your CLIENT-side Supabase instance
 
-interface UseSupabaseAuthReturn {
-  user: User | null;
-  authUser: AuthUser | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  signInWithGoogle: () => Promise<{ error: Error | null }>;
-  signInWithOTP: (email: string) => Promise<{ error: Error | null }>;
-  signOut: () => Promise<{ error: Error | null }>;
-}
+// This file should ONLY use the ANON key client, NEVER the admin client
+// The admin client stays in server/ folder only
 
-export function useSupabaseAuth(): UseSupabaseAuthReturn {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+export function useSupabaseAuth() {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const fetchUserProfile = useCallback(async (authUser: AuthUser) => {
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        // Only log serious errors, not table missing during setup
-        if (error.message !== "Could not find the table 'public.users' in the schema cache") {
-          console.error('Error fetching user profile:', error);
-        }
-        return null;
-      }
-
-      if (!data) {
-        const newUser = {
-          id: authUser.id,
-          email: authUser.email || '',
-          first_name: authUser.user_metadata?.full_name?.split(' ')[0] || authUser.user_metadata?.name?.split(' ')[0] || '',
-          last_name: authUser.user_metadata?.full_name?.split(' ').slice(1).join(' ') || '',
-          profile_image_url: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || '',
-          role: 'student',
-          subscription_tier: 'free',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        const { data: insertedUser, error: insertError } = await supabase
-          .from('users')
-          .insert(newUser)
-          .select()
-          .single();
-
-        if (insertError) {
-          console.error('Error creating user profile:', insertError);
-          return null;
-        }
-
-        return mapSupabaseUserToUser(insertedUser);
-      }
-
-      return mapSupabaseUserToUser(data);
-    } catch (error) {
-      console.error('Error in fetchUserProfile:', error);
-      return null;
-    }
-  }, []);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (session?.user) {
-          setAuthUser(session.user);
-          const userProfile = await fetchUserProfile(session.user);
-          setUser(userProfile);
-        }
-      } catch (error) {
-        console.error('Error initializing auth:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    initAuth();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setAuthUser(session.user);
-        const userProfile = await fetchUserProfile(session.user);
-        setUser(userProfile);
-        setIsLoading(false);
-      } else if (event === 'SIGNED_OUT') {
-        setAuthUser(null);
-        setUser(null);
-        setIsLoading(false);
-      } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-        setAuthUser(session.user);
-      }
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [fetchUserProfile]);
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        setUser(session?.user ?? null);
+        setLoading(false);
+      }
+    );
 
-  const handleSignInWithGoogle = useCallback(async () => {
-    const { error } = await signInWithGoogle();
-    return { error: error ? new Error(error.message) : null };
+    return () => subscription.unsubscribe();
   }, []);
 
-  const handleSignInWithOTP = useCallback(async (email: string) => {
-    const { error } = await signInWithEmail(email);
-    return { error: error ? new Error(error.message) : null };
-  }, []);
-
-  const handleSignOut = useCallback(async () => {
-    const { error } = await supabaseSignOut();
-    if (!error) {
-      setAuthUser(null);
-      setUser(null);
+  // Sign in with email/password
+  const signIn = async (email: string, password: string) => {
+    try {
+      setError(null);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      return { user: data.user, session: data.session, error: null };
+    } catch (err: any) {
+      setError(err.message);
+      return { user: null, session: null, error: err.message };
     }
-    return { error: error ? new Error(error.message) : null };
-  }, []);
+  };
+
+  // Sign up with email/password
+  const signUp = async (email: string, password: string, metadata?: any) => {
+    try {
+      setError(null);
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: metadata },
+      });
+      if (error) throw error;
+      return { user: data.user, session: data.session, error: null };
+    } catch (err: any) {
+      setError(err.message);
+      return { user: null, session: null, error: err.message };
+    }
+  };
+
+  // Sign out
+  const signOut = async () => {
+    try {
+      setError(null);
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      return { error: null };
+    } catch (err: any) {
+      setError(err.message);
+      return { error: err.message };
+    }
+  };
+
+  // Reset password
+  const resetPassword = async (email: string) => {
+    try {
+      setError(null);
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+      return { error: null };
+    } catch (err: any) {
+      setError(err.message);
+      return { error: err.message };
+    }
+  };
+
+  // UPDATE: This is the KEY change - use the ANON client, NOT admin
+  // Any admin operations (like checking email existence across all users)
+  // should be done via a server API endpoint, NOT client-side!
+  const checkEmailExists = async (email: string) => {
+    // ❌ DON'T DO THIS CLIENT-SIDE:
+    // Use supabaseAdmin - THIS WOULD EXPOSE YOUR SERVICE ROLE KEY!
+    
+    // ✅ DO THIS INSTEAD:
+    // Call your server API endpoint
+    try {
+      const response = await fetch('/api/auth/check-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json();
+      return { exists: data.exists, error: data.error };
+    } catch (err: any) {
+      return { exists: false, error: err.message };
+    }
+  };
 
   return {
     user,
-    authUser,
-    isLoading,
-    isAuthenticated: !!user,
-    signInWithGoogle: handleSignInWithGoogle,
-    signInWithOTP: handleSignInWithOTP,
-    signOut: handleSignOut,
-  };
-}
-
-function mapSupabaseUserToUser(data: any): User {
-  return {
-    id: data.id,
-    email: data.email,
-    firstName: data.first_name,
-    lastName: data.last_name,
-    profileImageUrl: data.profile_image_url,
-    role: data.role || 'student',
-    schoolId: data.school_id,
-    subscriptionTier: data.subscription_tier || 'free',
-    subscriptionExpiresAt: data.subscription_expires_at ? new Date(data.subscription_expires_at) : null,
-    paystackCustomerId: data.paystack_customer_id,
-    createdAt: new Date(data.created_at),
-    updatedAt: new Date(data.updated_at),
+    loading,
+    error,
+    signIn,
+    signUp,
+    signOut,
+    resetPassword,
+    checkEmailExists, // Calls the server API
   };
 }

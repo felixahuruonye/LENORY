@@ -9,9 +9,20 @@ export const GEMINI_VOICES = [
   { id: "Puck", name: "Puck", description: "Playful & energetic", gender: "neutral", lang: "en-US" },
 ];
 
-export const AVAILABLE_VOICES = GEMINI_VOICES;
+export const NIGERIAN_VOICES = [
+  { id: "idera", name: "Idera", description: "Warm Nigerian female", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "temi", name: "Temi", description: "Friendly Lagos female voice", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "jide", name: "Jide", description: "Professional Nigerian male", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "chidi", name: "Chidi", description: "Deep Nigerian male", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "yoruba_female", name: "Adunola (Yoruba)", description: "Yoruba female", gender: "female", lang: "yo", nigerian: true },
+  { id: "igbo_female", name: "Chioma (Igbo)", description: "Igbo female", gender: "female", lang: "ig", nigerian: true },
+  { id: "hausa_male", name: "Ibrahim (Hausa)", description: "Hausa male", gender: "male", lang: "ha", nigerian: true },
+  { id: "pidgin", name: "Bola (Pidgin)", description: "Naija Pidgin", gender: "female", lang: "pcm", nigerian: true },
+];
 
-const DEFAULT_VOICE = "Aoede";
+export const AVAILABLE_VOICES = [...NIGERIAN_VOICES, ...GEMINI_VOICES];
+
+const DEFAULT_VOICE = "idera";
 
 // Nigerian YarnGPT speaker IDs — routed through our TTS proxy, not browser speech
 const YARNGPT_SPEAKERS = new Set([
@@ -74,7 +85,7 @@ export function useVoice() {
     if (!synthRef.current) return;
     synthRef.current.cancel();
     const utterance = new SpeechSynthesisUtterance(processedText);
-    const voiceInfo = AVAILABLE_VOICES.find((v) => v.name === voiceName);
+    const voiceInfo = AVAILABLE_VOICES.find((v) => v.name === voiceName || v.id === voiceName);
     utterance.lang = voiceInfo?.lang || "en-US";
     utterance.rate = 1;
     utterance.pitch = 1;
@@ -123,14 +134,14 @@ export function useVoice() {
 
           if (!resp.ok) throw new Error("YarnGPT TTS failed");
           const data = await resp.json();
-          const audioUrl = data.audioUrl || data.url || data.audio;
+          const audioSrc = data.audioUrl || data.url || data.audio || (data.audioBase64 ? `data:${data.mimeType || "audio/wav"};base64,${data.audioBase64}` : null);
 
-          if (audioUrl) {
-            const audio = new Audio(audioUrl);
+          if (audioSrc) {
+            const audio = new Audio(audioSrc);
             yarngptAudioRef.current = audio;
             audio.onended = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
             audio.onerror = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
-            audio.play();
+            await audio.play();
           } else {
             setIsPlaying(false);
           }

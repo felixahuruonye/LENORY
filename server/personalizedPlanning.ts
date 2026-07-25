@@ -248,9 +248,9 @@ export function getPaceRecommendation(
       recommendation: `Great! You're on track. Maintain ${plan.hoursPerDay} hours/day to finish on time.`,
       hoursNeededPerDay: plan.hoursPerDay,
     };
-  } else if (hoursCompleted > expectedHours * 0.8) {
+  } else if (hoursCompleted >= expectedHours * 0.8) {
     return {
-      status: "slightly_behind",
+      status: "behind" as const,
       recommendation: `You're slightly behind. Increase to ${Math.ceil(requiredHoursPerDay)} hours/day to stay on schedule.`,
       hoursNeededPerDay: Math.ceil(requiredHoursPerDay),
     };

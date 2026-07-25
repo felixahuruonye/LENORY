@@ -12,12 +12,15 @@ export const ADMIN_EMAIL = "felixahuruonye@gmail.com";
 // Every call site that hits an external AI provider should call this. Fire-and-
 // forget by design — a logging failure must never break the actual feature.
 export function logApiUsage(provider: string, userId?: string, endpoint?: string) {
-  if (!supabaseDb) return;
-  supabaseDb
-    .from("api_usage_events")
-    .insert({ provider, endpoint: endpoint || null, user_id: userId || null })
-    .then(() => {})
-    .catch((e: unknown) => console.error("logApiUsage failed (non-fatal):", e));
+  (async () => {
+    try {
+      await supabaseDb
+        .from("api_usage_events")
+        .insert({ provider, endpoint: endpoint || null, user_id: userId || null });
+    } catch (e: unknown) {
+      console.error("logApiUsage failed (non-fatal):", e);
+    }
+  })();
 }
 
 export async function getApiUsageSummary() {

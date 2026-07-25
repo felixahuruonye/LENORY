@@ -167,7 +167,7 @@ export default function SettingsPanel() {
                     <label className="text-sm font-medium mb-2 block">Email</label>
                     <div className="flex items-center gap-2">
                       <Input value={user.email || ""} readOnly className="flex-1 bg-secondary/30" data-testid="input-email" />
-                      <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" title="Verified" />
+                      <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" aria-label="Verified" />
                     </div>
                   </div>
 
@@ -363,8 +363,8 @@ export default function SettingsPanel() {
                       className="w-full px-3 py-2 rounded-md border border-border bg-background text-foreground"
                       data-testid="select-voice-dropdown"
                     >
-                      {AVAILABLE_VOICES.map((voice) => (
-                        <option key={voice.name} value={voice.name}>{voice.name}{voice.nigerian ? " (Nigerian)" : ""}</option>
+                      {AVAILABLE_VOICES.map((voice: any) => (
+                        <option key={voice.name} value={voice.name}>{voice.name}{voice.nigerian || voice.category === "nigerian" ? " (Nigerian)" : ""}</option>
                       ))}
                     </select>
                   </div>

@@ -23,7 +23,7 @@ export interface Topic {
 /**
  * Get curriculum for a subject and exam
  */
-export function getCurriculum(subject: string, exam: "jamb" | "waec" | "neco" | "all"): CurriculumModule {
+export function getCurriculum(subject: string, exam: "jamb" | "waec" | "neco" | "all" = "all"): CurriculumModule {
   const curriculum: Record<string, CurriculumModule> = {
     mathematics: {
       subject: "Mathematics",
