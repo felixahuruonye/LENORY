@@ -2,7 +2,7 @@
 // Real, persistent credit tracking. Supabase is the source of truth — a server
 // restart, deploy, or crash must never reset anyone's balance again.
 
-import { supabaseDb } from "./db";
+import { supabaseDb } from "./supabase";
 
 export interface CreditRecord {
   balance: number;
