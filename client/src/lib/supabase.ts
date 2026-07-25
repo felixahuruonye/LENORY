@@ -36,13 +36,6 @@ export const signInWithEmail = async (email: string, password: string) => {
 
 // ═══ FIX: Alias for Login.tsx ════════════════════════════════
 export const signInWithEmailPassword = signInWithEmail;
-// ═════════════════════════════════════════════════════════════
-
-// Sign out
-export const signOut = async () => {
-  const { error } = await supabase.auth.signOut();
-  return { error };
-};
 
 // Sign up with email/password
 export const signUpWithEmail = async (email: string, password: string, metadata?: any) => {
@@ -52,6 +45,15 @@ export const signUpWithEmail = async (email: string, password: string, metadata?
     options: { data: metadata },
   });
   return { data, error };
+};
+
+// ═══ FIX: Alias for Signup.tsx ═══════════════════════════════
+export const signUpWithEmailPassword = signUpWithEmail;
+
+// Sign out
+export const signOut = async () => {
+  const { error } = await supabase.auth.signOut();
+  return { error };
 };
 
 // Reset password
