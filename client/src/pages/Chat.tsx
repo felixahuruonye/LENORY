@@ -497,9 +497,6 @@ export default function Chat() {
     const fileNames = filesToSend.map(f => f.file.name).join(", ");
     toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
     try {
-      // Process in parallel (not one-by-one) so multiple files don't compound
-      // into a timeout, and each gets its own hard timeout so a slow one can't
-      // hang the whole batch.
       const results = await Promise.all(filesToSend.map(async ({ file }) => {
         try {
           const base64 = await fileToBase64(file);
@@ -526,7 +523,7 @@ export default function Chat() {
       const failures = results.filter(r => !r.ok);
 
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
-      setPendingFiles([]); // clear only now that we actually know the outcome
+      setPendingFiles([]);
 
       if (failures.length > 0) {
         toast({ title: failures.length === filesToSend.length ? "Analysis failed" : "Some files failed", description: failures.map(f => (f as any).error).join(" | "), variant: "destructive" });
@@ -536,12 +533,10 @@ export default function Chat() {
       const userChatContent = userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel;
 
       if (analyses.length > 0) {
-        // Build assistant reply — prepend failure notes for any files that errored
         const failureNotes = failures.map(f => `**${f.file.name}:** Could not analyze — ${(f as any).error}`);
         const allContent = [...failureNotes, ...analyses].join("\n\n");
         await handleSendMessageWithContent(userChatContent, allContent);
       } else {
-        // All files failed — still save the user's message so it isn't lost
         await handleSendMessageWithContent(
           userChatContent,
           `I wasn't able to analyze ${filesToSend.length === 1 ? "the attached file" : "any of the attached files"} (${fileNames}). Please try again with a smaller file or check the format.`
@@ -552,6 +547,7 @@ export default function Chat() {
     }
   };
 
+  // ─── FIXED: handleSendMessageWithContent ──────────────────────────────────
   const handleSendMessageWithContent = async (userContent: string, assistantContent: string) => {
     if (!user) return;
     let sessionId = currentSessionId;
@@ -564,8 +560,9 @@ export default function Chat() {
         queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       } catch { return; }
     }
-    await apiRequest("POST", "/api/chat/messages", { sessionId, role: "user", content: userContent });
-    await apiRequest("POST", "/api/chat/messages", { sessionId, role: "assistant", content: assistantContent });
+    // FIX: Use /api/chat/save-message instead of /api/chat/messages
+    await apiRequest("POST", "/api/chat/save-message", { sessionId, role: "user", content: userContent });
+    await apiRequest("POST", "/api/chat/save-message", { sessionId, role: "assistant", content: assistantContent });
     queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sessionId] });
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
   };
@@ -748,8 +745,6 @@ export default function Chat() {
     // Files attached — send them with whatever prompt (or default) is typed
     if (pendingFiles.length > 0) {
       const userPrompt = message.trim();
-      // Clear input AFTER analysis so the message stays visible if something fails.
-      // isLoading=true (set inside sendPendingFilesWithPrompt) prevents double-sends.
       await sendPendingFilesWithPrompt(userPrompt);
       resetInput();
       return;
@@ -859,7 +854,7 @@ export default function Chat() {
         } catch {}
         toast({ title: "Message failed", description: errMessage, variant: "destructive" });
         setIsLoading(false);
-        return; // Don't clear the user's typed message — they shouldn't have to retype it
+        return;
       }
 
       resetInput();

@@ -869,8 +869,6 @@ export class DatabaseStorage implements IStorage {
 }
 
 // ─── Supabase-backed Storage ──────────────────────────────────────────────────
-// CRITICAL FIX: Extends DatabaseStorage directly (NOT MemoryStorage)
-// This eliminates ALL duplicate method overwrites that were causing silent failures.
 class SupabaseStorage extends DatabaseStorage {
   // ── Users ───────────────────────────────────────────────────────────────────
   async getUsers(): Promise<User[]> {
@@ -944,7 +942,9 @@ class SupabaseStorage extends DatabaseStorage {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
-      } catch {}
+      } catch (e) {
+        console.error("🔥 Failed to save chat session to Supabase:", e);
+      }
     }
     return memSession;
   }
@@ -1016,7 +1016,7 @@ class SupabaseStorage extends DatabaseStorage {
     const memMsg = await super.createChatMessage(msg);
     if (supabaseDb) {
       try {
-        await supabaseDb.from('chat_messages').insert({
+        const { error } = await supabaseDb.from('chat_messages').insert({
           id: memMsg.id,
           user_id: msg.userId,
           session_id: msg.sessionId || null,
@@ -1025,12 +1025,17 @@ class SupabaseStorage extends DatabaseStorage {
           attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
           created_at: new Date().toISOString(),
         });
+        if (error) console.error("🔥 Failed to save chat message to Supabase:", error.message, error.details, error.hint);
         if (msg.sessionId) {
           try {
             await supabaseDb.rpc('increment_message_count', { session_id: msg.sessionId });
-          } catch {}
+          } catch (e) {
+            console.error("🔥 increment_message_count RPC failed:", e);
+          }
         }
-      } catch {}
+      } catch (e) {
+        console.error("🔥 createChatMessage Supabase error:", e);
+      }
     }
     return memMsg;
   }
@@ -1171,8 +1176,11 @@ class SupabaseStorage extends DatabaseStorage {
           is_processing: upload.processingStatus === 'pending',
           created_at: new Date().toISOString(),
         }).select().single();
+        if (error) console.error("🔥 Failed to save file upload to Supabase:", error.message, error.details, error.hint);
         if (!error && data) return mapDocumentUploadRow(data);
-      } catch {}
+      } catch (e) {
+        console.error("🔥 createFileUpload Supabase error:", e);
+      }
     }
     return memUpload;
   }
