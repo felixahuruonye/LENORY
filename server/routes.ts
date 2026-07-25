@@ -457,6 +457,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
       res.json({ success: true, message: aiResponse });
     } catch (error) {
+      // ─── FIX: Added detailed error logging ───
+      console.error("🔥 /api/chat/send crashed:", error);
       logAdminError("/api/chat/send", error);
       res.status(500).json({ message: "Failed to send message. Please try again." });
     }
