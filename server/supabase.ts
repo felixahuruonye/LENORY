@@ -1,3 +1,33 @@
+// server/supabase.ts
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.warn('⚠️ Supabase credentials missing. Some features will not work.');
+}
+
+// This is the SERVER-ONLY admin client - NEVER expose to client!
+export const supabaseAdmin = createClient(
+  supabaseUrl,
+  supabaseServiceKey,
+  { 
+    auth: { 
+      autoRefreshToken: false, 
+      persistSession: false 
+    } 
+  }
+);
+
+// Also export a regular client for server-side if needed
+export const supabase = createClient(
+  supabaseUrl,
+  process.env.VITE_SUPABASE_ANON_KEY || ''
+);
+
+// ─── Helper Functions ──────────────────────────────────────
+
 export async function checkEmailExists(email: string): Promise<{ exists: boolean; error?: string }> {
   try {
     // Check database first
@@ -11,7 +41,7 @@ export async function checkEmailExists(email: string): Promise<{ exists: boolean
       return { exists: true };
     }
 
-    // Use listUsers and filter (getUserByEmail doesn't exist in Supabase Admin API)
+    // Use listUsers and filter
     let page = 1;
     const perPage = 1000;
     while (true) {
@@ -21,7 +51,7 @@ export async function checkEmailExists(email: string): Promise<{ exists: boolean
         return { exists: false, error: error.message };
       }
       
-      const userFound = data.users.some((u) => u.email?.toLowerCase() === email.toLowerCase());
+      const userFound = data.users.some((u: any) => u.email?.toLowerCase() === email.toLowerCase());
       if (userFound) return { exists: true };
       
       if (data.users.length < perPage) break;
