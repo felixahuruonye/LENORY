@@ -6,7 +6,11 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export default defineConfig({
-  root: 'client',  // <-- THIS FIXES THE INDEX.HTML NOT FOUND ERROR
+  root: 'client',
+  build: {
+    outDir: '../dist/public',
+    emptyOutDir: true,
+  },
   plugins: [react()],
   resolve: {
     alias: {
