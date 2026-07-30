@@ -614,9 +614,15 @@ export class DatabaseStorage implements IStorage {
     const [website] = await db.select().from(generatedWebsites).where(eq(generatedWebsites.id, id));
     return website;
   }
-
   async getGeneratedWebsitesByUser(userId: string): Promise<GeneratedWebsite[]> {
-    return await db.select().from(generatedWebsites).where(eq(generatedWebsites.userId, userId)).orderBy(desc(generatedWebsites.createdAt));
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb.from('generated_websites').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+        if (!error && data) return data as any;
+        console.error("getGeneratedWebsitesByUser supabase error:", error);
+      } catch (e) { console.error("getGeneratedWebsitesByUser error:", e); }
+    }
+    return [];
   }
 
   async createGeneratedWebsite(website: InsertGeneratedWebsite): Promise<GeneratedWebsite> {
