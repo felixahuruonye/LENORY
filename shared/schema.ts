@@ -723,3 +723,34 @@ export const subscriptions = pgTable("subscriptions", {
 export const insertSubscriptionSchema = createInsertSchema(subscriptions).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertSubscription = z.infer<typeof insertSubscriptionSchema>;
 export type Subscription = typeof subscriptions.$inferSelect;
+// ─── KNOWLEDGE BASE ──────────────────────────────────────────────────────
+export const kbFolders = pgTable("kb_folders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  storageUsed: integer("storage_used").default(0).notNull(),
+  creditsBalance: integer("credits_balance").default(10).notNull(),
+  shareToken: varchar("share_token").unique(),
+  sharePermission: varchar("share_permission", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertKbFolderSchema = createInsertSchema(kbFolders).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbFolder = z.infer<typeof insertKbFolderSchema>;
+export type KbFolder = typeof kbFolders.$inferSelect;
+export const kbFiles = pgTable("kb_files", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  folderId: varchar("folder_id").notNull().references(() => kbFolders.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: varchar("name", { length: 255 }).notNull(),
+  fileType: varchar("file_type", { length: 20 }).notNull(),
+  mimeType: varchar("mime_type", { length: 100 }),
+  sizeBytes: integer("size_bytes").default(0).notNull(),
+  sourceUrl: text("source_url"),
+  extractedText: text("extracted_text"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertKbFileSchema = createInsertSchema(kbFiles).omit({ id: true, createdAt: true });
+export type InsertKbFile = z.infer<typeof insertKbFileSchema>;
+export type KbFile = typeof kbFiles.$inferSelect;

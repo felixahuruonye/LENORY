@@ -11,6 +11,7 @@ import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits } from "./creditsStore";
 import { storage } from "./storage";
+import { registerKbRoutes } from "./kbRoutes";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
   chatWithAI,
@@ -73,6 +74,7 @@ function getGitHubAuthUrl(userId: string): string {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  registerKbRoutes(app);
   // Wire up Replit AI Integrations
   registerChatRoutes(app);
 
