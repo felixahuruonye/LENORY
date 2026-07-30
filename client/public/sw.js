@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lenory-cache-v5';
+const CACHE_NAME = 'lenory-cache-v6';
 const OFFLINE_URL = '/offline.html';
 
 const STATIC_ASSETS = [
@@ -69,20 +69,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell navigation pages — stale-while-revalidate
+  // App shell navigation pages - network-first, always fresh
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.open(CACHE_NAME).then((cache) =>
-        cache.match(event.request).then((cached) => {
-          const fetchPromise = fetch(event.request)
-            .then((response) => {
-              if (response.ok) cache.put(event.request, response.clone());
-              return response;
-            })
-            .catch(() => cached || caches.match(OFFLINE_URL).then(r => r || new Response('Offline', { status: 503 })));
-          return cached || fetchPromise;
-        })
-      )
+      fetch(event.request).then((response) => { if (response.ok) { const clone = response.clone(); caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)); } return response; }).catch(() => caches.match(event.request).then(cached => cached || caches.match(OFFLINE_URL).then(r => r || new Response('Offline', { status: 503 }))))
     );
     return;
   }
@@ -103,3 +93,4 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
