@@ -20,7 +20,7 @@ function parseJsonFromAI(text: string): any {
 export function registerKbRoutes(app: Express) {
   app.get('/api/kb/folders', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const folders = await kb.getFoldersByUser(req.userId);
+      const folders = await kb.getFoldersByUser(req.userId).catch(e => { console.error("KB FOLDERS ERROR:", e); throw e; });
       res.json(folders.map(f => ({
         id: f.id, name: f.name, description: f.description,
         storage_used: f.storageUsed, credits_balance: f.creditsBalance,

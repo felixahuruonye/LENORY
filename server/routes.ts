@@ -1168,7 +1168,7 @@ You have FULL access to the system. You can:
   // ─── OLD WEBSITE GENERATOR ENDPOINTS (keep for backward compatibility) ───
 
   app.get('/api/websites', supabaseAuth, async (req: any, res: Response) => {
-    try { res.json(await storage.getGeneratedWebsitesByUser(req.userId)); } catch (error) { res.status(500).json({ message: "Failed to fetch websites" }); }
+    try { res.json(await storage.getGeneratedWebsitesByUser(req.userId)); } catch (error) { console.error("WEBSITES ERROR:", error); res.status(500).json({ message: "Failed to fetch websites" }); }
   });
 
   app.get('/api/websites/:id', supabaseAuth, async (req: any, res: Response) => {
