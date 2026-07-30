@@ -292,14 +292,56 @@ Analyze the answers and return ONLY valid JSON (no other text):
   }
 }
 
-// Internet search with Gemini (returns web search results with sources)
+// ─── SEARCH WITH TAVILY + GEMINI FALLBACK ──────────────────────────
+// ─── WHAT WAS ADDED: ─────────────────────────────────────────────────
+// 1. Tavily API as primary search (faster, better results for AI)
+// 2. Automatic fallback to Gemini grounding if Tavily fails
+// 3. Structured result format with clickable links
+// ─────────────────────────────────────────────────────────────────────
 export async function searchInternetWithGemini(query: string): Promise<WebSearchResponse> {
+  // Try Tavily first
+  const tavilyKey = process.env.TAVILY_API_KEY;
+  if (tavilyKey) {
+    try {
+      console.log("🔍 Searching with Tavily:", query);
+      const response = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: tavilyKey,
+          query,
+          search_depth: 'basic',
+          max_results: 5,
+          include_answer: true,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const results = (data.results || []).map((r: any) => ({
+          title: r.title || 'Untitled',
+          snippet: r.content || r.snippet || '',
+          link: r.url || '#',
+          source: r.source || 'web',
+        }));
+        return {
+          results,
+          summary: data.answer || `Found ${results.length} results for "${query}"`,
+        };
+      }
+      console.warn("Tavily search failed, falling back to Gemini");
+    } catch (err) {
+      console.warn("Tavily search error:", err);
+    }
+  }
+
+  // Fallback to Gemini grounding (existing implementation)
   try {
     if (!apiKey) {
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("🔍 Searching internet for:", query);
+    console.log("🔍 Falling back to Gemini search:", query);
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -308,8 +350,7 @@ export async function searchInternetWithGemini(query: string): Promise<WebSearch
 Return ONLY valid JSON (no other text):
 {
   "results": [
-    {"title": "Result Title", "snippet": "Brief description", "link": "https://example.com", "source": "Website Name"},
-    {"title": "Another Result", "snippet": "Description", "link": "https://example2.com", "source": "Website Name 2"}
+    {"title": "Result Title", "snippet": "Brief description", "link": "https://example.com", "source": "Website Name"}
   ],
   "summary": "Brief summary of search results"
 }
@@ -324,7 +365,7 @@ Find real, recent information. Include sources and links.`
     if (!jsonMatch) throw new Error("Could not extract JSON from search response");
 
     const searchData = JSON.parse(jsonMatch[0]);
-    console.log(`✅ Found ${searchData.results?.length || 0} results`);
+    console.log(`✅ Found ${searchData.results?.length || 0} results via Gemini`);
 
     return {
       results: searchData.results || [],

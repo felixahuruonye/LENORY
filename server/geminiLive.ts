@@ -1,5 +1,7 @@
+// server/geminiLive.ts
 import { WebSocket as WS } from "ws";
 import { GoogleGenAI, Modality } from "@google/genai";
+import { storage } from "./storage";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
@@ -7,12 +9,14 @@ interface GeminiLiveSession {
   ws: WS;
   userId: string;
   sessionId: string;
+  chatSessionId?: string; // ─── NEW: Stores the chat session ID for context
   isConnected: boolean;
   isReceivingAudio: boolean;
   selectedVoice: string;
   language: string;
   liveSession: any | null;
   isStreaming: boolean;
+  chatContext?: any[]; // ─── NEW: Stores loaded chat messages for context
 }
 
 const activeSessions = new Map<string, GeminiLiveSession>();
@@ -28,32 +32,69 @@ export const GEMINI_VOICES = [
 // Use the latest Live API model
 const LIVE_MODEL = "gemini-2.0-flash-live-001";
 
-export async function handleGeminiLiveConnection(ws: WS, userId: string) {
+// ─── UPDATED: Accept sessionId parameter ────────────────────────────────────
+export async function handleGeminiLiveConnection(ws: WS, userId: string, chatSessionId: string = '') {
   const sessionId = `live_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   const session: GeminiLiveSession = {
     ws,
     userId,
     sessionId,
+    chatSessionId: chatSessionId || undefined,
     isConnected: true,
     isReceivingAudio: false,
     selectedVoice: "Aoede",
     language: "en",
     liveSession: null,
     isStreaming: false,
+    chatContext: [],
   };
   
   activeSessions.set(sessionId, session);
-  console.log(`Gemini Live session started: ${sessionId} for user: ${userId}`);
+  console.log(`Gemini Live session started: ${sessionId} for user: ${userId}${chatSessionId ? ` with chat context: ${chatSessionId}` : ''}`);
+
+  // ─── NEW: Load chat context if chatSessionId is provided ──────────────────
+  if (chatSessionId) {
+    try {
+      const messages = await storage.getChatMessagesBySession(chatSessionId);
+      if (messages && messages.length > 0) {
+        // Get last 10 messages for context
+        const recentMessages = messages.slice(-10);
+        session.chatContext = recentMessages.map(m => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.content }]
+        }));
+        
+        // Send context loaded confirmation
+        ws.send(JSON.stringify({
+          type: "context_loaded",
+          sessionId: chatSessionId,
+          messageCount: recentMessages.length,
+          message: `Loaded ${recentMessages.length} previous messages for context`,
+        }));
+        
+        console.log(`✅ Loaded ${recentMessages.length} chat messages as context for session ${chatSessionId}`);
+      }
+    } catch (err) {
+      console.warn('Failed to load chat context:', err);
+      ws.send(JSON.stringify({
+        type: "warning",
+        message: "Could not load chat history, but you can still continue.",
+      }));
+    }
+  }
 
   // Initialize Gemini Live connection
   await initializeGeminiLiveSession(session);
 
+  // Send initial session info
   ws.send(JSON.stringify({
     type: "session_started",
     sessionId,
     voices: GEMINI_VOICES,
-    message: "Connected to LENORY AI Voice with Gemini Live streaming.",
+    chatContextLoaded: !!(session.chatContext && session.chatContext.length > 0),
+    chatSessionId: chatSessionId || undefined,
+    message: `Connected to LENORY AI Voice with Gemini Live streaming.${chatSessionId ? ` Context loaded from chat session.` : ''}`,
   }));
 
   ws.on("message", async (message: Buffer, isBinary: boolean) => {
@@ -111,6 +152,7 @@ export async function handleGeminiLiveConnection(ws: WS, userId: string) {
   });
 }
 
+// ─── UPDATED: Include chat context in system instruction ────────────────────
 async function initializeGeminiLiveSession(session: GeminiLiveSession) {
   if (!GOOGLE_API_KEY) {
     console.error("No GOOGLE_API_KEY configured");
@@ -120,9 +162,8 @@ async function initializeGeminiLiveSession(session: GeminiLiveSession) {
   try {
     const ai = new GoogleGenAI({ apiKey: GOOGLE_API_KEY });
     
-    const config = {
-      responseModalities: [Modality.AUDIO, Modality.TEXT],
-      systemInstruction: `You are LENORY, an advanced AI tutor specializing in Nigerian education (JAMB, WAEC, NECO).
+    // Build system instruction with context if available
+    let systemInstruction = `You are LENORY, an advanced AI tutor specializing in Nigerian education (JAMB, WAEC, NECO).
         
 Voice: ${session.selectedVoice}
 Language: ${session.language}
@@ -134,7 +175,26 @@ Guidelines:
 - Keep responses conversational for voice interaction
 - Answer questions directly and helpfully
 - When you hear audio, first acknowledge what the student said, then respond
-- For math and science, explain step by step`,
+- For math and science, explain step by step
+- Use the chat context below to maintain continuity with the conversation`;
+
+    // ─── NEW: Inject chat context into system instruction ────────────────────
+    if (session.chatContext && session.chatContext.length > 0) {
+      const contextText = session.chatContext.map((m: any) => 
+        `${m.role === 'model' ? 'LENORY' : 'User'}: ${m.parts[0].text}`
+      ).join('\n');
+      
+      systemInstruction += `
+
+## Previous Chat Context (for continuity):
+${contextText}
+
+IMPORTANT: Use the context above to maintain conversation flow. Reference previous topics when relevant. Continue from where the user left off.`;
+    }
+
+    const config = {
+      responseModalities: [Modality.AUDIO, Modality.TEXT],
+      systemInstruction: systemInstruction,
       speechConfig: {
         voiceConfig: {
           prebuiltVoiceConfig: {
@@ -149,7 +209,7 @@ Guidelines:
       const liveSession = await (ai as any).live?.connect(LIVE_MODEL, config);
       if (liveSession) {
         session.liveSession = liveSession;
-        console.log(`Gemini Live session established for ${session.sessionId}`);
+        console.log(`Gemini Live session established for ${session.sessionId}${session.chatContext && session.chatContext.length > 0 ? ' with context' : ''}`);
         
         // Start listening for responses
         startReceivingResponses(session);
@@ -231,8 +291,6 @@ async function handleBinaryAudio(session: GeminiLiveSession, audioData: Buffer) 
   }
 }
 
-// Note: handleAudioChunk removed - all audio now uses binary PCM frames via handleBinaryAudio
-
 async function handleAudioEnd(session: GeminiLiveSession) {
   session.isReceivingAudio = false;
   
@@ -246,10 +304,6 @@ async function handleAudioEnd(session: GeminiLiveSession) {
     }
   }
 }
-
-// Note: handleAudioInput removed - all audio now uses binary PCM frames via handleBinaryAudio
-// Note: processAudioWithFallback removed - all audio now uses Gemini Live binary streaming only
-// Note: generateTTSAudio removed - all audio now uses Gemini Live streaming only
 
 async function handleTextInput(session: GeminiLiveSession, text: string) {
   if (!GOOGLE_API_KEY) {
@@ -284,8 +338,6 @@ async function handleTextInput(session: GeminiLiveSession, text: string) {
     session.ws.send(JSON.stringify({ type: "processing_complete" }));
   }
 }
-
-// Note: generateTTSAudio removed - all audio now uses Gemini Live streaming only
 
 function closeSession(sessionId: string) {
   const session = activeSessions.get(sessionId);

@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Heart, Trash2, Copy, ChevronLeft, Eye, Code2, BookOpen, X, Zap, Play } from "lucide-react";
+import { Loader2, Heart, Trash2, Copy, ChevronLeft, Eye, Code2, BookOpen, X, Zap, Play , Circle } from "lucide-react";
 
 export default function WebsiteGenerator() {
   const [, setLocation] = useLocation();
@@ -554,3 +554,4 @@ export default function WebsiteGenerator() {
     </div>
   );
 }
+

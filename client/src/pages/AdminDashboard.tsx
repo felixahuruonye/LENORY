@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,21 +12,39 @@ import {
   Coins, Crown, BarChart3, RefreshCcw, Shield,
   Search, ArrowLeft, ExternalLink, AlertTriangle,
   CheckCircle2, XCircle, HelpCircle, Zap, Clock,
+  Activity, CreditCard
 } from "lucide-react";
 import { Link } from "wouter";
+import { UserDetailModal } from "@/components/UserDetailModal";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { format } from "date-fns";
 
 export default function AdminDashboard() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<"overview" | "users" | "credits" | "providers">("overview");
   const [searchUser, setSearchUser] = useState("");
-  const [editingUser, setEditingUser] = useState<any>(null);
   const [creditAction, setCreditAction] = useState<{ userId: string; action: string; amount: string } | null>(null);
   const [userCreditsMap, setUserCreditsMap] = useState<Record<string, number | null>>({});
   const [loadingCreditUserId, setLoadingCreditUserId] = useState<string | null>(null);
+  
+  // ─── NEW STATE ──────────────────────────────────────────────────────────
+  const [activeUsers, setActiveUsers] = useState<{ count: number; users: any[] }>({ count: 0, users: [] });
+  const [platformHealth, setPlatformHealth] = useState<any>(null);
+  const [totalCredits, setTotalCredits] = useState<any>(null);
+  const [showUserDetail, setShowUserDetail] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserEmail, setSelectedUserEmail] = useState("");
+  const [selectedUserName, setSelectedUserName] = useState("");
+  const [selectedLenoryId, setSelectedLenoryId] = useState("");
+  const [showTransactions, setShowTransactions] = useState(false);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
 
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
+  // ─── QUERIES ──────────────────────────────────────────────────────────────
   const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useQuery({
     queryKey: ["/api/admin/users"],
     enabled: isAuthorized,
@@ -41,7 +59,6 @@ export default function AdminDashboard() {
     data: providerData,
     isLoading: providersLoading,
     refetch: refetchProviders,
-    dataUpdatedAt: providersUpdatedAt,
   } = useQuery<{
     providers: {
       provider: string;
@@ -68,6 +85,7 @@ export default function AdminDashboard() {
     gcTime: 10 * 60 * 1000,
   });
 
+  // ─── MUTATIONS ───────────────────────────────────────────────────────────
   const adjustCreditsMutation = useMutation({
     mutationFn: async ({ userId, action, amount }: { userId: string; action: string; amount: number }) => {
       const res = await apiRequest("POST", `/api/admin/credits/${userId}`, { action, amount });
@@ -94,11 +112,60 @@ export default function AdminDashboard() {
     onError: () => toast({ title: "Reset failed", variant: "destructive" }),
   });
 
-  const handleAuthorize = () => {
-    // Real auth is enforced server-side by email check on every /api/admin/* call.
-    // This client-side gate is just for UI — no bypass code exists or should exist here.
+  // ─── FETCH FUNCTIONS ────────────────────────────────────────────────────
+  const fetchPlatformHealth = async () => {
+    try {
+      const res = await apiRequest("GET", "/api/admin/platform-health");
+      const data = await res.json();
+      setPlatformHealth(data);
+    } catch (e) {}
   };
 
+  const fetchActiveUsers = async () => {
+    try {
+      const res = await apiRequest("GET", "/api/admin/active-users");
+      const data = await res.json();
+      setActiveUsers(data);
+    } catch (e) {}
+  };
+
+  const fetchTotalCredits = async () => {
+    try {
+      const res = await apiRequest("GET", "/api/admin/total-credits");
+      const data = await res.json();
+      setTotalCredits(data);
+    } catch (e) {}
+  };
+
+  const fetchTransactions = async () => {
+    setTransactionsLoading(true);
+    try {
+      const res = await apiRequest("GET", "/api/admin/paystack-transactions?limit=100");
+      const data = await res.json();
+      setTransactions(data.transactions || []);
+      setShowTransactions(true);
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to fetch transactions", variant: "destructive" });
+    } finally {
+      setTransactionsLoading(false);
+    }
+  };
+
+  // ─── AUTO-REFRESH ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (isAuthorized) {
+      fetchPlatformHealth();
+      fetchActiveUsers();
+      fetchTotalCredits();
+      const interval = setInterval(() => {
+        fetchPlatformHealth();
+        fetchActiveUsers();
+      }, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [isAuthorized]);
+
+  // ─── HANDLERS ──────────────────────────────────────────────────────────
   const fetchAndShowCredits = async (userId: string) => {
     setLoadingCreditUserId(userId);
     try {
@@ -114,6 +181,7 @@ export default function AdminDashboard() {
     setActiveTab("credits");
   };
 
+  // ─── AUTH CHECK ────────────────────────────────────────────────────────
   if (authLoading) {
     return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
@@ -178,7 +246,7 @@ export default function AdminDashboard() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {/* Stats Overview */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Card data-testid="stat-total-users">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm text-muted-foreground">Total Users</CardTitle>
@@ -196,30 +264,69 @@ export default function AdminDashboard() {
               <DollarSign className="h-4 w-4 text-emerald-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">₦{(totalRevenue / 100).toLocaleString()}</div>
+              <div className="text-2xl font-bold">₦{(stats?.realRevenueNaira || 0).toLocaleString()}</div>
               <p className="text-xs text-muted-foreground mt-1">From subscriptions</p>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="mt-2 w-full"
+                onClick={fetchTransactions}
+                disabled={transactionsLoading}
+              >
+                {transactionsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "View Transactions"}
+              </Button>
             </CardContent>
           </Card>
 
           <Card data-testid="stat-platform-health">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm text-muted-foreground">Platform Health</CardTitle>
-              <TrendingUp className="h-4 w-4 text-primary" />
+              <Activity className="h-4 w-4 text-primary" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-500">99.9%</div>
-              <p className="text-xs text-muted-foreground mt-1">Uptime this month</p>
+              {platformHealth ? (
+                <>
+                  <div className="text-2xl font-bold text-green-500">{platformHealth.uptime}%</div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Status: <Badge variant={platformHealth.status === 'healthy' ? 'secondary' : 'destructive'}>
+                      {platformHealth.status}
+                    </Badge>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Supabase: {platformHealth.supabaseStatus}
+                  </p>
+                </>
+              ) : (
+                <div className="text-2xl font-bold text-yellow-500">Loading...</div>
+              )}
             </CardContent>
           </Card>
 
           <Card data-testid="stat-active-users">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm text-muted-foreground">Active Users</CardTitle>
-              <BarChart3 className="h-4 w-4 text-purple-500" />
+              <Users className="h-4 w-4 text-purple-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{(users as any[]).length}</div>
-              <p className="text-xs text-muted-foreground mt-1">In-memory session</p>
+              <div className="text-2xl font-bold">{activeUsers.count}</div>
+              <p className="text-xs text-muted-foreground mt-1">Live from Supabase</p>
+              {activeUsers.users?.length > 0 && (
+                <div className="mt-2 text-xs text-muted-foreground truncate">
+                  {activeUsers.users.slice(0, 3).map((u: any) => u.email).join(', ')}
+                  {activeUsers.users.length > 3 && ` +${activeUsers.users.length - 3} more`}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card data-testid="stat-total-credits">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Total Platform Credits</CardTitle>
+              <CreditCard className="h-4 w-4 text-emerald-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalCredits?.total || 0}</div>
+              <p className="text-xs text-muted-foreground mt-1">Across all providers</p>
             </CardContent>
           </Card>
         </div>
@@ -293,8 +400,11 @@ export default function AdminDashboard() {
                         <tr key={u.id} className="hover:bg-muted/20 transition-colors" data-testid={`row-user-${u.id}`}>
                           <td className="px-4 py-3">
                             <div>
-                              <p className="font-medium truncate max-w-48">{u.email}</p>
-                              <p className="text-xs text-muted-foreground truncate">{u.id?.slice(0, 12)}...</p>
+                              <p className="font-medium truncate max-w-48">
+                                {u.first_name || u.last_name ? `${u.first_name || ''} ${u.last_name || ''}`.trim() : u.email}
+                              </p>
+                              <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                              <p className="text-xs text-muted-foreground font-mono truncate">ID: {u.id?.slice(0, 12)}...</p>
                             </div>
                           </td>
                           <td className="px-4 py-3">
@@ -313,7 +423,7 @@ export default function AdminDashboard() {
                               <span className="text-muted-foreground text-xs">click →</span>
                             )}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3 flex gap-1">
                             <Button
                               size="sm"
                               variant="outline"
@@ -326,6 +436,20 @@ export default function AdminDashboard() {
                               ) : (
                                 <><Coins className="h-3 w-3 mr-1" />Credits</>
                               )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setSelectedUserId(u.id);
+                                setSelectedUserEmail(u.email);
+                                setSelectedUserName(`${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email);
+                                setSelectedLenoryId(u.lenoryId || '');
+                                setShowUserDetail(true);
+                              }}
+                              data-testid={`button-view-user-${u.id}`}
+                            >
+                              <Activity className="h-4 w-4" />
                             </Button>
                           </td>
                         </tr>
@@ -399,7 +523,6 @@ export default function AdminDashboard() {
         {/* Providers Tab */}
         {activeTab === "providers" && (
           <div className="space-y-6">
-            {/* Burn estimate header */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between flex-wrap gap-3">
@@ -489,7 +612,6 @@ export default function AdminDashboard() {
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-3">
-                        {/* Balance row */}
                         <div className="rounded-lg bg-muted/40 px-3 py-2">
                           <p className="text-xs text-muted-foreground mb-1 font-medium">Balance</p>
                           {p.hasRealApi ? (
@@ -511,7 +633,6 @@ export default function AdminDashboard() {
                           )}
                         </div>
 
-                        {/* Usage this week / this month */}
                         <div className="grid grid-cols-2 gap-2 text-sm">
                           <div className="rounded-md bg-muted/20 px-2 py-1.5 text-center">
                             <p className="text-xs text-muted-foreground">This week</p>
@@ -529,7 +650,6 @@ export default function AdminDashboard() {
                           </div>
                         </div>
 
-                        {/* Dashboard link */}
                         <a
                           href={p.dashboardUrl}
                           target="_blank"
@@ -547,7 +667,6 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {/* Disclaimer */}
             <p className="text-xs text-muted-foreground text-center px-4">
               Cost estimates are calculated from call counts in <code>api_usage_events</code> multiplied by fixed per-call 
               averages. Actual billed amounts may differ based on token length, model version, and provider pricing changes.
@@ -580,15 +699,65 @@ export default function AdminDashboard() {
                     <span className="font-bold">{(users as any[]).length - proCount - premiumCount}</span>
                   </div>
                 </div>
-                <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
-                  <p className="text-xs text-muted-foreground mb-1">Storage Note</p>
-                  <p className="text-sm">Data is stored in-memory. Supabase REST persistence is attempted but may fail. Data resets on server restart.</p>
+                <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
+                  <p className="text-xs text-muted-foreground mb-1">✅ System Status</p>
+                  <p className="text-sm text-green-700 dark:text-green-400">All data is persisted in Supabase. No data loss on restart.</p>
                 </div>
               </CardContent>
             </Card>
           </div>
         )}
       </main>
+
+      {/* User Detail Modal */}
+      <UserDetailModal
+        open={showUserDetail}
+        onOpenChange={setShowUserDetail}
+        userId={selectedUserId || ''}
+        userEmail={selectedUserEmail}
+        userName={selectedUserName}
+        lenoryId={selectedLenoryId}
+      />
+
+      {/* Transactions Dialog */}
+      <Dialog open={showTransactions} onOpenChange={setShowTransactions}>
+        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Paystack Transactions</DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30 sticky top-0">
+                <tr>
+                  <th className="text-left p-2">Date</th>
+                  <th className="text-left p-2">Customer</th>
+                  <th className="text-right p-2">Amount (₦)</th>
+                  <th className="text-left p-2">Status</th>
+                  <th className="text-left p-2">Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map((t: any) => (
+                  <tr key={t.id} className="border-t">
+                    <td className="p-2 text-xs">{format(new Date(t.created_at), "MMM d, HH:mm")}</td>
+                    <td className="p-2">{t.customer?.email || t.metadata?.email || 'N/A'}</td>
+                    <td className="p-2 text-right">{(t.amount / 100).toLocaleString()}</td>
+                    <td className="p-2">
+                      <Badge variant={t.status === 'success' ? 'secondary' : 'destructive'}>
+                        {t.status}
+                      </Badge>
+                    </td>
+                    <td className="p-2 text-xs font-mono">{t.reference}</td>
+                  </tr>
+                ))}
+                {transactions.length === 0 && (
+                  <tr><td colSpan={5} className="text-center p-4 text-muted-foreground">No transactions found</td></tr>
+                )}
+              </tbody>
+            </table>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

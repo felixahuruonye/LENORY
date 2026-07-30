@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, ChevronLeft, Trash2, BookOpen, Eye, Volume2, Wand2, Download, X } from "lucide-react";
+import { Loader2, ChevronLeft, Trash2, BookOpen, Eye, Volume2, Wand2, Download, X , Circle } from "lucide-react";
 import { useState, useRef } from "react";
 import jsPDF from "jspdf";
 
@@ -502,3 +502,4 @@ export default function GeneratedLessons() {
     </div>
   );
 }
+

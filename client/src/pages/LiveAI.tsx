@@ -4,13 +4,14 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Send, Volume2, VolumeX, Upload, X, Mic, MicOff, Phone, PhoneOff, Settings, Shield, Sparkles } from "lucide-react";
+import { Send, Volume2, VolumeX, Upload, X, Mic, MicOff, Phone, PhoneOff, Settings, Shield, Sparkles, History , Circle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ChatInterface } from "@/components/live-ai/ChatInterface";
 import { QuickActions } from "@/components/live-ai/QuickActions";
 import { AvatarDisplay } from "@/components/live-ai/AvatarDisplay";
 import { useAuth } from "@/hooks/useAuth";
 import { useVapi } from "@/hooks/useVapi";
+import { VoiceHistoryModal } from "@/components/VoiceHistoryModal";
 
 interface Message {
   id: string;
@@ -47,6 +48,7 @@ export default function LiveAI() {
   const [fileDescription, setFileDescription] = useState("");
   const [isMuted, setIsMuted] = useState(true);
   const [isCallActive, setIsCallActive] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
   const [, setLocation] = useLocation();
   
   // Microphone permission and settings states
@@ -119,7 +121,8 @@ export default function LiveAI() {
     }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws/gemini-live?userId=${user?.id || 'anonymous'}`;
+    const currentSessionId = sessionIdRef.current || sessionId || '';
+    const wsUrl = `${protocol}//${window.location.host}/ws/gemini-live?userId=${user?.id || 'anonymous'}&sessionId=${currentSessionId}`;
     
     const ws = new WebSocket(wsUrl);
     geminiWsRef.current = ws;
@@ -1061,6 +1064,18 @@ export default function LiveAI() {
                 </Button>
               </div>
 
+              {/* ─── HISTORY BUTTON ───────────────────────────────────────────── */}
+              <Button
+                onClick={() => setShowHistory(true)}
+                variant="outline"
+                size="sm"
+                className="w-full max-w-sm gap-2"
+                data-testid="button-voice-history"
+              >
+                <History className="w-4 h-4" />
+                View Voice History
+              </Button>
+
               {/* Voice Settings Button */}
               <Button
                 onClick={() => setShowMicSettings(!showMicSettings)}
@@ -1381,6 +1396,10 @@ export default function LiveAI() {
           </div>
         </div>
       </div>
+
+      {/* ─── HISTORY MODAL ────────────────────────────────────────────── */}
+      <VoiceHistoryModal open={showHistory} onOpenChange={setShowHistory} />
     </div>
   );
 }
+

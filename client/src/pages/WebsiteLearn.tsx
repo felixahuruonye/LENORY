@@ -5,7 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, ChevronLeft, BookOpen } from "lucide-react";
+import { Loader2, ChevronLeft, BookOpen , Circle } from "lucide-react";
 
 export default function WebsiteLearn() {
   const [, setLocation] = useLocation();
@@ -186,3 +186,4 @@ export default function WebsiteLearn() {
     </div>
   );
 }
+

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
-import { ArrowLeft, Check, Zap, Crown, Coins, RefreshCcw, Star } from "lucide-react";
+import { ArrowLeft, Check, Zap, Crown, Coins, RefreshCcw, Star , Circle } from "lucide-react";
 
 const PRICING_TIERS = [
   {
@@ -339,3 +339,4 @@ export default function Pricing() {
     </div>
   );
 }
+

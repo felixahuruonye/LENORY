@@ -9,8 +9,6 @@ import { supabaseDb } from "./db";
 export const ADMIN_EMAIL = "felixahuruonye@gmail.com";
 
 // ── Real API usage tracking ──────────────────────────────────────────────────
-// Every call site that hits an external AI provider should call this. Fire-and-
-// forget by design — a logging failure must never break the actual feature.
 export function logApiUsage(provider: string, userId?: string, endpoint?: string) {
   (async () => {
     try {
@@ -30,6 +28,7 @@ export async function getApiUsageSummary() {
   try {
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: last24hData } = await supabaseDb
       .from("api_usage_events")
@@ -39,6 +38,10 @@ export async function getApiUsageSummary() {
       .from("api_usage_events")
       .select("provider")
       .gte("created_at", since7d);
+    const { data: last30dData } = await supabaseDb
+      .from("api_usage_events")
+      .select("provider")
+      .gte("created_at", since30d);
 
     const countBy = (rows: any[] | null) => {
       const counts: Record<string, number> = {};
@@ -48,11 +51,17 @@ export async function getApiUsageSummary() {
 
     const last24h = countBy(last24hData);
     const last7d = countBy(last7dData);
-    const providers = Array.from(new Set([...Object.keys(last24h), ...Object.keys(last7d)]));
+    const last30d = countBy(last30dData);
+    const providers = Array.from(new Set([...Object.keys(last24h), ...Object.keys(last7d), ...Object.keys(last30d)]));
 
     return {
       available: true,
-      byProvider: providers.map((p) => ({ provider: p, last24h: last24h[p] || 0, last7d: last7d[p] || 0 })),
+      byProvider: providers.map((p) => ({ 
+        provider: p, 
+        last24h: last24h[p] || 0, 
+        last7d: last7d[p] || 0,
+        last30d: last30d[p] || 0
+      })),
     };
   } catch (e) {
     return { available: false, reason: e instanceof Error ? e.message : String(e), byProvider: [] };
@@ -60,18 +69,18 @@ export async function getApiUsageSummary() {
 }
 
 // Real balance check — Stability AI has a genuine, documented balance endpoint.
-// Other providers (Gemini, Replicate) don't expose a simple equivalent via API
-// key alone, so we don't fabricate a number for them — we report call counts
-// instead (see getApiUsageSummary), which is honest and fully in our control.
 export async function getStabilityBalance(): Promise<{ available: boolean; credits?: number; error?: string }> {
   const key = process.env.STABILITY_API_KEY;
   if (!key) return { available: false, error: "STABILITY_API_KEY not configured" };
   try {
     const res = await fetch("https://api.stability.ai/v1/user/balance", {
       headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(3000), // never let this hang a whole chat message
+      signal: AbortSignal.timeout(3000),
     });
-    if (!res.ok) return { available: false, error: `Stability API returned ${res.status}` };
+    if (!res.ok) {
+      const text = await res.text().catch(() => `HTTP ${res.status}`);
+      return { available: false, error: `Stability API returned ${res.status}: ${text.substring(0, 100)}` };
+    }
     const data = await res.json();
     return { available: true, credits: data.credits };
   } catch (e) {
@@ -79,42 +88,292 @@ export async function getStabilityBalance(): Promise<{ available: boolean; credi
   }
 }
 
+// ─── OpenRouter Balance ──────────────────────────────────────────
+export async function getOpenRouterBalance(): Promise<{ credits: number; error?: string }> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return { credits: 0, error: 'OpenRouter API key not configured' };
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => `HTTP ${response.status}`);
+      return { credits: 0, error: `OpenRouter API error: ${text}` };
+    }
+    const data = await response.json();
+    return { credits: data.credits || 0 };
+  } catch (err: any) {
+    return { credits: 0, error: err.message };
+  }
+}
+
+// ─── Real User Activity (from Supabase) ──────────────────────────────
+export async function getUserActivity(userId: string) {
+  if (!supabaseDb) return { available: false, reason: "Supabase not connected" };
+  try {
+    const { data: sessions } = await supabaseDb
+      .from("user_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("session_start", { ascending: false });
+
+    const { data: features } = await supabaseDb
+      .from("feature_usage")
+      .select("*")
+      .eq("user_id", userId)
+      .order("count", { ascending: false });
+
+    let totalHours = 0;
+    let totalSessions = 0;
+    let lastSeen = null;
+    
+    if (sessions) {
+      totalSessions = sessions.length;
+      sessions.forEach((s: any) => {
+        if (s.duration_seconds) {
+          totalHours += s.duration_seconds / 3600;
+        }
+        if (!lastSeen || new Date(s.session_start) > new Date(lastSeen)) {
+          lastSeen = s.session_start;
+        }
+      });
+    }
+
+    return {
+      available: true,
+      totalSessions,
+      totalHours: Math.round(totalHours * 100) / 100,
+      lastSeen,
+      features: features || [],
+      sessions: sessions || [],
+    };
+  } catch (e) {
+    return { available: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ─── Real-time Active Users ────────────────────────────────────────────
+export async function getActiveUsers() {
+  if (!supabaseDb) return { count: 0, users: [] };
+  try {
+    const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data: sessions } = await supabaseDb
+      .from("user_sessions")
+      .select("user_id, session_start")
+      .gte("session_start", thirtyMinsAgo)
+      .is("session_end", null);
+
+    const activeUserIds = [...new Set(sessions?.map((s: any) => s.user_id) || [])];
+    
+    const { data: users } = await supabaseDb
+      .from("users")
+      .select("id, email, first_name, last_name, lenory_id, subscription_tier")
+      .in("id", activeUserIds);
+
+    return {
+      count: activeUserIds.length,
+      users: users || [],
+    };
+  } catch (e) {
+    return { count: 0, users: [] };
+  }
+}
+
+// ─── Provider Balance Aggregation ─────────────────────────────────────
+export async function getTotalPlatformCredits(): Promise<{
+  total: number;
+  providers: Record<string, { balance: number; unit: string }>;
+}> {
+  const result: Record<string, { balance: number; unit: string }> = {};
+  let total = 0;
+
+  const stability = await getStabilityBalance();
+  if (stability.available && stability.credits !== undefined) {
+    result["stability"] = { balance: stability.credits, unit: "credits" };
+    total += stability.credits;
+  }
+
+  const openrouter = await getOpenRouterBalance();
+  if (openrouter.credits > 0) {
+    result["openrouter"] = { balance: openrouter.credits, unit: "credits" };
+    total += openrouter.credits;
+  }
+
+  const usage = await getApiUsageSummary();
+  const geminiCalls = usage.available 
+    ? (usage.byProvider.find((p: any) => p.provider === "gemini")?.last30d || 0)
+    : 0;
+  if (geminiCalls > 0) {
+    result["gemini"] = { balance: geminiCalls, unit: "calls (30d)" };
+  }
+
+  return { total, providers: result };
+}
+
+// ─── Paystack Transaction History ─────────────────────────────────────
+export async function getPaystackTransactions(limit: number = 100) {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return { available: false, error: "Paystack not configured", transactions: [], total: 0 };
+
+  try {
+    const response = await fetch("https://api.paystack.co/transaction", {
+      headers: { Authorization: `Bearer ${secretKey}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      return { available: false, error: `Paystack API error: ${response.status}`, transactions: [], total: 0 };
+    }
+    const data = await response.json();
+    return {
+      available: true,
+      transactions: data.data?.slice(0, limit) || [],
+      total: data.meta?.total || 0,
+    };
+  } catch (e) {
+    return { available: false, error: e instanceof Error ? e.message : String(e), transactions: [], total: 0 };
+  }
+}
+
+// ─── User Credit History ──────────────────────────────────────────────
+export async function getUserCreditHistory(userId: string) {
+  if (!supabaseDb) return { available: false, history: [] };
+  try {
+    const { data } = await supabaseDb
+      .from("credit_transactions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+    return { available: true, history: data || [] };
+  } catch (e) {
+    return { available: false, history: [] };
+  }
+}
+
+// ─── Get Current User Credits ──────────────────────────────────────────
+export async function getUserCredits(userId: string) {
+  if (!supabaseDb) return { available: false, balance: 0 };
+  try {
+    const { data } = await supabaseDb
+      .from("credits")
+      .select("balance, monthly_used, last_reset_date")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return { available: true, ...data };
+  } catch (e) {
+    return { available: false, balance: 0 };
+  }
+}
+
+// ─── Platform Health ──────────────────────────────────────────────────
+export async function getPlatformHealth() {
+  const errors = getRecentErrors();
+  const errorRate = errors.length > 0 ? Math.min(errors.length / 100, 0.1) : 0;
+  const uptime = Math.round((1 - errorRate) * 100);
+  
+  let supabaseStatus = "healthy";
+  try {
+    if (supabaseDb) {
+      const { error } = await supabaseDb.from("users").select("id").limit(1);
+      if (error) supabaseStatus = "degraded";
+    } else {
+      supabaseStatus = "unavailable";
+    }
+  } catch {
+    supabaseStatus = "unavailable";
+  }
+
+  let geminiStatus = "healthy";
+  try {
+    const geminiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    if (!geminiKey) geminiStatus = "unavailable";
+  } catch {
+    geminiStatus = "unavailable";
+  }
+
+  let openrouterStatus = "healthy";
+  try {
+    const orKey = process.env.OPENROUTER_API_KEY;
+    if (!orKey) openrouterStatus = "unavailable";
+  } catch {
+    openrouterStatus = "unavailable";
+  }
+
+  return {
+    uptime,
+    errorRate: errorRate * 100,
+    supabaseStatus,
+    geminiStatus,
+    openrouterStatus,
+    recentErrors: errors.slice(0, 5),
+    status: uptime > 95 ? "healthy" : uptime > 80 ? "degraded" : "critical",
+    lastChecked: new Date().toISOString(),
+  };
+}
+
 export async function getModelUsageByTier() {
   if (!supabaseDb) return { available: false, byTier: {} };
   try {
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const since14d = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const sinceYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+
     const { data: events } = await supabaseDb
       .from("api_usage_events")
-      .select("provider, user_id")
-      .gte("created_at", since7d)
+      .select("provider, user_id, created_at")
+      .gte("created_at", sinceYear)
       .not("user_id", "is", null);
 
     const users = await storage.getUsers();
     const tierByUserId = new Map(users.map((u) => [u.id, (u as any).subscriptionTier || "free"]));
 
     const byTier: Record<string, Record<string, number>> = { free: {}, pro: {}, premium: {} };
+    const byPeriod: Record<string, Record<string, number>> = { 
+      "7d": {}, "14d": {}, "30d": {}, "year": {} 
+    };
+
     for (const e of events || []) {
       const tier = tierByUserId.get(e.user_id) || "free";
       if (!byTier[tier]) byTier[tier] = {};
       byTier[tier][e.provider] = (byTier[tier][e.provider] || 0) + 1;
+
+      const date = new Date(e.created_at);
+      if (date >= new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)) {
+        byPeriod["7d"][e.provider] = (byPeriod["7d"][e.provider] || 0) + 1;
+      }
+      if (date >= new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)) {
+        byPeriod["14d"][e.provider] = (byPeriod["14d"][e.provider] || 0) + 1;
+      }
+      if (date >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+        byPeriod["30d"][e.provider] = (byPeriod["30d"][e.provider] || 0) + 1;
+      }
+      if (date >= new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)) {
+        byPeriod["year"][e.provider] = (byPeriod["year"][e.provider] || 0) + 1;
+      }
     }
-    return { available: true, byTier, periodDays: 7 };
+
+    return { 
+      available: true, 
+      byTier, 
+      byPeriod,
+      periodDays: { "7d": 7, "14d": 14, "30d": 30, "year": 365 }
+    };
   } catch (e) {
     return { available: false, error: e instanceof Error ? e.message : String(e), byTier: {} };
   }
 }
 
 // ── Provider balance dashboard ───────────────────────────────────────────────
-// Rough cost-per-call estimates (USD). Clearly labeled as estimates in the UI —
-// we never claim these are exact charges, just budget planning numbers.
 const PROVIDER_COST_PER_CALL_USD: Record<string, number> = {
-  "gemini":             0.0001,  // Gemini Flash: ~$0.10/1M tokens, ~1k tokens/call
-  "openrouter-deepseek":0.0003,  // DeepSeek-R1 via OpenRouter: ~$0.30/1M tokens
-  "stability-image":    0.04,    // ~$0.04/image (4 credits at ~$0.01/credit)
-  "replicate-video":    0.15,    // Video gen: ~$0.15/run
-  "groq":               0.00005, // Whisper STT on Groq: ~$0.05/1M tokens
-  "assemblyai":         0.005,   // AssemblyAI: ~$0.005/min
-  "vapi":               0.05,    // VAPI: ~$0.05/min average session
+  "gemini":             0.0001,
+  "openrouter-deepseek":0.0003,
+  "openrouter":         0.002,
+  "stability-image":    0.04,
+  "replicate-video":    0.15,
+  "groq":               0.00005,
+  "assemblyai":         0.005,
+  "vapi":               0.05,
 };
 
 export interface ProviderBalanceEntry {
@@ -140,7 +399,7 @@ export interface ProviderBalancesResult {
 }
 
 let cachedProviderBalances: (ProviderBalancesResult & { expiresAt: number }) | null = null;
-const PROVIDER_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+const PROVIDER_CACHE_MS = 5 * 60 * 1000;
 
 export async function getProviderBalances(): Promise<ProviderBalancesResult> {
   if (cachedProviderBalances && cachedProviderBalances.expiresAt > Date.now()) {
@@ -173,8 +432,8 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
     } catch { /* non-fatal — usage data just shows 0 */ }
   }
 
-  // Stability is the only provider with a real balance API we can call server-side.
   const stabilityResult = await getStabilityBalance();
+  const openrouterResult = await getOpenRouterBalance();
 
   const PROVIDER_DEFS: { provider: string; displayName: string; hasRealApi: boolean; dashboardUrl: string }[] = [
     { provider: "gemini",              displayName: "Gemini (Google AI)",  hasRealApi: false, dashboardUrl: "https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas" },
@@ -182,7 +441,8 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
     { provider: "replicate-video",     displayName: "Replicate",           hasRealApi: false, dashboardUrl: "https://replicate.com/account/billing" },
     { provider: "vapi",                displayName: "VAPI (Voice AI)",     hasRealApi: false, dashboardUrl: "https://dashboard.vapi.ai/billing" },
     { provider: "groq",                displayName: "Groq (Whisper STT)",  hasRealApi: false, dashboardUrl: "https://console.groq.com/settings/billing" },
-    { provider: "openrouter-deepseek", displayName: "OpenRouter",          hasRealApi: false, dashboardUrl: "https://openrouter.ai/settings/credits" },
+    { provider: "openrouter-deepseek", displayName: "OpenRouter (DeepSeek)", hasRealApi: false, dashboardUrl: "https://openrouter.ai/settings/credits" },
+    { provider: "openrouter",          displayName: "OpenRouter (Claude/DeepSeek)", hasRealApi: true, dashboardUrl: "https://openrouter.ai/settings/credits" },
   ];
 
   const fetchedAt = new Date().toISOString();
@@ -205,14 +465,21 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
       if (stabilityResult.available) {
         balance     = stabilityResult.credits;
         balanceUnit = "credits";
-        // 1000 Stability credits ≈ $10. Thresholds: <100 = critical, <500 = warning
         status = (balance ?? 0) < 100 ? "red" : (balance ?? 0) < 500 ? "yellow" : "green";
       } else {
-        balanceError = stabilityResult.error;
+        balanceError = stabilityResult.error || "Unavailable";
+        status = "red";
+      }
+    } else if (def.provider === "openrouter") {
+      if (openrouterResult.credits > 0 || openrouterResult.error === undefined) {
+        balance = openrouterResult.credits;
+        balanceUnit = "credits";
+        status = (balance ?? 0) < 100 ? "red" : (balance ?? 0) < 500 ? "yellow" : "green";
+      } else {
+        balanceError = openrouterResult.error || "Unavailable";
         status = "red";
       }
     } else {
-      // No real balance API — status based on whether it has been called recently
       status = monthlyCallCount > 0 ? "green" : "unknown";
     }
 
@@ -237,7 +504,6 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
 }
 
 // ── API key registry ─────────────────────────────────────────────────────────
-// Add new keys here as the app grows — this is the single source of truth.
 const KEY_REGISTRY: { name: string; envVar: string; usedFor: string; critical: boolean }[] = [
   { name: "Gemini (Google AI)", envVar: "GOOGLE_API_KEY", usedFor: "Main chat brain, vision, image gen", critical: true },
   { name: "Supabase URL", envVar: "SUPABASE_URL", usedFor: "Database (backend)", critical: true },
@@ -262,13 +528,10 @@ export function getApiKeyStatus() {
     usedFor: k.usedFor,
     critical: k.critical,
     configured: !!process.env[k.envVar] && process.env[k.envVar]!.trim().length > 0,
-    // We deliberately never expose the actual key value here — only presence.
   }));
 }
 
 // ── Real-time error log (ring buffer, in-memory) ────────────────────────────
-// Not a replacement for real log aggregation, but gives Felix visibility
-// without needing a third-party logging service he'd have to pay for.
 interface LoggedError {
   timestamp: string;
   source: string;
@@ -287,7 +550,7 @@ export function getRecentErrors() {
   return recentErrors;
 }
 
-// ── Real usage overview — every number here comes from an actual query ─────
+// ── Real usage overview ──────────────────────────────────────────────────────
 export async function getAdminOverview() {
   const users = await storage.getUsers();
 
@@ -307,8 +570,20 @@ export async function getAdminOverview() {
     if (created >= oneDayAgo) signupsToday++;
   }
 
-  // Revenue estimate based on real published prices (₦5,000 Pro, ₦15,000 Premium)
   const monthlyRevenueEstimate = byTier.pro * 5000 + byTier.premium * 15000;
+
+  let realRevenue = 0;
+  try {
+    const paystack = await getPaystackTransactions(100);
+    if (paystack.available) {
+      realRevenue = paystack.transactions.reduce((sum: number, t: any) => {
+        if (t.status === 'success') {
+          return sum + (t.amount || 0) / 100;
+        }
+        return sum;
+      }, 0);
+    }
+  } catch {}
 
   return {
     totalUsers: users.length,
@@ -316,14 +591,14 @@ export async function getAdminOverview() {
     signupsThisWeek,
     usersByTier: byTier,
     estimatedMonthlyRevenueNaira: monthlyRevenueEstimate,
+    realRevenueNaira: realRevenue > 0 ? realRevenue : null,
     generatedAt: new Date().toISOString(),
   };
 }
 
 // Compact text block safe to inject directly into the admin AI's system prompt.
-// Every line here is a real fetched fact — nothing invented.
 let cachedAdminBlock: { value: string; expiresAt: number } | null = null;
-const ADMIN_BLOCK_CACHE_MS = 30_000; // 30 seconds — fresh enough for admin chat, far fewer calls
+const ADMIN_BLOCK_CACHE_MS = 30_000;
 
 export async function buildAdminContextBlock(): Promise<string> {
   if (cachedAdminBlock && cachedAdminBlock.expiresAt > Date.now()) {
@@ -336,11 +611,13 @@ export async function buildAdminContextBlock(): Promise<string> {
     const errors = getRecentErrors().slice(0, 5);
     const usage = await getApiUsageSummary();
     const stability = await getStabilityBalance();
+    const openrouter = await getOpenRouterBalance();
 
     const usageLine = usage.available
       ? usage.byProvider.map((p) => `${p.provider}: ${p.last24h}/24h, ${p.last7d}/7d`).join(" | ") || "no calls logged yet"
       : `unavailable (${usage.reason})`;
     const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
+    const openrouterLine = openrouter.error ? `unavailable (${openrouter.error})` : `${openrouter.credits} credits remaining`;
 
     const block = `
 ## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
@@ -349,11 +626,13 @@ export async function buildAdminContextBlock(): Promise<string> {
 - Signups this week: ${overview.signupsThisWeek}
 - Users by tier: Free=${overview.usersByTier.free}, Pro=${overview.usersByTier.pro}, Premium=${overview.usersByTier.premium}
 - Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}
+- Real revenue (from Paystack): ${overview.realRevenueNaira ? `₦${overview.realRevenueNaira.toLocaleString()}` : 'N/A'}
 - Missing critical API keys: ${missingCritical.length === 0 ? "none" : missingCritical.map((k) => k.name).join(", ")}
 - API call volume: ${usageLine}
 - Stability AI credit balance: ${stabilityLine}
+- OpenRouter credit balance: ${openrouterLine}
 - Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
-(Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — e.g. a named user's individual history — say you don't have that specific data rather than guessing.)`;
+(Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — say you don't have that specific data rather than guessing.)`;
 
     cachedAdminBlock = { value: block, expiresAt: Date.now() + ADMIN_BLOCK_CACHE_MS };
     return block;

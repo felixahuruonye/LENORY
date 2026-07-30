@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { X, Sparkles } from "lucide-react";
+import { X, Sparkles , Circle } from "lucide-react";
 
 interface VoiceSettingsProps {
   onClose: () => void;
@@ -143,3 +143,4 @@ export function VoiceSettings({
     </Card>
   );
 }
+

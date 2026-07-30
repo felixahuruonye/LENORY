@@ -12,7 +12,7 @@ import { Link, useLocation } from "wouter";
 import {
   Search, Sparkles, MessageSquare, Code2, Mic, ImageIcon, Brain, Zap, Clock,
   FolderOpen, Settings, LogOut, Monitor, Bell, X, History, ArrowRight,
-  BookOpen, Crown, TrendingUp, Coins, ChevronRight, FileText,
+  BookOpen, Crown, TrendingUp, Coins, ChevronRight, FileText, Rocket, LayoutTemplate,
 } from "lucide-react";
 
 function getGreeting(name: string): { greeting: string; subtitle: string } {
@@ -72,19 +72,20 @@ export default function AdvancedDashboard() {
 
   const aiTools = [
     { id: "chat", name: "LENORY Chat", icon: MessageSquare, description: "Multi-mode conversational AI", color: "from-blue-500 to-cyan-500", href: "/chat", keywords: ["chat", "ask", "ai", "tutor", "help"] },
-    { id: "website", name: "Build|Learn App", icon: Code2, description: "AI-powered code & web generation", color: "from-green-500 to-emerald-500", href: "/website-generator", keywords: ["website", "code", "generate", "build", "web", "app"] },
+    { id: "website", name: "Learn|Build App", icon: Code2, description: "AI-powered code & web generation", color: "from-green-500 to-emerald-500", href: "/website-builder", keywords: ["website", "code", "generate", "build", "web", "app", "builder"] },
     { id: "live", name: "Write My Note", icon: Mic, description: "Record, transcribe & format notes", color: "from-rose-500 to-pink-500", href: "/live-session", keywords: ["live", "session", "voice", "record", "transcribe", "note", "write"] },
     { id: "image", name: "Image Generation", icon: ImageIcon, description: "DALL-E & image tools", color: "from-orange-500 to-red-500", href: "/image-gen", keywords: ["image", "generate", "photo", "visual", "art"] },
     { id: "memory", name: "Memory Panel", icon: Brain, description: "Learning memory system", color: "from-teal-500 to-cyan-500", href: "/memory", keywords: ["memory", "learn", "remember", "notes", "history"] },
     { id: "cbt", name: "CBT Mode", icon: Monitor, description: "Exam simulation (JAMB/WAEC/NECO)", color: "from-amber-500 to-yellow-500", href: "/cbt-mode", keywords: ["exam", "test", "cbt", "jamb", "waec", "practice"] },
     { id: "workspace", name: "Project Workspace", icon: FolderOpen, description: "Organize your projects", color: "from-purple-500 to-pink-500", href: "/project-workspace", keywords: ["project", "workspace", "organize", "folder", "task"] },
+    { id: "knowledge", name: "Knowledge Base", icon: BookOpen, description: "Folder-based file storage with AI", color: "from-indigo-500 to-blue-500", href: "/knowledge-base", keywords: ["knowledge", "base", "notes", "folders", "study"] },
     { id: "settings", name: "Settings", icon: Settings, description: "Customize your experience", color: "from-indigo-500 to-blue-500", href: "/settings", keywords: ["settings", "config", "preferences", "customize"] },
   ];
 
   const quickActions = [
     { label: "Ask LENORY", icon: MessageSquare, href: "/chat", color: "bg-blue-500/10" },
     { label: "Write My Note", icon: Mic, href: "/live-session", color: "bg-rose-500/10" },
-    { label: "Build|Learn App", icon: Code2, href: "/website-generator", color: "bg-emerald-500/10" },
+    { label: "Learn|Build App", icon: Code2, href: "/website-builder", color: "bg-emerald-500/10" },
     { label: "CBT Practice", icon: Sparkles, href: "/cbt-mode", color: "bg-amber-500/10" },
   ];
 
@@ -416,7 +417,7 @@ export default function AdvancedDashboard() {
                 <Card className="p-4 text-center border-primary/20" data-testid="stat-websites">
                   <Code2 className="h-5 w-5 mx-auto mb-1 text-emerald-500" />
                   <p className="text-2xl font-bold">{dashboardStats?.websitesCount || 0}</p>
-                  <p className="text-xs text-muted-foreground">Websites</p>
+                  <p className="text-xs text-muted-foreground">Apps/Websites</p>
                 </Card>
                 <Card className="p-4 text-center border-primary/20" data-testid="stat-images">
                   <ImageIcon className="h-5 w-5 mx-auto mb-1 text-orange-500" />
@@ -444,8 +445,8 @@ export default function AdvancedDashboard() {
               if (cat.value !== 'all' && !showAllCategories) return null;
               const CatIcon = cat.icon;
               const categoryLinks: Record<string, string> = {
-                all: "/chat", chat: "/chat", memory: "/memory", notes: "/notes",
-                study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-generator",
+                all: "/chat", chat: "/chat", memory: "/memory", notes: "/knowledge-base",
+                study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-builder",
                 image: "/image-gen", project: "/project-workspace", lesson: "/chat",
               };
               return (

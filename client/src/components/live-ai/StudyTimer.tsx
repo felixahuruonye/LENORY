@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Play, Pause, RotateCcw } from "lucide-react";
+import { Play, Pause, RotateCcw , Circle } from "lucide-react";
 
 interface StudyTimerProps {
   onTick?: (seconds: number) => void;
@@ -80,3 +80,4 @@ export function StudyTimer({ onTick }: StudyTimerProps) {
     </Card>
   );
 }
+

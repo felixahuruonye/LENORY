@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Copy, Volume2 } from "lucide-react";
+import { Send, Copy, Volume2 , Circle } from "lucide-react";
 
 interface Message {
   id: string;
@@ -132,3 +132,4 @@ export function ChatInterface({
     </Card>
   );
 }
+

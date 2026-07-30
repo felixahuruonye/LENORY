@@ -42,6 +42,10 @@ import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import VoiceGallery from "@/pages/VoiceGallery";
 
+// ─── NEW IMPORTS FOR LEARN TO CODE ──────────────────────────────
+import LearnDashboard from "./pages/LearnDashboard";
+import LearnEditor from "./pages/LearnEditor";
+
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
 
@@ -117,6 +121,12 @@ function Router() {
       <Route path="/live-ai" component={LiveAI} />
       <Route path="/video-gen" component={VideoGeneration} />
       <Route path="/voice-gallery" component={VoiceGallery} />
+
+      {/* ─── NEW LEARN TO CODE ROUTES ────────────────────────────── */}
+      <Route path="/learn" component={LearnDashboard} />
+      <Route path="/learn/path/:pathId" component={LearnEditor} />
+
+      {/* Catch-all redirect */}
       <Route>
         <Redirect to="/dashboard" />
       </Route>

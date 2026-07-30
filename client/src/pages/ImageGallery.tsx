@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, Download, Trash2, Loader2, Image as ImageIcon } from "lucide-react";
+import { ArrowLeft, Download, Trash2, Loader2, Image as ImageIcon, Circle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { GeneratedImage } from "@shared/schema";
 
@@ -224,3 +224,4 @@ export default function ImageGallery() {
     </div>
   );
 }
+

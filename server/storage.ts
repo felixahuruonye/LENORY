@@ -1,3 +1,4 @@
+// server/storage.ts
 // Database integration blueprint reference: javascript_database
 // Replit Auth integration blueprint reference: javascript_log_in_with_replit
 import {
@@ -31,6 +32,34 @@ import {
 import { db, supabaseDb } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 import { nanoid } from "nanoid";
+
+// ─── NEW: INTEGRATION TYPES ───────────────────────────────────────────────
+export interface IntegrationToken {
+  id: string;
+  userId: string;
+  provider: 'google' | 'github';
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: Date;
+  scope?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SyncedFile {
+  id: string;
+  userId: string;
+  sourceType: 'google_drive' | 'google_docs' | 'github';
+  externalId: string;
+  externalParentId?: string;
+  name: string;
+  type: 'file' | 'folder';
+  mimeType?: string;
+  size?: number;
+  content?: string;
+  metadata?: Record<string, any>;
+  syncedAt: Date;
+}
 
 export interface IStorage {
   // User operations
@@ -215,6 +244,54 @@ export interface IStorage {
   updateCbtSession(id: string, updates: Partial<InsertCbtSession>): Promise<CbtSession | undefined>;
   createCbtAnswer(answer: InsertCbtAnswer): Promise<CbtAnswer>;
   getCbtAnswersBySession(sessionId: string): Promise<CbtAnswer[]>;
+
+  // ─── KNOWLEDGE BASE OPERATIONS ─────────────────────────────────────────────
+  getKBFolders(userId: string): Promise<any[]>;
+  getKBFolder(id: string): Promise<any>;
+  getKBFolderByShareCode(code: string): Promise<any>;
+  createKBFolder(folder: any): Promise<any>;
+  updateKBFolder(id: string, updates: any): Promise<any>;
+  deleteKBFolder(id: string): Promise<void>;
+  
+  getKBFiles(folderId: string): Promise<any[]>;
+  getKBFile(id: string): Promise<any>;
+  createKBFile(file: any): Promise<any>;
+  deleteKBFile(id: string): Promise<void>;
+  
+  getKBFolderCredits(folderId: string): Promise<any>;
+  deductKBCredits(folderId: string, amount: number, description: string): Promise<number>;
+  addKBCredits(folderId: string, amount: number, description: string): Promise<number>;
+  createKBCreditTransaction(tx: any): Promise<any>;
+  getKBCreditTransactions(folderId: string): Promise<any[]>;
+  
+  createKBShareLog(log: any): Promise<any>;
+  
+  getGuideProgress(userId: string, feature: string): Promise<any>;
+  updateGuideProgress(userId: string, feature: string, step: number, completed: boolean): Promise<any>;
+
+  // ─── WEBSITE BUILDER OPERATIONS ──────────────────────────────────────────
+  getAppProjects(userId: string): Promise<any[]>;
+  getAppProject(id: string): Promise<any>;
+  createAppProject(project: any): Promise<any>;
+  updateAppProject(id: string, updates: any): Promise<any>;
+  deleteAppProject(id: string): Promise<void>;
+  getFavoriteAppProjects(userId: string): Promise<any[]>;
+
+  getTemplates(category?: string): Promise<any[]>;
+  createTemplate(template: any): Promise<any>;
+
+  createDeployment(deployment: any): Promise<any>;
+  getDeployments(projectId: string): Promise<any[]>;
+
+  // ─── NEW: INTEGRATION METHODS ──────────────────────────────────────────────
+  getIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<IntegrationToken | null>;
+  saveIntegrationToken(token: IntegrationToken): Promise<IntegrationToken>;
+  deleteIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<void>;
+
+  getSyncedFiles(userId: string, sourceType?: string): Promise<SyncedFile[]>;
+  saveSyncedFile(file: SyncedFile): Promise<SyncedFile>;
+  getSyncedFileByExternalId(userId: string, externalId: string): Promise<SyncedFile | null>;
+  deleteSyncedFile(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -797,7 +874,623 @@ export class DatabaseStorage implements IStorage {
     await db.delete(generatedLessons).where(eq(generatedLessons.id, id));
   }
 
-  // Project workspace operations (in-memory cache)
+  // ─── KNOWLEDGE BASE OPERATIONS ─────────────────────────────────────────────
+  
+  async getKBFolders(userId: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBFolders error:", e);
+      }
+    }
+    return [];
+  }
+
+  async getKBFolder(id: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBFolder error:", e);
+      }
+    }
+    return null;
+  }
+
+  async getKBFolderByShareCode(code: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .select('*')
+          .eq('share_code', code)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBFolderByShareCode error:", e);
+      }
+    }
+    return null;
+  }
+
+  async createKBFolder(folder: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const folderData = {
+      id,
+      user_id: folder.user_id,
+      name: folder.name,
+      description: folder.description || null,
+      storage_used: 0,
+      storage_limit: folder.storage_limit || 104857600,
+      credits_allocated: folder.credits_allocated || 10,
+      credits_used: 0,
+      is_archived: false,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .insert(folderData)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("createKBFolder error:", error);
+      } catch (e) {
+        console.error("createKBFolder error:", e);
+      }
+    }
+    return folderData;
+  }
+
+  async updateKBFolder(id: string, updates: any): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const updateData = { ...updates, updated_at: new Date().toISOString() };
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .update(updateData)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("updateKBFolder error:", error);
+      } catch (e) {
+        console.error("updateKBFolder error:", e);
+      }
+    }
+    return null;
+  }
+
+  async deleteKBFolder(id: string): Promise<void> {
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('kb_files').delete().eq('folder_id', id);
+        await supabaseDb.from('kb_folders').delete().eq('id', id);
+      } catch (e) {
+        console.error("deleteKBFolder error:", e);
+      }
+    }
+  }
+
+  async getKBFiles(folderId: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_files')
+          .select('*')
+          .eq('folder_id', folderId)
+          .order('created_at', { ascending: false });
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBFiles error:", e);
+      }
+    }
+    return [];
+  }
+
+  async getKBFile(id: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_files')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBFile error:", e);
+      }
+    }
+    return null;
+  }
+
+  async createKBFile(file: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const fileData = {
+      id,
+      folder_id: file.folder_id,
+      name: file.name,
+      file_type: file.file_type || 'unknown',
+      source_type: file.source_type || 'upload',
+      external_id: file.external_id || null,
+      file_size: file.file_size || 0,
+      extracted_text: file.extracted_text || null,
+      full_text_url: file.full_text_url || null,
+      mime_type: file.mime_type || null,
+      processed: file.processed || false,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_files')
+          .insert(fileData)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("createKBFile error:", error);
+      } catch (e) {
+        console.error("createKBFile error:", e);
+      }
+    }
+    return fileData;
+  }
+
+  async deleteKBFile(id: string): Promise<void> {
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('kb_files').delete().eq('id', id);
+      } catch (e) {
+        console.error("deleteKBFile error:", e);
+      }
+    }
+  }
+
+  async getKBFolderCredits(folderId: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .select('credits_allocated, credits_used')
+          .eq('id', folderId)
+          .single();
+        if (!error && data) {
+          return {
+            balance: data.credits_allocated - data.credits_used,
+            allocated: data.credits_allocated,
+            used: data.credits_used,
+          };
+        }
+      } catch (e) {
+        console.error("getKBFolderCredits error:", e);
+      }
+    }
+    return { balance: 0, allocated: 0, used: 0 };
+  }
+
+  async deductKBCredits(folderId: string, amount: number, description: string): Promise<number> {
+    if (supabaseDb) {
+      try {
+        const folder = await this.getKBFolder(folderId);
+        if (!folder) return 0;
+
+        const newUsed = (folder.credits_used || 0) + amount;
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .update({ credits_used: newUsed, updated_at: new Date().toISOString() })
+          .eq('id', folderId)
+          .select()
+          .single();
+        
+        if (!error && data) {
+          await this.createKBCreditTransaction({
+            folder_id: folderId,
+            user_id: folder.user_id,
+            amount: -amount,
+            type: 'used',
+            description: description || `Deducted ${amount} credits`,
+            balance_after: data.credits_allocated - data.credits_used,
+          });
+          return data.credits_allocated - data.credits_used;
+        }
+      } catch (e) {
+        console.error("deductKBCredits error:", e);
+      }
+    }
+    return 0;
+  }
+
+  async addKBCredits(folderId: string, amount: number, description: string): Promise<number> {
+    if (supabaseDb) {
+      try {
+        const folder = await this.getKBFolder(folderId);
+        if (!folder) return 0;
+
+        const newAllocated = (folder.credits_allocated || 0) + amount;
+        const { data, error } = await supabaseDb
+          .from('kb_folders')
+          .update({ credits_allocated: newAllocated, updated_at: new Date().toISOString() })
+          .eq('id', folderId)
+          .select()
+          .single();
+        
+        if (!error && data) {
+          await this.createKBCreditTransaction({
+            folder_id: folderId,
+            user_id: folder.user_id,
+            amount: amount,
+            type: 'topup',
+            description: description || `Added ${amount} credits`,
+            balance_after: data.credits_allocated - data.credits_used,
+          });
+          return data.credits_allocated - data.credits_used;
+        }
+      } catch (e) {
+        console.error("addKBCredits error:", e);
+      }
+    }
+    return 0;
+  }
+
+  async createKBCreditTransaction(tx: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const txData = {
+      id,
+      folder_id: tx.folder_id,
+      user_id: tx.user_id,
+      amount: tx.amount,
+      type: tx.type,
+      description: tx.description || null,
+      balance_after: tx.balance_after || 0,
+      created_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_credit_transactions')
+          .insert(txData)
+          .select()
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("createKBCreditTransaction error:", e);
+      }
+    }
+    return txData;
+  }
+
+  async getKBCreditTransactions(folderId: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_credit_transactions')
+          .select('*')
+          .eq('folder_id', folderId)
+          .order('created_at', { ascending: false });
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getKBCreditTransactions error:", e);
+      }
+    }
+    return [];
+  }
+
+  async createKBShareLog(log: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const logData = {
+      id,
+      folder_id: log.folder_id,
+      shared_by: log.shared_by,
+      shared_to: log.shared_to || null,
+      share_method: log.share_method || 'link',
+      created_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('kb_share_logs')
+          .insert(logData)
+          .select()
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("createKBShareLog error:", e);
+      }
+    }
+    return logData;
+  }
+
+  async getGuideProgress(userId: string, feature: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('guide_progress')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('feature', feature)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        if ((e as any)?.code !== 'PGRST116') {
+          console.error("getGuideProgress error:", e);
+        }
+      }
+    }
+    return null;
+  }
+
+  async updateGuideProgress(userId: string, feature: string, step: number, completed: boolean): Promise<any> {
+    const now = new Date().toISOString();
+    
+    if (supabaseDb) {
+      try {
+        const existing = await this.getGuideProgress(userId, feature);
+        
+        if (existing) {
+          const { data, error } = await supabaseDb
+            .from('guide_progress')
+            .update({
+              current_step: step,
+              completed: completed,
+              last_seen: now,
+            })
+            .eq('id', existing.id)
+            .select()
+            .single();
+          if (!error && data) return data;
+        } else {
+          const id = nanoid();
+          const { data, error } = await supabaseDb
+            .from('guide_progress')
+            .insert({
+              id,
+              user_id: userId,
+              feature: feature,
+              current_step: step,
+              completed: completed,
+              last_seen: now,
+              created_at: now,
+            })
+            .select()
+            .single();
+          if (!error && data) return data;
+        }
+      } catch (e) {
+        console.error("updateGuideProgress error:", e);
+      }
+    }
+    return null;
+  }
+
+  // ─── WEBSITE BUILDER OPERATIONS ──────────────────────────────────────────
+
+  async getAppProjects(userId: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('app_projects')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (!error && data) {
+          return data.map((p: any) => ({ ...p, is_favorite: false }));
+        }
+      } catch (e) {
+        console.error("getAppProjects error:", e);
+      }
+    }
+    return [];
+  }
+
+  async getAppProject(id: string): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('app_projects')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getAppProject error:", e);
+      }
+    }
+    return null;
+  }
+
+  async createAppProject(project: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const row = {
+      id,
+      user_id: project.user_id,
+      title: project.title || "Untitled",
+      description: project.description || null,
+      html_code: project.html_code || '',
+      css_code: project.css_code || '',
+      js_code: project.js_code || '',
+      framework: project.framework || 'html-css-js',
+      is_template: project.is_template || false,
+      is_published: project.is_published || false,
+      view_count: 0,
+      favorite_count: 0,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('app_projects')
+          .insert(row)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("createAppProject error:", error);
+      } catch (e) {
+        console.error("createAppProject error:", e);
+      }
+    }
+    return row;
+  }
+
+  async updateAppProject(id: string, updates: any): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const updateData = { ...updates, updated_at: new Date().toISOString() };
+        const { data, error } = await supabaseDb
+          .from('app_projects')
+          .update(updateData)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("updateAppProject error:", error);
+      } catch (e) {
+        console.error("updateAppProject error:", e);
+      }
+    }
+    return null;
+  }
+
+  async deleteAppProject(id: string): Promise<void> {
+    if (supabaseDb) {
+      try {
+        await supabaseDb.from('app_projects').delete().eq('id', id);
+      } catch (e) {
+        console.error("deleteAppProject error:", e);
+      }
+    }
+  }
+
+  async getFavoriteAppProjects(userId: string): Promise<any[]> {
+    return [];
+  }
+
+  async getTemplates(category?: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        let query = supabaseDb
+          .from('templates')
+          .select('*, users!creator_id(first_name, last_name, email)')
+          .eq('is_public', true);
+        if (category && category !== 'all') {
+          query = query.eq('category', category);
+        }
+        const { data, error } = await query.order('uses_count', { ascending: false });
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getTemplates error:", e);
+      }
+    }
+    return [];
+  }
+
+  async createTemplate(template: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const row = {
+      id,
+      creator_id: template.creator_id,
+      title: template.title,
+      description: template.description || null,
+      category: template.category || 'general',
+      html_code: template.html_code || '',
+      css_code: template.css_code || '',
+      js_code: template.js_code || '',
+      preview_image_url: template.preview_image_url || null,
+      is_public: template.is_public || false,
+      uses_count: 0,
+      earned_credits: 0,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('templates')
+          .insert(row)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("createTemplate error:", error);
+      } catch (e) {
+        console.error("createTemplate error:", e);
+      }
+    }
+    return row;
+  }
+
+  async createDeployment(deployment: any): Promise<any> {
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const row = {
+      id,
+      project_id: deployment.project_id,
+      platform: deployment.platform || 'vercel',
+      url: deployment.url || null,
+      status: deployment.status || 'pending',
+      error_message: deployment.error_message || null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('deployments')
+          .insert(row)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("createDeployment error:", error);
+      } catch (e) {
+        console.error("createDeployment error:", e);
+      }
+    }
+    return row;
+  }
+
+  async getDeployments(projectId: string): Promise<any[]> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb
+          .from('deployments')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+        if (!error && data) return data;
+      } catch (e) {
+        console.error("getDeployments error:", e);
+      }
+    }
+    return [];
+  }
+
+  // ─── Project workspace operations (in-memory cache) ────────────────────────
   private projectCache = new Map<string, any>();
   private projectFileCache = new Map<string, any>();
   private projectTaskCache = new Map<string, any>();
@@ -867,19 +1560,64 @@ export class DatabaseStorage implements IStorage {
   async deleteTask(id: string): Promise<void> {
     this.projectTaskCache.delete(id);
   }
+
+  // ─── NEW: INTEGRATION METHOD IMPLEMENTATIONS ──────────────────────────────
+  // These are the default (in-memory) implementations, used as a fallback.
+  // They are overridden in SupabaseStorage for persistent storage.
+
+  private integrationTokens: IntegrationToken[] = [];
+  private syncedFiles: SyncedFile[] = [];
+
+  async getIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<IntegrationToken | null> {
+    const token = this.integrationTokens.find(
+      t => t.userId === userId && t.provider === provider
+    );
+    return token || null;
+  }
+
+  async saveIntegrationToken(token: IntegrationToken): Promise<IntegrationToken> {
+    this.integrationTokens = this.integrationTokens.filter(
+      t => !(t.userId === token.userId && t.provider === token.provider)
+    );
+    this.integrationTokens.push(token);
+    return token;
+  }
+
+  async deleteIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<void> {
+    this.integrationTokens = this.integrationTokens.filter(
+      t => !(t.userId === userId && t.provider === provider)
+    );
+  }
+
+  async getSyncedFiles(userId: string, sourceType?: string): Promise<SyncedFile[]> {
+    let files = this.syncedFiles.filter(f => f.userId === userId);
+    if (sourceType) {
+      files = files.filter(f => f.sourceType === sourceType);
+    }
+    return files;
+  }
+
+  async saveSyncedFile(file: SyncedFile): Promise<SyncedFile> {
+    this.syncedFiles = this.syncedFiles.filter(
+      f => !(f.userId === file.userId && f.externalId === file.externalId && f.sourceType === file.sourceType)
+    );
+    this.syncedFiles.push(file);
+    return file;
+  }
+
+  async getSyncedFileByExternalId(userId: string, externalId: string): Promise<SyncedFile | null> {
+    const file = this.syncedFiles.find(
+      f => f.userId === userId && f.externalId === externalId
+    );
+    return file || null;
+  }
+
+  async deleteSyncedFile(id: string): Promise<void> {
+    this.syncedFiles = this.syncedFiles.filter(f => f.id !== id);
+  }
 }
 
 // ─── Supabase-backed Storage ──────────────────────────────────────────────────
-// CRITICAL FIX: createChatSession, createChatMessage, createFileUpload,
-// createMemoryEntry, createGeneratedLesson, upsertUser, and updateUser
-// used to call super.xxx() first, which routes through the FAKE stub `db`
-// object in db.ts (every method on it just returns []). That made
-// `[newSession] = await db.insert(...).returning()` always come back
-// undefined, which crashed the moment the code tried to read `.id` off it.
-//
-// Fix: generate the ID ourselves and write directly to the REAL Supabase
-// client (`supabaseDb`), which is the one thing in this file that actually
-// works. No more routing through the fake db at all for these paths.
 class SupabaseStorage extends DatabaseStorage {
   // ── Users ───────────────────────────────────────────────────────────────────
   async getUsers(): Promise<User[]> {
@@ -923,7 +1661,6 @@ class SupabaseStorage extends DatabaseStorage {
         console.error("🔥 upsertUser Supabase error:", e);
       }
     }
-    // Fallback so the caller never gets undefined, even if Supabase failed
     return {
       id: userData.id,
       email: userData.email || '',
@@ -1325,12 +2062,6 @@ class SupabaseStorage extends DatabaseStorage {
   }
 
   // ── Exam Results & User Progress ────────────────────────────────────────────
-  // These previously had NO override at all, so they fell through to the base
-  // DatabaseStorage methods, which call the FAKE db stub's `.orderBy()` —
-  // a method that stub doesn't even have. That was your other crash:
-  // "db.select(...).from(...).where(...).orderBy is not a function".
-  // NOTE: this assumes Supabase tables named `exam_results` / `user_progress`
-  // with a `user_id` column — adjust the table/column names below if yours differ.
   async getExamResultsByUser(userId: string): Promise<ExamResult[]> {
     if (supabaseDb) {
       try {
@@ -1359,8 +2090,199 @@ class SupabaseStorage extends DatabaseStorage {
     }
     return [];
   }
+
+  // ─── KNOWLEDGE BASE OVERRIDES (Supabase-first) ─────────────────────────────
+  // All KB methods already use supabaseDb directly in DatabaseStorage,
+  // so they don't need to be overridden here unless we want to change behavior.
+
+  // ─── NEW: SUPABASE INTEGRATION METHOD IMPLEMENTATIONS ──────────────────────
+  // These override the in-memory methods from DatabaseStorage.
+
+  async getIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<IntegrationToken | null> {
+    if (!supabaseDb) return null;
+    try {
+      const { data, error } = await supabaseDb
+        .from('integration_tokens')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('provider', provider)
+        .maybeSingle();
+      if (error) {
+        console.error("getIntegrationToken error:", error);
+        return null;
+      }
+      if (!data) return null;
+      return {
+        id: data.id,
+        userId: data.user_id,
+        provider: data.provider,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token || undefined,
+        expiresAt: data.expires_at ? new Date(data.expires_at) : undefined,
+        scope: data.scope || undefined,
+        createdAt: new Date(data.created_at),
+        updatedAt: new Date(data.updated_at),
+      };
+    } catch (e) {
+      console.error("getIntegrationToken error:", e);
+      return null;
+    }
+  }
+
+  async saveIntegrationToken(token: IntegrationToken): Promise<IntegrationToken> {
+    if (!supabaseDb) return token;
+    try {
+      const row = {
+        id: token.id,
+        user_id: token.userId,
+        provider: token.provider,
+        access_token: token.accessToken,
+        refresh_token: token.refreshToken || null,
+        expires_at: token.expiresAt ? token.expiresAt.toISOString() : null,
+        scope: token.scope || null,
+        created_at: token.createdAt.toISOString(),
+        updated_at: token.updatedAt.toISOString(),
+      };
+      const { error } = await supabaseDb.from('integration_tokens').upsert(row, { onConflict: 'id' });
+      if (error) {
+        console.error("saveIntegrationToken error:", error);
+        return token;
+      }
+      return token;
+    } catch (e) {
+      console.error("saveIntegrationToken error:", e);
+      return token;
+    }
+  }
+
+  async deleteIntegrationToken(userId: string, provider: 'google' | 'github'): Promise<void> {
+    if (!supabaseDb) return;
+    try {
+      const { error } = await supabaseDb
+        .from('integration_tokens')
+        .delete()
+        .eq('user_id', userId)
+        .eq('provider', provider);
+      if (error) console.error("deleteIntegrationToken error:", error);
+    } catch (e) {
+      console.error("deleteIntegrationToken error:", e);
+    }
+  }
+
+  async getSyncedFiles(userId: string, sourceType?: string): Promise<SyncedFile[]> {
+    if (!supabaseDb) return [];
+    try {
+      let query = supabaseDb
+        .from('synced_files')
+        .select('*')
+        .eq('user_id', userId);
+      if (sourceType) {
+        query = query.eq('source_type', sourceType);
+      }
+      const { data, error } = await query.order('synced_at', { ascending: false });
+      if (error) {
+        console.error("getSyncedFiles error:", error);
+        return [];
+      }
+      if (!data) return [];
+      return data.map((f: any) => ({
+        id: f.id,
+        userId: f.user_id,
+        sourceType: f.source_type,
+        externalId: f.external_id,
+        externalParentId: f.external_parent_id || undefined,
+        name: f.name,
+        type: f.type,
+        mimeType: f.mime_type || undefined,
+        size: f.size || undefined,
+        content: f.content || undefined,
+        metadata: f.metadata || undefined,
+        syncedAt: new Date(f.synced_at),
+      }));
+    } catch (e) {
+      console.error("getSyncedFiles error:", e);
+      return [];
+    }
+  }
+
+  async saveSyncedFile(file: SyncedFile): Promise<SyncedFile> {
+    if (!supabaseDb) return file;
+    try {
+      const row = {
+        id: file.id,
+        user_id: file.userId,
+        source_type: file.sourceType,
+        external_id: file.externalId,
+        external_parent_id: file.externalParentId || null,
+        name: file.name,
+        type: file.type,
+        mime_type: file.mimeType || null,
+        size: file.size || null,
+        content: file.content || null,
+        metadata: file.metadata || null,
+        synced_at: file.syncedAt.toISOString(),
+      };
+      const { error } = await supabaseDb.from('synced_files').upsert(row, { onConflict: 'id' });
+      if (error) {
+        console.error("saveSyncedFile error:", error);
+        return file;
+      }
+      return file;
+    } catch (e) {
+      console.error("saveSyncedFile error:", e);
+      return file;
+    }
+  }
+
+  async getSyncedFileByExternalId(userId: string, externalId: string): Promise<SyncedFile | null> {
+    if (!supabaseDb) return null;
+    try {
+      const { data, error } = await supabaseDb
+        .from('synced_files')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('external_id', externalId)
+        .maybeSingle();
+      if (error) {
+        console.error("getSyncedFileByExternalId error:", error);
+        return null;
+      }
+      if (!data) return null;
+      return {
+        id: data.id,
+        userId: data.user_id,
+        sourceType: data.source_type,
+        externalId: data.external_id,
+        externalParentId: data.external_parent_id || undefined,
+        name: data.name,
+        type: data.type,
+        mimeType: data.mime_type || undefined,
+        size: data.size || undefined,
+        content: data.content || undefined,
+        metadata: data.metadata || undefined,
+        syncedAt: new Date(data.synced_at),
+      };
+    } catch (e) {
+      console.error("getSyncedFileByExternalId error:", e);
+      return null;
+    }
+  }
+
+  async deleteSyncedFile(id: string): Promise<void> {
+    if (!supabaseDb) return;
+    try {
+      const { error } = await supabaseDb
+        .from('synced_files')
+        .delete()
+        .eq('id', id);
+      if (error) console.error("deleteSyncedFile error:", error);
+    } catch (e) {
+      console.error("deleteSyncedFile error:", e);
+    }
+  }
 }
 
+// ─── Helper functions ──────────────────────────────────────────────────────────
 function mapDocumentUploadRow(data: any): FileUpload {
   return {
     id: data.id,

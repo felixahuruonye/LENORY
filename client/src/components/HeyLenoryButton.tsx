@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, MicOff, X } from "lucide-react";
+import { Mic, MicOff, X , Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -274,3 +274,4 @@ export default function HeyLenoryButton({ onTranscript, className }: HeyLenoryBu
     </div>
   );
 }
+

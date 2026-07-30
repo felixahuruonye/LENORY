@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, ChevronLeft, Zap, Send, Copy } from "lucide-react";
+import { Loader2, ChevronLeft, Zap, Send, Copy , Circle } from "lucide-react";
 
 interface DebugMessage {
   type: "user" | "status";
@@ -305,3 +305,4 @@ export default function WebsiteDebug() {
     </div>
   );
 }
+

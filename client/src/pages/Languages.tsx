@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Search, Globe, Star } from "lucide-react";
+import { ArrowLeft, Search, Globe, Star , Circle } from "lucide-react";
 
 // Languages supported by LENORY's voice transcription engine.
 // Nigerian-relevant languages are flagged and shown first — everything else
@@ -103,3 +103,4 @@ export default function Languages() {
     </div>
   );
 }
+
