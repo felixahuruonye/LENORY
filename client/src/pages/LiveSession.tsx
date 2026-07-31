@@ -293,13 +293,9 @@ export default function LiveSession() {
     setIsSavingToNotes(true);
     try {
       const title = sessionTitle || `Live Session — ${new Date().toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}`;
-      const res = await apiRequest("POST", "/api/notes/from-text", { fileName: title, text: textToSave });
+      const res = await apiRequest("POST", "/api/kb/save-transcript", { title, content: textToSave });
       const data = await res.json();
-      if (data?.creditsCharged > 0) {
-        toast({ title: "Saved to Knowledge Base", description: "20 credits used (past your 10 free note uploads)." });
-      } else {
-        toast({ title: "Saved to Knowledge Base", description: "You can now quiz yourself on this in Notes." });
-      }
+      toast({ title: "Saved to Knowledge Base", description: `Added to "${data.folder?.name || "Live Session Notes"}" — you can now chat or quiz yourself on it in Notes.` });
     } catch (err: any) {
       toast({ title: "Couldn't save note", description: err?.message || "Please try again.", variant: "destructive" });
     } finally {

@@ -392,12 +392,25 @@ export default function KnowledgeBaseHome() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "AI Response", description: data.response?.substring(0, 100) + "..." });
+      setChatMessages((prev) => [...prev, { role: "assistant", content: data.response || "I couldn't find an answer in this folder's files." }]);
     },
     onError: (err: any) => {
-      toast({ title: "Chat failed", description: err.message, variant: "destructive" });
+      setChatMessages((prev) => [...prev, { role: "assistant", content: `Sorry, something went wrong: ${err.message}` }]);
     },
   });
+
+  const handleSendChat = () => {
+    if (!chatInput.trim() || !selectedFolder) return;
+    const message = chatInput.trim();
+    setChatMessages((prev) => [...prev, { role: "user", content: message }]);
+    setChatInput("");
+    chatPracticeMutation.mutate({ folderId: selectedFolder.id, message });
+  };
+
+  const openFolderChat = () => {
+    setChatMessages([]);
+    setChatOpen(true);
+  };
 
   // Generate quiz
   const generateQuizMutation = useMutation({
@@ -540,6 +553,9 @@ export default function KnowledgeBaseHome() {
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [viewingFile, setViewingFile] = useState<KBFile | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [chatInput, setChatInput] = useState("");
   const [batchUploading, setBatchUploading] = useState(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -860,12 +876,15 @@ export default function KnowledgeBaseHome() {
         {/* Selected Folder - Files View */}
         {selectedFolder && (
           <div className="mt-8">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
+            <div className="relative mb-4">
+              <div className="sticky top-0 z-10 flex items-center gap-3 mb-3 bg-background/95 backdrop-blur-sm py-1">
                 <h2 className="text-xl font-semibold">{selectedFolder.name}</h2>
                 <Badge variant="secondary">{files.length} files</Badge>
               </div>
-              <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-2 overflow-x-auto snap-x snap-mandatory scrollbar-hide pb-1"
+                style={{ maskImage: "linear-gradient(to right, transparent 0, black 24px, black 100%)", WebkitMaskImage: "linear-gradient(to right, transparent 0, black 24px, black 100%)" }}
+              >
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -879,7 +898,7 @@ export default function KnowledgeBaseHome() {
                   size="sm"
                   variant="outline"
                   onClick={() => fileInputRef.current?.click()}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                   data-testid="button-upload-file"
                   disabled={batchUploading}
                 >
@@ -893,7 +912,7 @@ export default function KnowledgeBaseHome() {
                     setShowFileUpload(true);
                     setUploadSource("url");
                   }}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                 >
                   <Link2 className="h-4 w-4" />
                   Add URL
@@ -905,7 +924,7 @@ export default function KnowledgeBaseHome() {
                     setShowFileUpload(true);
                     setUploadSource("text");
                   }}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                 >
                   <FileText className="h-4 w-4" />
                   Create Note
@@ -914,7 +933,7 @@ export default function KnowledgeBaseHome() {
                   size="sm"
                   variant="outline"
                   onClick={() => setActiveIntegration("google-drive")}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                   data-testid="button-import-google-drive"
                 >
                   <Cloud className="h-4 w-4" />
@@ -924,7 +943,7 @@ export default function KnowledgeBaseHome() {
                   size="sm"
                   variant="outline"
                   onClick={() => setActiveIntegration("google-docs")}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                   data-testid="button-import-google-docs"
                 >
                   <FileText className="h-4 w-4" />
@@ -940,7 +959,7 @@ export default function KnowledgeBaseHome() {
                     }
                     setActiveIntegration("github");
                   }}
-                  className="gap-2 hover-elevate"
+                  className="gap-2 hover-elevate snap-start flex-shrink-0"
                   data-testid="button-import-github"
                 >
                   <GitBranch className="h-4 w-4" />
@@ -1017,16 +1036,12 @@ export default function KnowledgeBaseHome() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    const msg = prompt("Ask LENORY about the files in this folder:");
-                    if (msg) chatPracticeMutation.mutate({ folderId: selectedFolder.id, message: msg });
-                  }}
-                  disabled={chatPracticeMutation.isPending}
+                  onClick={openFolderChat}
                   className="gap-2 hover-elevate"
                   data-testid="button-chat-practice"
                 >
                   <MessageCircle className="h-4 w-4" />
-                  Chat Practice
+                  Ask Lenory
                 </Button>
                 <Button
                   variant="outline"
@@ -1471,6 +1486,82 @@ export default function KnowledgeBaseHome() {
             </Button>
             <Button onClick={handleGuideNext} className="flex-1 hover-elevate">
               {guideStep === GUIDE_STEPS.length - 1 ? "Get Started" : "Next"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ask Lenory — per-folder chat */}
+      <Dialog open={chatOpen} onOpenChange={setChatOpen}>
+        <DialogContent className="max-w-lg h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="p-4 border-b">
+            <DialogTitle className="flex items-center gap-2">
+              <MessageCircle className="h-5 w-5 text-primary" />
+              Ask Lenory — {selectedFolder?.name}
+            </DialogTitle>
+            <DialogDescription>Answers only from the files in this folder.</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex gap-2 p-3 border-b overflow-x-auto flex-shrink-0">
+            <Button
+              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
+              disabled={generateQuizMutation.isPending}
+              onClick={() => selectedFolder && generateQuizMutation.mutate({ folderId: selectedFolder.id, questionCount: 5 })}
+            >
+              {generateQuizMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Quiz me
+            </Button>
+            <Button
+              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
+              disabled={generateFlashcardsMutation.isPending}
+              onClick={() => selectedFolder && generateFlashcardsMutation.mutate({ folderId: selectedFolder.id, count: 10 })}
+            >
+              {generateFlashcardsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
+              Flashcards
+            </Button>
+            <Button
+              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
+              disabled={generateSummaryMutation.isPending}
+              onClick={() => selectedFolder && generateSummaryMutation.mutate(selectedFolder.id)}
+            >
+              {generateSummaryMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+              Summary
+            </Button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {chatMessages.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center mt-8">
+                Ask a question about the files in this folder, or use a quick action above.
+              </p>
+            )}
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {chatPracticeMutation.isPending && (
+              <div className="flex justify-start">
+                <div className="bg-muted rounded-2xl px-4 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="p-3 border-t flex gap-2 flex-shrink-0">
+            <input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }}
+              placeholder="Ask a question about this folder..."
+              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              data-testid="input-folder-chat"
+            />
+            <Button size="icon" onClick={handleSendChat} disabled={chatPracticeMutation.isPending || !chatInput.trim()} data-testid="button-send-chat">
+              <MessageCircle className="h-4 w-4" />
             </Button>
           </div>
         </DialogContent>

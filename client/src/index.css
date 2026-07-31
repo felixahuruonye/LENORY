@@ -573,4 +573,12 @@ html, body {
   .dark .depth-3 {
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
   }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }
