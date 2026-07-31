@@ -145,10 +145,11 @@ export default function KnowledgeBaseHome() {
   const [topupAmount, setTopupAmount] = useState(10);
   const [isTopupLoading, setIsTopupLoading] = useState(false);
   const { user } = useAuth();
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const userTier = (user as any)?.subscriptionTier || 'free';
-  const isPremium = userTier === 'pro' || userTier === 'premium';
+  const isPremium = isAdmin || userTier === 'pro' || userTier === 'premium';
   const UPLOAD_BATCH_LIMITS: Record<string, number> = { free: 1, pro: 5, premium: 15 };
-  const uploadBatchLimit = UPLOAD_BATCH_LIMITS[userTier] ?? 1;
+  const uploadBatchLimit = isAdmin ? 15 : (UPLOAD_BATCH_LIMITS[userTier] ?? 1);
   const [activeIntegration, setActiveIntegration] = useState<"google-drive" | "google-docs" | "github" | null>(null);
 
   // ─── QUERIES ────────────────────────────────────────────────────────────────
@@ -371,7 +372,8 @@ export default function KnowledgeBaseHome() {
   // Delete file
   const deleteFileMutation = useMutation({
     mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/kb/files/${id}`);
+      if (!selectedFolder) throw new Error("No folder selected");
+      await apiRequest("DELETE", `/api/kb/folders/${selectedFolder.id}/files/${id}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });

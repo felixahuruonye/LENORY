@@ -890,7 +890,25 @@ export class DatabaseStorage implements IStorage {
           .select('*')
           .eq('user_id', userId)
           .order('created_at', { ascending: false });
-        if (!error && data) return data;
+        if (!error && data) {
+          // Compute real storage usage + file counts from the actual files table,
+          // instead of trusting a stored counter that never got updated.
+          const { data: allFiles } = await supabaseDb
+            .from('kb_files')
+            .select('folder_id, file_size')
+            .in('folder_id', data.map((f: any) => f.id));
+          const usageByFolder: Record<string, { size: number; count: number }> = {};
+          (allFiles || []).forEach((f: any) => {
+            if (!usageByFolder[f.folder_id]) usageByFolder[f.folder_id] = { size: 0, count: 0 };
+            usageByFolder[f.folder_id].size += f.file_size || 0;
+            usageByFolder[f.folder_id].count += 1;
+          });
+          return data.map((folder: any) => ({
+            ...folder,
+            storage_used: usageByFolder[folder.id]?.size || 0,
+            file_count: usageByFolder[folder.id]?.count || 0,
+          }));
+        }
       } catch (e) {
         console.error("getKBFolders error:", e);
       }

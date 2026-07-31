@@ -13,20 +13,23 @@ import {
 import type { User } from "@shared/schema";
 
 // Build a User object directly from Supabase Auth session data (no DB call needed)
+const ADMIN_EMAIL = "felixahuruonye@gmail.com";
 function userFromAuth(authUser: any): User {
   const meta = authUser.user_metadata || {};
   const fullName = meta.full_name || meta.name || '';
   const nameParts = fullName.split(' ');
   const now = new Date();
+  const email = authUser.email || '';
   return {
     id: authUser.id,
-    email: authUser.email || '',
+    email,
     firstName: nameParts[0] || meta.firstName || '',
     lastName: nameParts.slice(1).join(' ') || meta.lastName || '',
     profileImageUrl: meta.avatar_url || meta.picture || '',
     role: 'student',
     schoolId: null,
-    subscriptionTier: meta.subscription_tier || 'free',
+    // Admin account always sees the Premium experience for testing all tiered features
+    subscriptionTier: email === ADMIN_EMAIL ? 'premium' : (meta.subscription_tier || 'free'),
     subscriptionExpiresAt: null,
     paystackCustomerId: null,
     lenoryId: meta.lenory_id || null,
