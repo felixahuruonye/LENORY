@@ -14,13 +14,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
+import { GoogleDriveBrowser } from "@/components/integrations/GoogleDriveBrowser";
+import { GoogleDocsBrowser } from "@/components/integrations/GoogleDocsBrowser";
+import { GitHubRepoBrowser } from "@/components/integrations/GitHubRepoBrowser";
 import {
   BookOpen, Upload, Trash2, Loader2, FileText, Brain,
   MessageCircle, Layers, ChevronLeft, ChevronRight, RotateCw, CheckCircle2, XCircle,
   FolderOpen, Plus, MoreVertical, Share2, Link2, QrCode, Copy, Eye,
   Database, Zap, Sparkles, GraduationCap, Clock, Users, Globe,
-  Lock, Unlock, ChevronDown, File, Image, FileCode, FileJson, FileText,
+  Lock, Unlock, ChevronDown, File, Image, FileCode, FileJson,
   Music, Video, Archive, Download, ExternalLink, Settings, Coins,
+  Cloud, GitBranch,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -139,6 +144,12 @@ export default function KnowledgeBaseHome() {
   const [creditTransactions, setCreditTransactions] = useState<any[]>([]);
   const [topupAmount, setTopupAmount] = useState(10);
   const [isTopupLoading, setIsTopupLoading] = useState(false);
+  const { user } = useAuth();
+  const userTier = (user as any)?.subscriptionTier || 'free';
+  const isPremium = userTier === 'pro' || userTier === 'premium';
+  const UPLOAD_BATCH_LIMITS: Record<string, number> = { free: 1, pro: 5, premium: 15 };
+  const uploadBatchLimit = UPLOAD_BATCH_LIMITS[userTier] ?? 1;
+  const [activeIntegration, setActiveIntegration] = useState<"google-drive" | "google-docs" | "github" | null>(null);
 
   // ─── QUERIES ────────────────────────────────────────────────────────────────
 
@@ -158,7 +169,7 @@ export default function KnowledgeBaseHome() {
       if (!selectedFolder) return [];
       const res = await apiRequest("GET", `/api/kb/folders/${selectedFolder.id}`);
       const data = await res.json();
-      return data.files || [];
+      return Array.isArray(data) ? data : (data.files || []);
     },
     enabled: !!selectedFolder,
   });
@@ -214,8 +225,9 @@ export default function KnowledgeBaseHome() {
       return res.json();
     },
     onSuccess: (data) => {
-      setShareLink(data.shareUrl);
-      setShareCode(data.shareCode);
+      const code = data.shareToken || data.shareCode;
+      setShareLink(`${window.location.origin}/shared/${code}`);
+      setShareCode(code);
       toast({ title: "Share link generated!", description: "Copy the link to share with others." });
     },
     onError: (err: any) => {
@@ -241,22 +253,81 @@ export default function KnowledgeBaseHome() {
 
   // Upload file to folder
   const uploadFileMutation = useMutation({
-    mutationFn: async ({ folderId, file, description }: { folderId: string; file: File; description?: string }) => {
+    mutationFn: async ({ folderId, file, description, silent }: { folderId: string; file: File; description?: string; silent?: boolean }) => {
       const formData = new FormData();
       formData.append("file", file);
       if (description) formData.append("description", description);
       const res = await apiRequest("POST", `/api/kb/folders/${folderId}/files`, formData);
+      return { data: await res.json(), silent };
+    },
+    onSuccess: ({ silent }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      setShowFileUpload(false);
+      setUploadingFile(null);
+      if (!silent) toast({ title: "File uploaded!", description: "Your file has been added to the folder." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to upload file", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Import a file from Google Drive
+  const importDriveFileMutation = useMutation({
+    mutationFn: async (file: { id: string; name: string; mimeType: string }) => {
+      const res = await apiRequest("POST", "/api/integrations/google-drive/import", {
+        fileId: file.id,
+        fileName: file.name,
+        mimeType: file.mimeType,
+        kbFolderId: selectedFolder?.id,
+      });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
-      setShowFileUpload(false);
-      setUploadingFile(null);
-      toast({ title: "File uploaded!", description: "Your file has been added to the folder." });
+      toast({ title: "Imported from Google Drive!", description: "The file has been added to your folder." });
     },
     onError: (err: any) => {
-      toast({ title: "Failed to upload file", description: err.message, variant: "destructive" });
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Import a Google Doc (extracts text + saves as a KB file)
+  const importGoogleDocMutation = useMutation({
+    mutationFn: async (file: { id: string }) => {
+      const res = await apiRequest("POST", "/api/integrations/google-docs/extract", {
+        fileId: file.id,
+        kbFolderId: selectedFolder?.id,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({ title: "Imported from Google Docs!", description: "The document has been added to your folder." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Import a file from a GitHub repo
+  const importGitHubFileMutation = useMutation({
+    mutationFn: async ({ repoName, branch, path }: { repoName: string; branch: string; path: string }) => {
+      const res = await apiRequest("POST", "/api/integrations/github/import", {
+        repoName, branch, path,
+        kbFolderId: selectedFolder?.id,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({ title: "Imported from GitHub!", description: "The file has been added to your folder." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -458,13 +529,52 @@ export default function KnowledgeBaseHome() {
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
   };
 
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [batchUploading, setBatchUploading] = useState(false);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingFile(file);
-    setShowFileUpload(true);
-    setUploadSource("computer");
+    const selected = Array.from(e.target.files || []);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (selected.length === 0) return;
+
+    if (selected.length > uploadBatchLimit) {
+      toast({
+        title: "Upload limit reached",
+        description: `Your plan allows ${uploadBatchLimit} file${uploadBatchLimit === 1 ? "" : "s"} at a time. Selected ${selected.length}. Upgrade to upload more at once.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selected.length === 1) {
+      setUploadingFile(selected[0]);
+      setShowFileUpload(true);
+      setUploadSource("computer");
+      return;
+    }
+
+    // Multiple files: upload each directly, no need for the single-file preview dialog
+    setPendingFiles(selected);
+    uploadBatch(selected);
+  };
+
+  const uploadBatch = async (uploadFiles: File[]) => {
+    if (!selectedFolder) return;
+    setBatchUploading(true);
+    let succeeded = 0;
+    for (const file of uploadFiles) {
+      try {
+        await uploadFileMutation.mutateAsync({ folderId: selectedFolder.id, file, silent: true });
+        succeeded++;
+      } catch (e) {
+        // individual failure toast already handled by mutation's onError
+      }
+    }
+    setBatchUploading(false);
+    setPendingFiles([]);
+    if (succeeded > 0) {
+      toast({ title: `${succeeded} file${succeeded === 1 ? "" : "s"} uploaded!`, description: "Your files have been added to the folder." });
+    }
   };
 
   const handleUploadSubmit = () => {
@@ -749,6 +859,7 @@ export default function KnowledgeBaseHome() {
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   className="hidden"
                   onChange={handleFileUpload}
                   accept="image/*,.pdf,.txt,.doc,.docx,.csv,.json,.html,.css,.js,.ts,.py,.java,.c,.cpp"
@@ -760,9 +871,10 @@ export default function KnowledgeBaseHome() {
                   onClick={() => fileInputRef.current?.click()}
                   className="gap-2 hover-elevate"
                   data-testid="button-upload-file"
+                  disabled={batchUploading}
                 >
-                  <Upload className="h-4 w-4" />
-                  Upload
+                  {batchUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  Upload {!isPremium && <span className="text-xs text-muted-foreground">(max {uploadBatchLimit})</span>}
                 </Button>
                 <Button
                   size="sm"
@@ -787,6 +899,42 @@ export default function KnowledgeBaseHome() {
                 >
                   <FileText className="h-4 w-4" />
                   Create Note
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setActiveIntegration("google-drive")}
+                  className="gap-2 hover-elevate"
+                  data-testid="button-import-google-drive"
+                >
+                  <Cloud className="h-4 w-4" />
+                  Google Drive
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setActiveIntegration("google-docs")}
+                  className="gap-2 hover-elevate"
+                  data-testid="button-import-google-docs"
+                >
+                  <FileText className="h-4 w-4" />
+                  Google Docs
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (!isPremium) {
+                      toast({ title: "Premium feature", description: "GitHub import is available on Pro/Premium plans." });
+                      return;
+                    }
+                    setActiveIntegration("github");
+                  }}
+                  className="gap-2 hover-elevate"
+                  data-testid="button-import-github"
+                >
+                  <GitBranch className="h-4 w-4" />
+                  GitHub {!isPremium && <Badge variant="secondary" className="ml-1 text-[10px]">Premium</Badge>}
                 </Button>
               </div>
             </div>
@@ -1312,6 +1460,48 @@ export default function KnowledgeBaseHome() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Google Drive Browser */}
+      {activeIntegration === "google-drive" && selectedFolder && (
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl max-h-[85vh] overflow-hidden">
+            <GoogleDriveBrowser
+              folderId="root"
+              onSelect={(file) => {
+                if (!file.isFolder) importDriveFileMutation.mutate(file);
+              }}
+              onClose={() => setActiveIntegration(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Google Docs Browser */}
+      {activeIntegration === "google-docs" && selectedFolder && (
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl max-h-[85vh] overflow-hidden">
+            <GoogleDocsBrowser
+              folderId="root"
+              onSelect={(file) => importGoogleDocMutation.mutate(file)}
+              onClose={() => setActiveIntegration(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* GitHub Browser (Premium only) */}
+      {activeIntegration === "github" && selectedFolder && isPremium && (
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl max-h-[85vh] overflow-hidden">
+            <GitHubRepoBrowser
+              onSelect={(repo, branch, path) => {
+                if (path) importGitHubFileMutation.mutate({ repoName: repo.name, branch, path });
+              }}
+              onClose={() => setActiveIntegration(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

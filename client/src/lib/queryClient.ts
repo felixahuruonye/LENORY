@@ -31,14 +31,15 @@ export async function apiRequest(
   data?: unknown | undefined,
 ): Promise<Response> {
   const authHeaders = await getAuthHeaders();
-  
+  const isFormData = typeof FormData !== "undefined" && data instanceof FormData;
+
   const res = await fetch(url, {
     method,
     headers: {
       ...authHeaders,
-      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...(data && !isFormData ? { "Content-Type": "application/json" } : {}),
     },
-    body: data ? JSON.stringify(data) : undefined,
+    body: isFormData ? (data as FormData) : (data ? JSON.stringify(data) : undefined),
     credentials: "include",
   });
 

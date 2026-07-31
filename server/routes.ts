@@ -3294,6 +3294,79 @@ You have FULL access to the system. You can:
     }
   });
 
+  app.get('/api/integrations/google-drive/files', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const token = await storage.getIntegrationToken(userId, 'google');
+      if (!token) return res.status(401).json({ error: 'Not connected to Google Drive' });
+      const folderId = req.query.folderId || 'root';
+      const query = `'${folderId}' in parents and trashed=false`;
+      const driveRes = await axios.get(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,webViewLink,webContentLink,size,createdTime,modifiedTime,parents,iconLink,thumbnailLink)&pageSize=100`,
+        { headers: { Authorization: `Bearer ${token.accessToken}` } }
+      );
+      const files = driveRes.data.files.map((f: any) => ({
+        ...f,
+        isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+      }));
+      res.json({ files });
+    } catch (e: any) {
+      console.error('Google Drive files error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/integrations/google-drive/import', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const { fileId, fileName, mimeType, kbFolderId } = req.body;
+      if (!fileId || !kbFolderId) return res.status(400).json({ error: 'fileId and kbFolderId are required' });
+      const token = await storage.getIntegrationToken(userId, 'google');
+      if (!token) return res.status(401).json({ error: 'Not connected to Google Drive' });
+
+      let extractedText = '';
+      const isTextLike = mimeType?.includes('text') || mimeType?.includes('json') || mimeType?.includes('csv') || mimeType?.includes('html');
+      if (isTextLike) {
+        const fileRes = await axios.get(
+          `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+          { headers: { Authorization: `Bearer ${token.accessToken}` }, responseType: 'text' }
+        );
+        extractedText = typeof fileRes.data === 'string' ? fileRes.data : JSON.stringify(fileRes.data);
+      }
+
+      const kbFile = await storage.createKBFile({
+        folder_id: kbFolderId,
+        user_id: userId,
+        name: fileName || 'Google Drive file',
+        file_type: isTextLike ? 'text' : 'drive_file',
+        source_type: 'google_drive',
+        external_id: fileId,
+        extracted_text: extractedText || null,
+        mime_type: mimeType || null,
+      });
+
+      await storage.saveSyncedFile({
+        id: `google_drive_${fileId}_${Date.now()}`,
+        userId,
+        sourceType: 'google_drive',
+        externalId: fileId,
+        externalParentId: kbFolderId,
+        name: fileName || 'Google Drive file',
+        type: 'file',
+        mimeType: mimeType || null,
+        content: extractedText || undefined,
+        syncedAt: new Date(),
+      });
+
+      res.json({ file: kbFile, imported: true, extractedText: !!extractedText });
+    } catch (e: any) {
+      console.error('Google Drive import error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get('/api/integrations/google-docs/files', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -3322,7 +3395,7 @@ You have FULL access to the system. You can:
     try {
       const userId = req.userId;
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-      const { fileId, folderId } = req.body;
+      const { fileId, folderId, kbFolderId } = req.body;
       if (!fileId) return res.status(400).json({ error: 'File ID required' });
       const token = await storage.getIntegrationToken(userId, 'google');
       if (!token) return res.status(401).json({ error: 'Not connected to Google Drive' });
@@ -3367,10 +3440,26 @@ You have FULL access to the system. You can:
         metadata: { docUrl: docRes.data.documentId },
         syncedAt: new Date(),
       });
+
+      let kbFile = null;
+      if (kbFolderId) {
+        kbFile = await storage.createKBFile({
+          folder_id: kbFolderId,
+          user_id: userId,
+          name: doc.title || 'Untitled Google Doc',
+          file_type: 'text',
+          source_type: 'google_docs',
+          external_id: fileId,
+          extracted_text: fullText,
+          mime_type: 'application/vnd.google-apps.document',
+        });
+      }
+
       res.json({
         content: fullText,
         wordCount: fullText.split(/\s+/).filter(Boolean).length,
         title: doc.title,
+        file: kbFile,
       });
     } catch (e: any) {
       console.error('Extract error:', e.message);
@@ -3504,6 +3593,59 @@ You have FULL access to the system. You can:
       }
     } catch (e: any) {
       console.error('GitHub contents error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/integrations/github/import', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      if (tier !== 'pro' && tier !== 'premium' && user?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'GitHub integration is a Premium feature' });
+      }
+      const { repoName, branch, path, kbFolderId } = req.body;
+      if (!repoName || !path || !kbFolderId) return res.status(400).json({ error: 'repoName, path, and kbFolderId are required' });
+      const token = await storage.getIntegrationToken(userId, 'github');
+      if (!token) return res.status(401).json({ error: 'Not connected to GitHub' });
+
+      const contentRes = await axios.get(
+        `https://api.github.com/repos/${token.userLogin || ''}/${repoName}/contents/${path}?ref=${branch || 'main'}`,
+        { headers: { Authorization: `token ${token.accessToken}` } }
+      );
+      const data = contentRes.data;
+      const decoded = data.encoding === 'base64' ? Buffer.from(data.content, 'base64').toString('utf-8') : data.content;
+      const fileName = path.split('/').pop() || repoName;
+
+      const kbFile = await storage.createKBFile({
+        folder_id: kbFolderId,
+        user_id: userId,
+        name: fileName,
+        file_type: 'code',
+        source_type: 'github',
+        external_id: `${repoName}:${path}`,
+        extracted_text: decoded,
+        file_size: data.size || decoded.length,
+      });
+
+      await storage.saveSyncedFile({
+        id: `github_${repoName}_${Date.now()}`,
+        userId,
+        sourceType: 'github',
+        externalId: `${repoName}:${path}`,
+        externalParentId: kbFolderId,
+        name: fileName,
+        type: 'file',
+        content: decoded,
+        metadata: { repoName, branch, path },
+        syncedAt: new Date(),
+      });
+
+      res.json({ file: kbFile, imported: true });
+    } catch (e: any) {
+      console.error('GitHub import error:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
