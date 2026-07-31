@@ -114,7 +114,13 @@ export function registerKbRoutes(app: Express) {
       const { questionCount = 5 } = req.body;
       const context = await buildFolderContext(req.params.id);
       const raw = await chatWithAI([{ role: "user", content: `Based on this material:\n${context}\n\nGenerate ${questionCount} multiple-choice quiz questions. Respond with ONLY valid JSON array: [{"question":"...","options":["A","B","C","D"],"correctAnswer":"A","explanation":"..."}]` }]);
-      res.json({ questions: parseJsonFromAI(raw) });
+      const questions = parseJsonFromAI(raw);
+      const saved = await storage.createKBFile({
+        folder_id: req.params.id, user_id: req.userId,
+        name: `Quiz (${questionCount} questions)`, file_type: "quiz",
+        extracted_text: JSON.stringify(questions), file_size: raw.length,
+      });
+      res.json({ questions, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate quiz" }); }
   });
   app.post('/api/kb/folders/:id/flashcards', supabaseAuth, async (req: any, res: Response) => {
@@ -122,14 +128,25 @@ export function registerKbRoutes(app: Express) {
       const { count = 10 } = req.body;
       const context = await buildFolderContext(req.params.id);
       const raw = await chatWithAI([{ role: "user", content: `Based on this material:\n${context}\n\nGenerate ${count} flashcards. Respond with ONLY valid JSON array: [{"front":"...","back":"..."}]` }]);
-      res.json({ flashcards: parseJsonFromAI(raw) });
+      const flashcards = parseJsonFromAI(raw);
+      const saved = await storage.createKBFile({
+        folder_id: req.params.id, user_id: req.userId,
+        name: `Flashcards (${count} cards)`, file_type: "flashcards",
+        extracted_text: JSON.stringify(flashcards), file_size: raw.length,
+      });
+      res.json({ flashcards, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate flashcards" }); }
   });
   app.post('/api/kb/folders/:id/summary', supabaseAuth, async (req: any, res: Response) => {
     try {
       const context = await buildFolderContext(req.params.id);
       const summary = await chatWithAI([{ role: "user", content: `Summarize this study material clearly and concisely:\n${context}` }]);
-      res.json({ summary });
+      const saved = await storage.createKBFile({
+        folder_id: req.params.id, user_id: req.userId,
+        name: `Summary - ${new Date().toLocaleDateString()}`, file_type: "text",
+        extracted_text: summary, file_size: summary.length,
+      });
+      res.json({ summary, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate summary" }); }
   });
   app.get('/api/kb/folders/:id/credits', supabaseAuth, async (req: any, res: Response) => {

@@ -1187,7 +1187,7 @@ You have FULL access to the system. You can:
       if (!prompt?.trim()) return res.status(400).json({ message: "Prompt is required" });
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      if (tier === 'free') return res.status(403).json({ message: "Website Builder is available on Pro and Premium plans.", error: "TIER_LOCKED", requiredTier: "pro" });
+      if (tier === 'free' && user?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Website Builder is available on Pro and Premium plans.", error: "TIER_LOCKED", requiredTier: "pro" });
       const gate = await checkCreditGate(userId, user?.email, tier, 10, "Website generation");
       if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       const generated = await generateWebsiteWithGemini(prompt);
@@ -1265,7 +1265,7 @@ You have FULL access to the system. You can:
       }
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      if (mode === 'build' && tier === 'free') {
+      if (mode === 'build' && tier === 'free' && user?.email !== REAL_ADMIN_EMAIL) {
         return res.status(403).json({
           message: "Build mode is available on Pro and Premium plans.",
           error: "TIER_LOCKED",
@@ -1360,7 +1360,7 @@ You have FULL access to the system. You can:
       const { appId, title, description, category, isPublic } = req.body;
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      if (tier === 'free') {
+      if (tier === 'free' && user?.email !== REAL_ADMIN_EMAIL) {
         return res.status(403).json({ message: "Creating templates is a Pro feature." });
       }
       const app = await storage.getAppProject(appId);
@@ -1391,7 +1391,7 @@ You have FULL access to the system. You can:
       const { platform, domain } = req.body;
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      if (tier === 'free') {
+      if (tier === 'free' && user?.email !== REAL_ADMIN_EMAIL) {
         return res.status(403).json({ message: "Deployment is a Pro feature." });
       }
       const app = await storage.getAppProject(appId);
@@ -3784,7 +3784,7 @@ You have FULL access to the system. You can:
       const userId = req.userId;
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
       const user = await storage.getUser(userId);
-      if (user?.subscriptionTier !== 'premium' && user?.subscriptionTier !== 'pro') {
+      if (user?.subscriptionTier !== 'premium' && user?.subscriptionTier !== 'pro' && user?.email !== REAL_ADMIN_EMAIL) {
         return res.status(403).json({ error: 'Premium feature' });
       }
       const { prompt, stepId } = req.body;

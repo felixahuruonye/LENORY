@@ -406,9 +406,10 @@ export default function KnowledgeBaseHome() {
       return res.json();
     },
     onSuccess: (data) => {
-      // Show quiz in a dialog
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
       toast({ title: "Quiz generated!", description: `Created ${data.questions?.length || 0} questions.` });
-      // Could open a quiz dialog here
+      if (data.file) setViewingFile({ ...data.file, extracted_text: JSON.stringify(data.questions) });
     },
     onError: (err: any) => {
       toast({ title: "Failed to generate quiz", description: err.message, variant: "destructive" });
@@ -422,7 +423,10 @@ export default function KnowledgeBaseHome() {
       return res.json();
     },
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
       toast({ title: "Flashcards generated!", description: `Created ${data.flashcards?.length || 0} cards.` });
+      if (data.file) setViewingFile({ ...data.file, extracted_text: JSON.stringify(data.flashcards) });
     },
     onError: (err: any) => {
       toast({ title: "Failed to generate flashcards", description: err.message, variant: "destructive" });
@@ -436,7 +440,10 @@ export default function KnowledgeBaseHome() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Summary generated!", description: "Check the folder for your summary." });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", selectedFolder?.id, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({ title: "Summary generated!", description: "Opening it now." });
+      if (data.file) setViewingFile({ ...data.file, extracted_text: data.summary });
     },
     onError: (err: any) => {
       toast({ title: "Failed to generate summary", description: err.message, variant: "destructive" });
@@ -532,6 +539,7 @@ export default function KnowledgeBaseHome() {
   };
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [viewingFile, setViewingFile] = useState<KBFile | null>(null);
   const [batchUploading, setBatchUploading] = useState(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -954,7 +962,12 @@ export default function KnowledgeBaseHome() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {files.map((file: KBFile) => (
-                  <Card key={file.id} className="hover-elevate">
+                  <Card
+                    key={file.id}
+                    className="hover-elevate cursor-pointer"
+                    onClick={() => setViewingFile(file)}
+                    data-testid={`file-card-${file.id}`}
+                  >
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3 min-w-0">
@@ -980,7 +993,7 @@ export default function KnowledgeBaseHome() {
                           size="icon"
                           variant="ghost"
                           className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => deleteFileMutation.mutate(file.id)}
+                          onClick={(e) => { e.stopPropagation(); deleteFileMutation.mutate(file.id); }}
                           data-testid={`file-delete-${file.id}`}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1459,6 +1472,66 @@ export default function KnowledgeBaseHome() {
             <Button onClick={handleGuideNext} className="flex-1 hover-elevate">
               {guideStep === GUIDE_STEPS.length - 1 ? "Get Started" : "Next"}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* File Content Viewer */}
+      <Dialog open={!!viewingFile} onOpenChange={(open) => !open && setViewingFile(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="pr-8">{viewingFile?.name}</DialogTitle>
+            <DialogDescription>
+              {viewingFile && getSourceLabel(viewingFile.source_type)} • {viewingFile && formatDistanceToNow(new Date(viewingFile.created_at), { addSuffix: true })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto">
+            {viewingFile?.file_type === "quiz" ? (
+              <div className="space-y-4">
+                {(() => {
+                  try {
+                    const questions = JSON.parse(viewingFile.extracted_text || "[]");
+                    return questions.map((q: any, i: number) => (
+                      <Card key={i}>
+                        <CardContent className="p-4 space-y-2">
+                          <p className="font-medium text-sm">{i + 1}. {q.question}</p>
+                          <div className="space-y-1">
+                            {q.options?.map((opt: string, j: number) => (
+                              <div key={j} className={`text-sm px-3 py-1.5 rounded-md ${opt === q.correctAnswer ? "bg-green-500/10 text-green-600 dark:text-green-400 font-medium" : "bg-muted/50"}`}>
+                                {opt}
+                              </div>
+                            ))}
+                          </div>
+                          {q.explanation && <p className="text-xs text-muted-foreground pt-1">{q.explanation}</p>}
+                        </CardContent>
+                      </Card>
+                    ));
+                  } catch {
+                    return <p className="text-sm text-muted-foreground">Couldn't parse this quiz.</p>;
+                  }
+                })()}
+              </div>
+            ) : viewingFile?.file_type === "flashcards" ? (
+              <div className="grid grid-cols-1 gap-3">
+                {(() => {
+                  try {
+                    const cards = JSON.parse(viewingFile.extracted_text || "[]");
+                    return cards.map((c: any, i: number) => (
+                      <Card key={i}>
+                        <CardContent className="p-4 space-y-2">
+                          <p className="font-medium text-sm">{c.front}</p>
+                          <p className="text-sm text-muted-foreground border-t pt-2">{c.back}</p>
+                        </CardContent>
+                      </Card>
+                    ));
+                  } catch {
+                    return <p className="text-sm text-muted-foreground">Couldn't parse these flashcards.</p>;
+                  }
+                })()}
+              </div>
+            ) : (
+              <p className="text-sm whitespace-pre-wrap">{viewingFile?.extracted_text || "No preview available for this file type."}</p>
+            )}
           </div>
         </DialogContent>
       </Dialog>

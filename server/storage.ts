@@ -1655,10 +1655,17 @@ class SupabaseStorage extends DatabaseStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
+    const STORAGE_ADMIN_EMAIL = "felixahuruonye@gmail.com";
     if (supabaseDb) {
       try {
         const { data, error } = await supabaseDb.from('users').select('*').eq('id', id).single();
-        if (!error && data) return mapSupabaseUser(data);
+        if (!error && data) {
+          const mapped = mapSupabaseUser(data);
+          if (mapped?.email === STORAGE_ADMIN_EMAIL) {
+            (mapped as any).subscriptionTier = 'premium';
+          }
+          return mapped;
+        }
       } catch {}
     }
     return super.getUser(id);
