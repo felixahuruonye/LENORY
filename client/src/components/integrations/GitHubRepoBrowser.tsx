@@ -160,10 +160,7 @@ export function GitHubRepoBrowser({
   const fetchContents = async (repoName: string, branch: string, path: string) => {
     setLoading(true);
     try {
-      const res = await apiRequest("GET", `/api/integrations/github/repos/${repoName}/contents`, {
-        branch,
-        path
-      });
+      const res = await apiRequest("GET", `/api/integrations/github/repos/${repoName}/contents?branch=${encodeURIComponent(branch)}&path=${encodeURIComponent(path)}`);
       const data = await res.json();
       setContents(data.contents || []);
       setCurrentPath(path);
