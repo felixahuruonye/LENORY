@@ -112,6 +112,19 @@ export default function AdminDashboard() {
     onError: () => toast({ title: "Reset failed", variant: "destructive" }),
   });
 
+  const resetDailyMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", `/api/admin/credits/${userId}/reset-daily`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Daily credits topped up", description: `New balance: ${data.newBalance}` });
+      setCreditAction(null);
+      refetchUsers();
+    },
+    onError: () => toast({ title: "Reset failed", variant: "destructive" }),
+  });
+
   // ─── FETCH FUNCTIONS ────────────────────────────────────────────────────
   const fetchPlatformHealth = async () => {
     try {
@@ -494,6 +507,15 @@ export default function AdminDashboard() {
                         data-testid="button-reset-monthly-credits"
                       >
                         {resetMonthlyMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Reset Monthly"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => resetDailyMutation.mutate(creditAction.userId)}
+                        disabled={resetDailyMutation.isPending}
+                        data-testid="button-reset-daily-credits"
+                      >
+                        {resetDailyMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Reset Daily"}
                       </Button>
                     </div>
                     <div className="flex gap-2">

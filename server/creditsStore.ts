@@ -213,6 +213,38 @@ export async function checkCreditGate(
 }
 
 // Reset a user's monthly credit usage + restore their daily allowance (admin action).
+// Manually force a user's daily top-up right now (admin action), independent
+// of whether their calendar daily-reset window has actually elapsed.
+export async function resetDailyCredits(userId: string, tier: string): Promise<CreditRecord | null> {
+  const limits = getTierLimits(tier);
+  const today = todayKey();
+  if (!supabaseAdmin) {
+    const rec = emergencyFallbackStore.get(userId);
+    if (rec) {
+      rec.balance = Math.min(rec.balance + limits.dailyAdd, limits.maxBalance);
+      rec.dailyGiven = limits.dailyAdd;
+      rec.lastDailyReset = today;
+    }
+    return rec || null;
+  }
+  try {
+    const { data: current } = await supabaseAdmin.from("user_credits").select("*").eq("user_id", userId).single();
+    const newBalance = Math.min((current?.balance || 0) + limits.dailyAdd, limits.maxBalance);
+    const { data, error } = await supabaseAdmin
+      .from("user_credits")
+      .update({ balance: newBalance, daily_given: limits.dailyAdd, last_daily_reset: today, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .select()
+      .single();
+    if (error) logSupabaseError("resetDailyCredits update", error);
+    if (!data) return null;
+    return { balance: data.balance, monthlyUsed: data.monthly_used, dailyGiven: data.daily_given, lastDailyReset: data.last_daily_reset, lastMonthlyReset: data.last_monthly_reset };
+  } catch (e) {
+    console.error("resetDailyCredits error:", e);
+    return null;
+  }
+}
+
 export async function resetMonthlyCredits(userId: string, tier: string): Promise<CreditRecord | null> {
   const limits = getTierLimits(tier);
   const today = todayKey();

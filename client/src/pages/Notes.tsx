@@ -684,7 +684,7 @@ export default function KnowledgeBaseHome() {
               <Button
                 size="sm"
                 onClick={() => setShowCreateFolder(true)}
-                className="gap-2 hover-elevate"
+                className="gap-2 hover-elevate hidden sm:inline-flex"
                 data-testid="button-create-folder"
               >
                 <Plus className="h-4 w-4" />
@@ -728,6 +728,15 @@ export default function KnowledgeBaseHome() {
                 className="hover-elevate"
               >
                 <RotateCw className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setShowCreateFolder(true)}
+                className="gap-2 hover-elevate inline-flex sm:hidden"
+                data-testid="button-create-folder-mobile"
+              >
+                <Plus className="h-4 w-4" />
+                New Folder
               </Button>
             </div>
           </div>
@@ -856,10 +865,7 @@ export default function KnowledgeBaseHome() {
                 <h2 className="text-xl font-semibold">{selectedFolder.name}</h2>
                 <Badge variant="secondary">{files.length} files</Badge>
               </div>
-              <div
-                className="flex items-center gap-2 overflow-x-auto snap-x snap-mandatory scrollbar-hide pb-1"
-                style={{ maskImage: "linear-gradient(to right, transparent 0, black 24px, black 100%)", WebkitMaskImage: "linear-gradient(to right, transparent 0, black 24px, black 100%)" }}
-              >
+              <div className="flex items-center gap-2 flex-wrap">
                 <input
                   ref={fileInputRef}
                   type="file"

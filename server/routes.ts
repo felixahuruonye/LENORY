@@ -9,7 +9,7 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances } from "./adminTools";
-import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits } from "./creditsStore";
+import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits } from "./creditsStore";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
@@ -61,6 +61,12 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
 const GITHUB_REDIRECT_URI = process.env.GITHUB_REDIRECT_URI || 'http://localhost:5000/api/integrations/github/callback';
+
+async function getGitHubOwner(token: { userLogin?: string; accessToken: string }): Promise<string> {
+  if (token.userLogin) return token.userLogin;
+  const res = await axios.get('https://api.github.com/user', { headers: { Authorization: `token ${token.accessToken}` } });
+  return res.data.login;
+}
 
 // ─── NEW: OAUTH HELPERS ─────────────────────────────────────────────────
 function getGoogleAuthUrl(userId: string): string {
@@ -2938,6 +2944,21 @@ You have FULL access to the system. You can:
     }
   });
 
+  app.post('/api/admin/credits/:userId/reset-daily', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const adminUser = await storage.getUser(req.userId);
+      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      const tier = (targetUser as any)?.subscriptionTier || 'free';
+      const result = await resetDailyCredits(userId, tier);
+      if (!result) return res.status(500).json({ message: "Reset failed" });
+      res.json({ success: true, newBalance: result.balance, tier });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to reset daily credits" });
+    }
+  });
+
   app.post('/api/admin/credits/:userId/reset-monthly', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
@@ -3667,8 +3688,9 @@ You have FULL access to the system. You can:
       const token = await storage.getIntegrationToken(userId, 'github');
       if (!token) return res.status(401).json({ error: 'Not connected to GitHub' });
       const { repo } = req.params;
+      const owner = await getGitHubOwner(token);
       const branchesRes = await axios.get(
-        `https://api.github.com/repos/${token.userLogin || ''}/${repo}/branches`,
+        `https://api.github.com/repos/${owner}/${repo}/branches`,
         { headers: { Authorization: `token ${token.accessToken}` } }
       );
       const branches = branchesRes.data.map((b: any) => b.name);
@@ -3688,7 +3710,8 @@ You have FULL access to the system. You can:
       const { repo } = req.params;
       const branch = req.query.branch as string || 'main';
       const path = req.query.path as string || '';
-      const url = `https://api.github.com/repos/${token.userLogin || ''}/${repo}/contents/${path}?ref=${branch}`;
+      const owner = await getGitHubOwner(token);
+      const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
       try {
         const contentsRes = await axios.get(
           url,
@@ -3725,7 +3748,7 @@ You have FULL access to the system. You can:
       if (!token) return res.status(401).json({ error: 'Not connected to GitHub' });
 
       const contentRes = await axios.get(
-        `https://api.github.com/repos/${token.userLogin || ''}/${repoName}/contents/${path}?ref=${branch || 'main'}`,
+        `https://api.github.com/repos/${await getGitHubOwner(token)}/${repoName}/contents/${path}?ref=${branch || 'main'}`,
         { headers: { Authorization: `token ${token.accessToken}` } }
       );
       const data = contentRes.data;

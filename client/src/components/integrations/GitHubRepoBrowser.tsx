@@ -331,7 +331,7 @@ export function GitHubRepoBrowser({
                     }`}
                     onClick={() => handleSelectRepo(repo)}
                   >
-                    <div className="flex items-start justify-between">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <h4 className="font-medium text-sm truncate">{repo.name}</h4>
@@ -363,7 +363,7 @@ export function GitHubRepoBrowser({
                           <span>Updated {formatDate(repo.updated_at)}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 ml-2">
+                      <div className="flex items-center gap-1 flex-shrink-0 sm:ml-2">
                         <Button
                           variant="ghost"
                           size="sm"
