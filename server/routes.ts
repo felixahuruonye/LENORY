@@ -415,6 +415,26 @@ You have FULL access to the system. You can:
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.`;
 
+      let searchSources: { title: string; link: string; snippet: string }[] = [];
+      const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
+      const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
+      if (wantsSearch) {
+        try {
+          const { searchInternetWithGemini } = await import('./gemini');
+          const searchData = await searchInternetWithGemini(content);
+          if (searchData.results?.length > 0) {
+            searchSources = searchData.results.map((r: any) => ({ title: r.title, link: r.link, snippet: r.snippet }));
+            const searchSummary = searchData.results.map((r: any) => `- ${r.title} (${r.link}): ${r.snippet}`).join("\n");
+            systemMessage += `\n\n## 🔎 LIVE WEB SEARCH RESULTS (use these to answer accurately, and mention that you searched the web):\n${searchSummary}`;
+            logApiUsage("tavily", userId, "/api/chat/send");
+            if (user?.email !== REAL_ADMIN_EMAIL) {
+              await deductCredits(userId, 1);
+            }
+          }
+        } catch (searchErr) {
+          console.warn("Chat search failed, continuing without it:", searchErr);
+        }
+      }
       if (examResults.length > 0) {
         const lastExam = examResults[0];
         systemMessage += `\n\n## Recent Performance:\n- Last exam: ${lastExam.examName} (${lastExam.score}%)`;
@@ -523,7 +543,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       }
 
       logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
-      res.json({ success: true, message: aiResponse });
+      res.json({ success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined });
     } catch (error) {
       console.error("🔥 /api/chat/send crashed:", error);
       logAdminError("/api/chat/send", error);

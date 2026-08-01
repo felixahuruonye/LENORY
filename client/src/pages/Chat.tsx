@@ -400,6 +400,7 @@ export default function Chat() {
   const [historyTab, setHistoryTab] = useState("all");
   const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<any>(null);
+  const [latestSources, setLatestSources] = useState<{ title: string; link: string; snippet: string }[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -894,14 +895,9 @@ export default function Chat() {
       return;
     }
 
-    // Internet search detection
-    if (selectedModel.id === "lenory-search") {
-      await performSearch(message.trim());
-      resetInput();
-      return;
-    }
-    const searchQuery = detectSearchQuery(message);
-    if (searchQuery) { await performSearch(searchQuery); resetInput(); return; }
+    // Note: internet search now happens automatically server-side inside
+    // /api/chat/send when the message needs it — routed through the same
+    // credited AI flow instead of a separate free, untracked search-only path.
 
     // Normal AI chat
     let sessionId = currentSessionId;
@@ -920,6 +916,7 @@ export default function Chat() {
 
     try {
       setIsLoading(true);
+      setLatestSources(null);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();
@@ -952,7 +949,8 @@ export default function Chat() {
       }
 
       resetInput();
-      await res.json();
+      const responseData = await res.json();
+      setLatestSources(responseData.sources || null);
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
@@ -1309,6 +1307,29 @@ export default function Chat() {
                     )}
                   </div>
                 ))}
+
+                {/* Web search sources for the latest response */}
+                {latestSources && latestSources.length > 0 && !isLoading && (
+                  <div className="flex flex-wrap gap-2 pl-10 -mt-2">
+                    {latestSources.map((src, i) => (
+                      <a
+                        key={i}
+                        href={src.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs bg-muted hover:bg-muted/70 rounded-full px-3 py-1.5 max-w-[220px]"
+                        data-testid={`search-source-${i}`}
+                      >
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${new URL(src.link).hostname}&sz=32`}
+                          className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                          alt=""
+                        />
+                        <span className="truncate">{src.title}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
 
                 {/* Writing / typing indicator */}
                 {isLoading && <TypingIndicator />}
