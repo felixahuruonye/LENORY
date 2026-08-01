@@ -3253,6 +3253,18 @@ You have FULL access to the system. You can:
   // 1. GOOGLE DRIVE / DOCS INTEGRATION
   // ============================================================
 
+  // Unauthenticated diagnostic — no secrets exposed, just tells us if/what Render actually loaded
+  app.get('/api/integrations/debug-config', async (req: Request, res: Response) => {
+    const mask = (v: string) => v ? `${v.substring(0, 6)}...${v.substring(v.length - 4)} (${v.length} chars)` : "❌ NOT SET / EMPTY";
+    res.json({
+      GOOGLE_CLIENT_ID: mask(GOOGLE_CLIENT_ID),
+      GOOGLE_REDIRECT_URI: GOOGLE_REDIRECT_URI || "❌ NOT SET (using localhost fallback)",
+      GITHUB_CLIENT_ID: mask(GITHUB_CLIENT_ID),
+      GITHUB_REDIRECT_URI: GITHUB_REDIRECT_URI || "❌ NOT SET (using localhost fallback)",
+      note: "If GOOGLE_CLIENT_ID or GITHUB_CLIENT_ID show NOT SET, or the redirect URIs show the localhost fallback, Render is not passing those env vars to the running app.",
+    });
+  });
+
   app.get('/api/integrations/google-drive/auth', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
