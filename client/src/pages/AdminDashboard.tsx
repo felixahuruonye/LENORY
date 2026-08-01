@@ -157,8 +157,13 @@ export default function AdminDashboard() {
       const data = await res.json();
       setTransactions(data.transactions || []);
       setShowTransactions(true);
-    } catch (error) {
-      toast({ title: "Error", description: "Failed to fetch transactions", variant: "destructive" });
+    } catch (error: any) {
+      let detail = "Failed to fetch transactions";
+      try {
+        const parsed = JSON.parse(error?.message?.split(": ").slice(1).join(": ") || "{}");
+        if (parsed?.detail) detail = parsed.detail;
+      } catch {}
+      toast({ title: "Error", description: detail, variant: "destructive" });
     } finally {
       setTransactionsLoading(false);
     }
@@ -299,14 +304,16 @@ export default function AdminDashboard() {
             <CardContent>
               {platformHealth ? (
                 <>
-                  <div className="text-2xl font-bold text-green-500">{platformHealth.uptime}%</div>
+                  <div className={`text-2xl font-bold ${(platformHealth.uptime ?? 0) >= 95 ? "text-green-500" : (platformHealth.uptime ?? 0) >= 80 ? "text-yellow-500" : "text-red-500"}`}>
+                    {platformHealth.uptime !== undefined ? `${platformHealth.uptime}%` : "Unknown"}
+                  </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Status: <Badge variant={platformHealth.status === 'healthy' ? 'secondary' : 'destructive'}>
-                      {platformHealth.status}
-                    </Badge>
+                    {(platformHealth.uptime ?? 0) >= 95 ? "Everything looks fine" : (platformHealth.uptime ?? 0) >= 80 ? "Some recent errors, keep an eye on it" : "Multiple recent errors — worth checking"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Supabase: {platformHealth.supabaseStatus}
+                    Database: <Badge variant={platformHealth.supabaseStatus === 'healthy' ? 'secondary' : 'destructive'}>
+                      {platformHealth.supabaseStatus || "unknown"}
+                    </Badge>
                   </p>
                 </>
               ) : (

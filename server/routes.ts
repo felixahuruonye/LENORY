@@ -998,9 +998,9 @@ You have FULL access to the system. You can:
       const limit = parseInt(req.query.limit as string) || 50;
       const transactions = await getPaystackTransactions(limit);
       res.json(transactions);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching Paystack transactions:", error);
-      res.status(500).json({ message: "Failed to fetch transactions" });
+      res.status(500).json({ message: "Failed to fetch transactions", detail: error?.message || String(error) });
     }
   });
 
