@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Loader2, FolderOpen, File, FileText, Image,
-  FileText, FileCode, Music, Video, Archive,
+  FileCode, Music, Video, Archive,
   ChevronRight, ChevronLeft, Check, X,
   Database, Cloud, RefreshCw, Upload, Link2,
   FolderPlus, Trash2, Download, ExternalLink,
@@ -83,7 +83,13 @@ export function GoogleDriveBrowser({ folderId, onSelect, onClose, selectedFiles 
       const res = await apiRequest("GET", "/api/integrations/google-drive/auth");
       const data = await res.json();
       if (data.authUrl) {
-        window.open(data.authUrl, "_blank");
+        const popup = window.open(data.authUrl, "_blank", "width=500,height=650");
+        const poll = setInterval(() => {
+          if (popup?.closed) {
+            clearInterval(poll);
+            checkConnection();
+          }
+        }, 800);
       } else {
         toast({ title: "Error", description: "Failed to get auth URL", variant: "destructive" });
       }

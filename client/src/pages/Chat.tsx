@@ -62,9 +62,10 @@ import {
   Maximize2,
   Download,
 } from "lucide-react";
+import { FolderOpen, CheckCircle2, Layers } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useVoice } from "@/lib/useVoice";
 import { useVapi } from "@/hooks/useVapi";
@@ -383,6 +384,7 @@ function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessage
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { speak, stop, isPlaying } = useVoice();
   const [, setLocation] = useLocation();
 
@@ -406,7 +408,10 @@ export default function Chat() {
   // Chat state
   const searchString = useSearch();
   const urlSessionId = new URLSearchParams(searchString).get("sessionId");
+  const newFolderSessionId = new URLSearchParams(searchString).get("newFolderSession");
+  const newFolderSessionName = new URLSearchParams(searchString).get("folderName");
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId);
+  const [activeFolder, setActiveFolder] = useState<{ id: string; name: string } | null>(null);
   const [message, setMessage] = useState("");
   const [pendingFiles, setPendingFiles] = useState<{ id: string; file: File; previewUrl?: string }[]>([]);
   const [pastedFile, setPastedFile] = useState<{ name: string; content: string } | null>(null);
@@ -595,11 +600,48 @@ export default function Chat() {
     if (user) {
       if (urlSessionId && sessions.some(s => s.id === urlSessionId)) {
         setCurrentSessionId(urlSessionId);
-      } else if (!currentSessionId && sessions.length > 0) {
+      } else if (!currentSessionId && sessions.length > 0 && !newFolderSessionId) {
         setCurrentSessionId(sessions[0].id);
       }
     }
   }, [user, sessions, urlSessionId]);
+
+  // Create a new folder-scoped session when arriving from Knowledge Base
+  const folderSessionCreated = useRef(false);
+  useEffect(() => {
+    if (newFolderSessionId && user && !folderSessionCreated.current) {
+      folderSessionCreated.current = true;
+      (async () => {
+        try {
+          const res = await apiRequest("POST", "/api/chat/sessions", {
+            title: newFolderSessionName ? `${newFolderSessionName}` : "Folder chat",
+            mode: "chat",
+            kbFolderId: newFolderSessionId,
+            kbFolderName: newFolderSessionName,
+          });
+          const session = await res.json();
+          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+          setCurrentSessionId(session.id);
+          setActiveFolder({ id: newFolderSessionId, name: newFolderSessionName || "Folder" });
+          setLocation(`/chat?sessionId=${session.id}`, { replace: true } as any);
+        } catch {
+          toast({ title: "Couldn't start folder chat", variant: "destructive" });
+        }
+      })();
+    }
+  }, [newFolderSessionId, user]);
+
+  // Detect folder-scoping on an existing/reloaded session
+  useEffect(() => {
+    const session = sessions.find((s) => s.id === currentSessionId);
+    if (session?.summary?.startsWith("KBFOLDER:")) {
+      const rest = session.summary.substring("KBFOLDER:".length);
+      const [folderId, ...nameParts] = rest.split(":");
+      setActiveFolder({ id: folderId, name: nameParts.join(":") || "Folder" });
+    } else if (session) {
+      setActiveFolder(null);
+    }
+  }, [currentSessionId, sessions]);
 
   // Auto-fill from URL
   const searchParams = new URLSearchParams(searchString);
@@ -738,6 +780,58 @@ export default function Chat() {
     setPastedFile(null);
     if (textareaRef.current) textareaRef.current.style.height = "44px";
   };
+
+  // ─── Folder shortcut actions (Quiz / Flashcards / Summary) ────────────────
+  const postAssistantMessage = async (content: string) => {
+    if (!currentSessionId) return;
+    await apiRequest("POST", "/api/chat/save-message", { sessionId: currentSessionId, role: "assistant", content });
+    queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", currentSessionId] });
+  };
+
+  const folderQuizMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeFolder) return;
+      await apiRequest("POST", "/api/chat/save-message", { sessionId: currentSessionId, role: "user", content: "Quiz me on this folder" });
+      const res = await apiRequest("POST", `/api/kb/folders/${activeFolder.id}/quiz`, { questionCount: 5 });
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (!data?.questions) return;
+      const text = data.questions.map((q: any, i: number) =>
+        `**${i + 1}. ${q.question}**\n${q.options?.map((o: string) => (o === q.correctAnswer ? `✅ ${o}` : `• ${o}`)).join("\n")}`
+      ).join("\n\n");
+      await postAssistantMessage(`Here's a quick quiz from this folder:\n\n${text}`);
+    },
+  });
+
+  const folderFlashcardsMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeFolder) return;
+      await apiRequest("POST", "/api/chat/save-message", { sessionId: currentSessionId, role: "user", content: "Make flashcards from this folder" });
+      const res = await apiRequest("POST", `/api/kb/folders/${activeFolder.id}/flashcards`, { count: 10 });
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (!data?.flashcards) return;
+      const text = data.flashcards.map((c: any, i: number) => `**${i + 1}. ${c.front}**\n${c.back}`).join("\n\n");
+      await postAssistantMessage(`Here are flashcards from this folder:\n\n${text}`);
+    },
+  });
+
+  const folderSummaryMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeFolder) return;
+      await apiRequest("POST", "/api/chat/save-message", { sessionId: currentSessionId, role: "user", content: "Summarize this folder" });
+      const res = await apiRequest("POST", `/api/kb/folders/${activeFolder.id}/summary`);
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (!data?.summary) return;
+      await postAssistantMessage(data.summary);
+    },
+  });
+
+  const folderActionPending = folderQuizMutation.isPending || folderFlashcardsMutation.isPending || folderSummaryMutation.isPending;
 
   const handleSendMessage = async () => {
     if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
@@ -1313,6 +1407,45 @@ export default function Chat() {
                 <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-xs flex-1 truncate">{pastedFile.name} — will be processed as an attachment (12 credits)</span>
                 <button onClick={() => setPastedFile(null)} className="text-muted-foreground hover:text-foreground" data-testid="button-remove-pasted-file"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+
+            {/* Folder-scoped chat: banner + beginner-friendly shortcut buttons */}
+            {activeFolder && (
+              <div className="mb-2">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2 px-1">
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  Chatting about <span className="font-medium text-foreground">{activeFolder.name}</span> — answers come only from this folder's files
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderQuizMutation.mutate()}
+                    data-testid="button-folder-quiz-shortcut"
+                  >
+                    {folderQuizMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    Quiz me
+                  </Button>
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderFlashcardsMutation.mutate()}
+                    data-testid="button-folder-flashcards-shortcut"
+                  >
+                    {folderFlashcardsMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
+                    Flashcards
+                  </Button>
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderSummaryMutation.mutate()}
+                    data-testid="button-folder-summary-shortcut"
+                  >
+                    {folderSummaryMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                    Summarize
+                  </Button>
+                </div>
               </div>
             )}
 

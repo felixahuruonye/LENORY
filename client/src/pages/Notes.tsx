@@ -385,31 +385,9 @@ export default function KnowledgeBaseHome() {
     },
   });
 
-  // Chat practice
-  const chatPracticeMutation = useMutation({
-    mutationFn: async ({ folderId, message }: { folderId: string; message: string }) => {
-      const res = await apiRequest("POST", `/api/kb/folders/${folderId}/chat`, { message });
-      return res.json();
-    },
-    onSuccess: (data) => {
-      setChatMessages((prev) => [...prev, { role: "assistant", content: data.response || "I couldn't find an answer in this folder's files." }]);
-    },
-    onError: (err: any) => {
-      setChatMessages((prev) => [...prev, { role: "assistant", content: `Sorry, something went wrong: ${err.message}` }]);
-    },
-  });
-
-  const handleSendChat = () => {
-    if (!chatInput.trim() || !selectedFolder) return;
-    const message = chatInput.trim();
-    setChatMessages((prev) => [...prev, { role: "user", content: message }]);
-    setChatInput("");
-    chatPracticeMutation.mutate({ folderId: selectedFolder.id, message });
-  };
-
   const openFolderChat = () => {
-    setChatMessages([]);
-    setChatOpen(true);
+    if (!selectedFolder) return;
+    setLocation(`/chat?newFolderSession=${selectedFolder.id}&folderName=${encodeURIComponent(selectedFolder.name)}`);
   };
 
   // Generate quiz
@@ -553,9 +531,6 @@ export default function KnowledgeBaseHome() {
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [viewingFile, setViewingFile] = useState<KBFile | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [chatInput, setChatInput] = useState("");
   const [batchUploading, setBatchUploading] = useState(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1491,82 +1466,6 @@ export default function KnowledgeBaseHome() {
         </DialogContent>
       </Dialog>
 
-      {/* Ask Lenory — per-folder chat */}
-      <Dialog open={chatOpen} onOpenChange={setChatOpen}>
-        <DialogContent className="max-w-lg h-[85vh] flex flex-col p-0 gap-0">
-          <DialogHeader className="p-4 border-b">
-            <DialogTitle className="flex items-center gap-2">
-              <MessageCircle className="h-5 w-5 text-primary" />
-              Ask Lenory — {selectedFolder?.name}
-            </DialogTitle>
-            <DialogDescription>Answers only from the files in this folder.</DialogDescription>
-          </DialogHeader>
-
-          <div className="flex gap-2 p-3 border-b overflow-x-auto flex-shrink-0">
-            <Button
-              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
-              disabled={generateQuizMutation.isPending}
-              onClick={() => selectedFolder && generateQuizMutation.mutate({ folderId: selectedFolder.id, questionCount: 5 })}
-            >
-              {generateQuizMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-              Quiz me
-            </Button>
-            <Button
-              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
-              disabled={generateFlashcardsMutation.isPending}
-              onClick={() => selectedFolder && generateFlashcardsMutation.mutate({ folderId: selectedFolder.id, count: 10 })}
-            >
-              {generateFlashcardsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
-              Flashcards
-            </Button>
-            <Button
-              size="sm" variant="outline" className="gap-1.5 flex-shrink-0"
-              disabled={generateSummaryMutation.isPending}
-              onClick={() => selectedFolder && generateSummaryMutation.mutate(selectedFolder.id)}
-            >
-              {generateSummaryMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
-              Summary
-            </Button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {chatMessages.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center mt-8">
-                Ask a question about the files in this folder, or use a quick action above.
-              </p>
-            )}
-            {chatMessages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                  {m.content}
-                </div>
-              </div>
-            ))}
-            {chatPracticeMutation.isPending && (
-              <div className="flex justify-start">
-                <div className="bg-muted rounded-2xl px-4 py-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 border-t flex gap-2 flex-shrink-0">
-            <input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }}
-              placeholder="Ask a question about this folder..."
-              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
-              data-testid="input-folder-chat"
-            />
-            <Button size="icon" onClick={handleSendChat} disabled={chatPracticeMutation.isPending || !chatInput.trim()} data-testid="button-send-chat">
-              <MessageCircle className="h-4 w-4" />
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* File Content Viewer */}
       <Dialog open={!!viewingFile} onOpenChange={(open) => !open && setViewingFile(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
@@ -1660,6 +1559,7 @@ export default function KnowledgeBaseHome() {
         <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-2xl max-h-[85vh] overflow-hidden">
             <GitHubRepoBrowser
+              kbFolderId={selectedFolder.id}
               onSelect={(repo, branch, path) => {
                 if (path) importGitHubFileMutation.mutate({ repoName: repo.name, branch, path });
               }}

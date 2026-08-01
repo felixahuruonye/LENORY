@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface GitHubRepo {
   id: number;
@@ -47,15 +48,19 @@ interface GitHubRepoBrowserProps {
   onClose: () => void;
   selectedRepos?: string[];
   multiSelect?: boolean;
+  kbFolderId?: string;
 }
 
 export function GitHubRepoBrowser({ 
   onSelect, 
   onClose, 
   selectedRepos = [],
-  multiSelect = false
+  multiSelect = false,
+  kbFolderId,
 }: GitHubRepoBrowserProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [cloningRepoId, setCloningRepoId] = useState<number | null>(null);
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -218,18 +223,29 @@ export function GitHubRepoBrowser({
 
   // ─── SYNC ──────────────────────────────────────────────────
 
-  const handleSyncRepo = async (repo: GitHubRepo) => {
+  const handleCloneRepo = async (repo: GitHubRepo) => {
+    if (!kbFolderId) {
+      toast({ title: "No folder selected", description: "Open this from inside a Knowledge Base folder.", variant: "destructive" });
+      return;
+    }
+    setCloningRepoId(repo.id);
     try {
-      const res = await apiRequest("POST", "/api/integrations/sync", {
-        sourceType: "github",
-        repoId: repo.id,
+      const res = await apiRequest("POST", "/api/integrations/github/clone-repo", {
         repoName: repo.name,
-        branch: currentBranch,
+        branch: repo.default_branch || currentBranch || "main",
+        kbFolderId,
       });
       const data = await res.json();
-      toast({ title: "Sync started", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders", kbFolderId, "files"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({
+        title: `Cloned ${data.cloned} file${data.cloned === 1 ? "" : "s"}!`,
+        description: data.skippedTooMany ? "This repo is large — only the first 40 matching files were imported." : "Added to your Knowledge Base folder.",
+      });
     } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      toast({ title: "Clone failed", description: e.message, variant: "destructive" });
+    } finally {
+      setCloningRepoId(null);
     }
   };
 
@@ -355,13 +371,18 @@ export function GitHubRepoBrowser({
                           variant="ghost"
                           size="sm"
                           className="h-7 px-2 text-xs gap-1"
+                          disabled={cloningRepoId === repo.id}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleSyncRepo(repo);
+                            handleCloneRepo(repo);
                           }}
                         >
-                          <Upload className="h-3 w-3" />
-                          Sync
+                          {cloningRepoId === repo.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Upload className="h-3 w-3" />
+                          )}
+                          {cloningRepoId === repo.id ? "Cloning..." : "Clone to KB"}
                         </Button>
                         <Button
                           variant="default"

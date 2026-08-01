@@ -203,6 +203,8 @@ export function registerKbRoutes(app: Express) {
   app.post('/api/kb/folders/:id/quiz', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { questionCount = 5 } = req.body;
+      const credits = await storage.getKBFolderCredits(req.params.id);
+      if (credits.balance < 1) return res.status(402).json({ message: "This folder is out of credits. Top up to keep generating." });
       const context = await buildFolderContext(req.params.id);
       const raw = await chatWithAI([{ role: "user", content: `Based on this material:\n${context}\n\nGenerate ${questionCount} multiple-choice quiz questions. Respond with ONLY valid JSON array: [{"question":"...","options":["A","B","C","D"],"correctAnswer":"A","explanation":"..."}]` }]);
       const questions = parseJsonFromAI(raw);
@@ -211,12 +213,15 @@ export function registerKbRoutes(app: Express) {
         name: `Quiz (${questionCount} questions)`, file_type: "quiz",
         extracted_text: JSON.stringify(questions), file_size: raw.length,
       });
+      await storage.deductKBCredits(req.params.id, 1, "Generated quiz");
       res.json({ questions, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate quiz" }); }
   });
   app.post('/api/kb/folders/:id/flashcards', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { count = 10 } = req.body;
+      const credits = await storage.getKBFolderCredits(req.params.id);
+      if (credits.balance < 1) return res.status(402).json({ message: "This folder is out of credits. Top up to keep generating." });
       const context = await buildFolderContext(req.params.id);
       const raw = await chatWithAI([{ role: "user", content: `Based on this material:\n${context}\n\nGenerate ${count} flashcards. Respond with ONLY valid JSON array: [{"front":"...","back":"..."}]` }]);
       const flashcards = parseJsonFromAI(raw);
@@ -225,11 +230,14 @@ export function registerKbRoutes(app: Express) {
         name: `Flashcards (${count} cards)`, file_type: "flashcards",
         extracted_text: JSON.stringify(flashcards), file_size: raw.length,
       });
+      await storage.deductKBCredits(req.params.id, 1, "Generated flashcards");
       res.json({ flashcards, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate flashcards" }); }
   });
   app.post('/api/kb/folders/:id/summary', supabaseAuth, async (req: any, res: Response) => {
     try {
+      const credits = await storage.getKBFolderCredits(req.params.id);
+      if (credits.balance < 1) return res.status(402).json({ message: "This folder is out of credits. Top up to keep generating." });
       const context = await buildFolderContext(req.params.id);
       const summary = await chatWithAI([{ role: "user", content: `Summarize this study material clearly and concisely:\n${context}` }]);
       const saved = await storage.createKBFile({
@@ -237,6 +245,7 @@ export function registerKbRoutes(app: Express) {
         name: `Summary - ${new Date().toLocaleDateString()}`, file_type: "text",
         extracted_text: summary, file_size: summary.length,
       });
+      await storage.deductKBCredits(req.params.id, 1, "Generated summary");
       res.json({ summary, file: saved });
     } catch (error) { res.status(500).json({ message: "Failed to generate summary" }); }
   });

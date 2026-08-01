@@ -335,6 +335,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "user", content, attachments: null });
       const currentSessionMessages = sessionId ? await storage.getChatMessagesBySession(sessionId) : [];
       const history = [...currentSessionMessages];
+      let kbFolderContext = "";
+      if (currentSession?.summary?.startsWith("KBFOLDER:")) {
+        const folderId = currentSession.summary.substring("KBFOLDER:".length).split(":")[0];
+        if (folderId) {
+          try {
+            const folderFiles = await storage.getKBFiles(folderId);
+            const materials = folderFiles.map((f: any) => `--- ${f.name} ---\n${(f.extracted_text || "").substring(0, 3000)}`).join("\n\n").substring(0, 12000);
+            if (materials) {
+              kbFolderContext = `You are helping the student study material from their Knowledge Base folder. Answer using ONLY the material below — if it doesn't cover the question, say so clearly instead of guessing.\n\nFOLDER MATERIAL:\n${materials}\n\n`;
+            }
+          } catch {}
+        }
+      }
       let userProgress: any[] = [];
       let examResults: any[] = [];
       try {
@@ -405,6 +418,9 @@ You have FULL access to the system. You can:
       if (examResults.length > 0) {
         const lastExam = examResults[0];
         systemMessage += `\n\n## Recent Performance:\n- Last exam: ${lastExam.examName} (${lastExam.score}%)`;
+      }
+      if (kbFolderContext) {
+        systemMessage += `\n\n## 📚 KNOWLEDGE BASE FOLDER CONTEXT:\n${kbFolderContext}`;
       }
       if (extraContext) {
         systemMessage += `\n\n## ADDITIONAL CONTEXT:\n${extraContext}`;
@@ -1063,8 +1079,9 @@ You have FULL access to the system. You can:
 
   app.post('/api/chat/sessions', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { title, mode } = req.body;
-      res.json(await storage.createChatSession({ userId: req.userId, title: title || "New Chat", mode: mode || "chat", summary: "" }));
+      const { title, mode, kbFolderId, kbFolderName } = req.body;
+      const summary = kbFolderId ? `KBFOLDER:${kbFolderId}:${kbFolderName || "Folder"}` : "";
+      res.json(await storage.createChatSession({ userId: req.userId, title: title || "New Chat", mode: mode || "chat", summary }));
     } catch (error) { res.status(500).json({ message: "Failed to create chat session" }); }
   });
 
@@ -3646,6 +3663,65 @@ You have FULL access to the system. You can:
       res.json({ file: kbFile, imported: true });
     } catch (e: any) {
       console.error('GitHub import error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  const SKIP_DIRS = ['node_modules', 'dist', 'build', '.git', 'vendor', '.next', 'coverage'];
+  const TEXT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rb', '.php',
+    '.md', '.txt', '.json', '.yml', '.yaml', '.html', '.css', '.scss', '.sql', '.sh', '.env.example', '.gitignore'];
+  const MAX_CLONE_FILES = 40;
+  const MAX_FILE_BYTES = 60000;
+
+  app.post('/api/integrations/github/clone-repo', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      if (tier !== 'pro' && tier !== 'premium' && user?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'GitHub integration is a Premium feature' });
+      }
+      const { repoName, branch, kbFolderId } = req.body;
+      if (!repoName || !kbFolderId) return res.status(400).json({ error: 'repoName and kbFolderId are required' });
+      const token = await storage.getIntegrationToken(userId, 'github');
+      if (!token) return res.status(401).json({ error: 'Not connected to GitHub' });
+      const owner = token.userLogin || (await axios.get('https://api.github.com/user', { headers: { Authorization: `token ${token.accessToken}` } })).data.login;
+
+      const treeRes = await axios.get(
+        `https://api.github.com/repos/${owner}/${repoName}/git/trees/${branch || 'main'}?recursive=1`,
+        { headers: { Authorization: `token ${token.accessToken}` } }
+      );
+      const allFiles = (treeRes.data.tree || []).filter((item: any) =>
+        item.type === 'blob' &&
+        !SKIP_DIRS.some((d) => item.path.includes(`${d}/`)) &&
+        TEXT_EXTENSIONS.some((ext) => item.path.endsWith(ext)) &&
+        (item.size || 0) < MAX_FILE_BYTES
+      ).slice(0, MAX_CLONE_FILES);
+
+      let cloned = 0;
+      const errors: string[] = [];
+      for (const item of allFiles) {
+        try {
+          const blobRes = await axios.get(item.url, { headers: { Authorization: `token ${token.accessToken}` } });
+          const content = blobRes.data.encoding === 'base64' ? Buffer.from(blobRes.data.content, 'base64').toString('utf-8') : blobRes.data.content;
+          await storage.createKBFile({
+            folder_id: kbFolderId, user_id: userId, name: item.path,
+            file_type: 'code', source_type: 'github', external_id: `${repoName}:${item.path}`,
+            extracted_text: content, file_size: item.size || content.length,
+          });
+          cloned++;
+        } catch (e: any) {
+          errors.push(item.path);
+        }
+      }
+
+      res.json({
+        cloned, totalFound: allFiles.length, skippedTooMany: (treeRes.data.tree || []).length > MAX_CLONE_FILES,
+        errors: errors.length ? errors : undefined,
+      });
+    } catch (e: any) {
+      console.error('GitHub clone-repo error:', e.message);
       res.status(500).json({ error: e.message });
     }
   });

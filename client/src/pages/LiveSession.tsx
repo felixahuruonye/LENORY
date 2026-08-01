@@ -98,6 +98,7 @@ export default function LiveSession() {
   const [subject, setSubject] = useState("");
   const [activeTab, setActiveTab] = useState<"record" | "notes" | "history">("record");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [savingHistoryNoteId, setSavingHistoryNoteId] = useState<string | null>(null);
 
   // History
   const [history, setHistory] = useState<NoteEntry[]>([]);
@@ -704,6 +705,31 @@ export default function LiveSession() {
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => copyText(selectedNote.formattedNotes || selectedNote.rawTranscript, selectedNote.id)}>
                       {copiedId === selectedNote.id ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      disabled={savingHistoryNoteId === selectedNote.id}
+                      onClick={async () => {
+                        setSavingHistoryNoteId(selectedNote.id);
+                        try {
+                          const res = await apiRequest("POST", "/api/kb/save-transcript", {
+                            title: selectedNote.title,
+                            content: selectedNote.formattedNotes || selectedNote.rawTranscript,
+                          });
+                          const data = await res.json();
+                          toast({ title: "Saved to Knowledge Base", description: `Added to "${data.folder?.name || "Live Session Notes"}".` });
+                        } catch (e: any) {
+                          toast({ title: "Couldn't save", description: e.message, variant: "destructive" });
+                        } finally {
+                          setSavingHistoryNoteId(null);
+                        }
+                      }}
+                      data-testid="button-save-history-to-kb"
+                    >
+                      {savingHistoryNoteId === selectedNote.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+                      Save to Knowledge Base
                     </Button>
                   </div>
 
