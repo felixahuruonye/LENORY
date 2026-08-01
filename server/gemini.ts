@@ -1119,6 +1119,33 @@ Respond with ONLY valid JSON:
   }
 }
 
+// Extract text from an image (scanned notes, textbook photos, screenshots) using Gemini vision.
+// Returns empty string if no readable text is found, rather than throwing, so callers
+// can gracefully skip OCR on non-text images (e.g. photos, diagrams).
+export async function extractTextFromImage(base64: string, mimeType: string): Promise<string> {
+  const { GoogleGenAI } = await import('@google/genai');
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+  if (!geminiKey) return "";
+  const ai = new GoogleGenAI({ apiKey: geminiKey });
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("OCR_TIMEOUT")), 25000)
+  );
+  const prompt = "Extract ALL visible text from this image, exactly as written, preserving line breaks, structure, and any numbering. If it's a scanned page, handwritten note, textbook photo, or screenshot with text, transcribe it in full. If the image contains no readable text at all (e.g. it's a pure photo/diagram with no text), respond with exactly: NO_TEXT_FOUND";
+  try {
+    const ocrPromise = ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }] as any,
+    });
+    const response = await Promise.race([ocrPromise, timeoutPromise]);
+    const text = ((response as any).text || "").trim();
+    if (!text || text === "NO_TEXT_FOUND") return "";
+    return text;
+  } catch (e) {
+    console.error("OCR extraction error:", e);
+    return "";
+  }
+}
+
 // Transcribe audio using Gemini's multimodal capabilities
 export async function transcribeAudio(audioFilePath: string): Promise<{ text: string, duration: number }> {
   try {

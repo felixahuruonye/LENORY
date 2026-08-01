@@ -1491,7 +1491,16 @@ You have FULL access to the system. You can:
 
   app.post('/api/advanced/ocr', supabaseAuth, uploadMulter.single('image'), async (req: any, res: Response) => {
     if (!req.file) return res.status(400).json({ message: "No image provided" });
-    res.json({ message: "OCR processing will be available soon." });
+    try {
+      const { extractTextFromImage } = await import('./gemini');
+      const base64 = req.file.buffer.toString('base64');
+      const text = await extractTextFromImage(base64, req.file.mimetype);
+      if (!text) return res.json({ text: "", message: "No readable text was found in this image." });
+      res.json({ text });
+    } catch (error) {
+      console.error("OCR route error:", error);
+      res.status(500).json({ message: "OCR processing failed. Please try again." });
+    }
   });
 
   app.post('/api/advanced/transcribe-audio', supabaseAuth, uploadMulter.single('audio'), async (req: any, res: Response) => {
@@ -1501,7 +1510,36 @@ You have FULL access to the system. You can:
 
   app.post('/api/advanced/summarize-video', supabaseAuth, uploadMulter.single('video'), async (req: any, res: Response) => {
     if (!req.file) return res.status(400).json({ message: "No video provided" });
-    res.json({ message: "Video summarization coming soon." });
+    const MAX_INLINE_VIDEO_BYTES = 20 * 1024 * 1024; // 20MB — larger videos need a resumable upload API, not yet supported
+    if (req.file.buffer.length > MAX_INLINE_VIDEO_BYTES) {
+      return res.status(413).json({ message: "This video is too large (max 20MB for now). Try a shorter clip or compress it first." });
+    }
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+      if (!geminiKey) return res.status(500).json({ message: "Gemini API key not configured" });
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const base64 = req.file.buffer.toString('base64');
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("VIDEO_TIMEOUT")), 60000)
+      );
+      const summaryPromise = ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: req.file.mimetype, data: base64 } },
+            { text: "Watch this video and provide: 1) A clear summary of what it covers, 2) The key points a student should remember, organized as a short list. Focus on educational content — if it's a lecture or tutorial, structure the summary around the main topics covered in order." },
+          ],
+        }] as any,
+      });
+      const response = await Promise.race([summaryPromise, timeoutPromise]);
+      const summary = (response as any).text || "";
+      if (!summary) return res.status(500).json({ message: "Could not generate a summary for this video." });
+      res.json({ summary });
+    } catch (error: any) {
+      console.error("Video summarization error:", error?.message || error);
+      res.status(500).json({ message: "Video summarization failed. Please try again with a shorter clip." });
+    }
   });
 
   app.post('/api/advanced/schedule-sync', supabaseAuth, async (req: any, res: Response) => {

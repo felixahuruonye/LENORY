@@ -151,6 +151,32 @@ export function registerKbRoutes(app: Express) {
         fileType = "audio";
         const transcript = await transcribeAudioBuffer(buffer, originalname);
         extractedText = transcript || "";
+      } else if (mimetype.startsWith("image/")) {
+        fileType = "image";
+        const { extractTextFromImage } = await import('./gemini');
+        const ocrText = await extractTextFromImage(buffer.toString('base64'), mimetype);
+        extractedText = ocrText || "";
+      } else if (mimetype.startsWith("video/")) {
+        fileType = "video";
+        if (buffer.length <= 20 * 1024 * 1024) {
+          try {
+            const { GoogleGenAI } = await import('@google/genai');
+            const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+            if (geminiKey) {
+              const ai = new GoogleGenAI({ apiKey: geminiKey });
+              const result = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: [{ parts: [
+                  { inlineData: { mimeType: mimetype, data: buffer.toString('base64') } },
+                  { text: "Summarize this video for a student: what it covers and the key points to remember, as a short structured list." },
+                ] }] as any,
+              });
+              extractedText = (result as any).text || "";
+            }
+          } catch (e) {
+            console.error("KB video summarization error:", e);
+          }
+        }
       }
       const file = await storage.createKBFile({
         folder_id: req.params.id, user_id: req.userId, name: originalname,
