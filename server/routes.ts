@@ -307,10 +307,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
+    const wantsStream = req.body?.stream === true;
+    const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
+      if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
+    };
+    if (wantsStream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+    }
     try {
       const userId = req.userId;
       let { content, sessionId, context: extraContext, isAdvanced, overrideResponse, isLongPaste } = req.body;
-      if (!content?.trim()) return res.status(400).json({ message: "Message content is required" });
+      if (!content?.trim()) {
+        if (wantsStream) { res.write(`data: ${JSON.stringify({ type: "error", message: "Message content is required" })}\n\n`); return res.end(); }
+        return res.status(400).json({ message: "Message content is required" });
+      }
+      sendStatus("thinking", 5);
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
       // Credit check
@@ -319,6 +333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const totalCost = 1 + (isLongPaste ? 12 : 0);
         const credits = await getOrCreateCredits(userId, tier);
         if (credits.balance < totalCost) {
+          if (wantsStream) { res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance })}\n\n`); return res.end(); }
           return res.status(402).json({ message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance });
         }
         await deductCredits(userId, totalCost);
@@ -419,6 +434,7 @@ You have FULL access to the system. You can:
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
       const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
       if (wantsSearch) {
+        sendStatus("searching", 8);
         try {
           const { searchInternetWithGemini } = await import('./gemini');
           const searchData = await searchInternetWithGemini(content);
@@ -480,6 +496,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       ];
 
       let aiResponse: string;
+      sendStatus("writing", 6);
       if (overrideResponse) {
         aiResponse = overrideResponse;
       } else if (isAdvanced) {
@@ -543,10 +560,19 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       }
 
       logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
-      res.json({ success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined });
+      const finalPayload = { success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined };
+      if (wantsStream) {
+        res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
+        return res.end();
+      }
+      res.json(finalPayload);
     } catch (error) {
       console.error("🔥 /api/chat/send crashed:", error);
       logAdminError("/api/chat/send", error);
+      if (wantsStream) {
+        try { res.write(`data: ${JSON.stringify({ type: "error", message: "Failed to send message. Please try again." })}\n\n`); res.end(); } catch {}
+        return;
+      }
       res.status(500).json({ message: "Failed to send message. Please try again." });
     }
   });

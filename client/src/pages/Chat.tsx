@@ -66,7 +66,7 @@ import { FolderOpen, CheckCircle2, Layers } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
 import { useVoice } from "@/lib/useVoice";
 import { useVapi } from "@/hooks/useVapi";
 import { detectFeatureOpen } from "@/lib/featureRegistry";
@@ -81,17 +81,25 @@ const AI_MODELS = [
 ];
 
 // ─── Typing animation ──────────────────────────────────────────────────────────
-function TypingIndicator() {
+const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
+  thinking: { label: "LENORY is thinking...", icon: Brain },
+  searching: { label: "Searching the web...", icon: Search },
+  writing: { label: "Writing response...", icon: PenLine },
+};
+
+function TypingIndicator({ action }: { action?: string | null }) {
+  const info = ACTION_LABELS[action || "writing"] || ACTION_LABELS.writing;
+  const Icon = info.icon;
   return (
-    <div className="flex items-center gap-3 py-2 px-1">
+    <div className="flex items-center gap-3 py-2 px-1" data-testid="chat-action-indicator">
       <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center flex-shrink-0">
-        <PenLine className="w-4 h-4 text-primary animate-pulse" />
+        <Icon className="w-4 h-4 text-primary animate-pulse" />
       </div>
       <div className="flex items-center gap-1.5">
         <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} />
         <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} />
         <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} />
-        <span className="ml-2 text-sm text-muted-foreground italic">LENORY is writing...</span>
+        <span className="ml-2 text-sm text-muted-foreground italic">{info.label}</span>
       </div>
     </div>
   );
@@ -401,6 +409,7 @@ export default function Chat() {
   const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<any>(null);
   const [latestSources, setLatestSources] = useState<{ title: string; link: string; snippet: string }[] | null>(null);
+  const [chatAction, setChatAction] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -917,40 +926,73 @@ export default function Chat() {
     try {
       setIsLoading(true);
       setLatestSources(null);
+      setChatAction(null);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();
-      const res = await apiRequest("POST", "/api/chat/send", {
-        content: combinedContent,
-        sessionId,
-        autoLearn: true,
-        model: selectedModel.id,
-        isAdvanced: advancedMode,
-        isLongPaste: !!pastedFile,
+
+      const authHeaders = await getAuthHeaders();
+      const streamRes = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        credentials: "include",
+        body: JSON.stringify({
+          content: combinedContent,
+          sessionId,
+          autoLearn: true,
+          model: selectedModel.id,
+          isAdvanced: advancedMode,
+          isLongPaste: !!pastedFile,
+          stream: true,
+        }),
       });
 
-      if (res.status === 402) {
-        const errData = await res.json();
+      if (streamRes.status === 402) {
+        const errData = await streamRes.json();
         setShowCreditAlert(true);
         toast({ title: "Out of credits", description: errData.message || "You need more credits. Upgrade your plan.", variant: "destructive" });
         setIsLoading(false);
+        setChatAction(null);
+        return;
+      }
+      if (!streamRes.ok || !streamRes.body) {
+        toast({ title: "Message failed", description: "LENORY couldn't respond to that message. Please try again.", variant: "destructive" });
+        setIsLoading(false);
+        setChatAction(null);
         return;
       }
 
-      if (!res.ok) {
-        let errMessage = "LENORY couldn't respond to that message. Please try again.";
-        try {
-          const errData = await res.json();
-          errMessage = errData.message || errMessage;
-        } catch {}
-        toast({ title: "Message failed", description: errMessage, variant: "destructive" });
-        setIsLoading(false);
-        return;
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalSources: any = null;
+      let streamErrored = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(part.slice(6));
+            if (evt.type === "status") setChatAction(evt.status);
+            else if (evt.type === "done") finalSources = evt.sources || null;
+            else if (evt.type === "error") {
+              streamErrored = true;
+              toast({ title: "Message failed", description: evt.message || "Something went wrong.", variant: "destructive" });
+            }
+          } catch {}
+        }
       }
+
+      setChatAction(null);
+      if (streamErrored) { setIsLoading(false); return; }
 
       resetInput();
-      const responseData = await res.json();
-      setLatestSources(responseData.sources || null);
+      setLatestSources(finalSources);
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
@@ -958,6 +1000,7 @@ export default function Chat() {
       toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
     } finally {
       setIsLoading(false);
+      setChatAction(null);
     }
   };
 
@@ -1332,7 +1375,7 @@ export default function Chat() {
                 )}
 
                 {/* Writing / typing indicator */}
-                {isLoading && <TypingIndicator />}
+                {isLoading && <TypingIndicator action={chatAction} />}
 
                 <div ref={messagesEndRef} />
               </div>
