@@ -62,11 +62,12 @@ import {
   Maximize2,
   Download,
 } from "lucide-react";
-import { FolderOpen, CheckCircle2, Layers } from "lucide-react";
+import { FolderOpen, CheckCircle2, Layers, ChevronRight } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVoice } from "@/lib/useVoice";
 import { useVapi } from "@/hooks/useVapi";
 import { detectFeatureOpen } from "@/lib/featureRegistry";
@@ -408,7 +409,8 @@ export default function Chat() {
   const [historyTab, setHistoryTab] = useState("all");
   const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<any>(null);
-  const [latestSources, setLatestSources] = useState<{ title: string; link: string; snippet: string }[] | null>(null);
+  const [latestSources, setLatestSources] = useState<{ title: string; link: string; snippet: string; rawContent?: string }[] | null>(null);
+  const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -1355,11 +1357,9 @@ export default function Chat() {
                 {latestSources && latestSources.length > 0 && !isLoading && (
                   <div className="flex flex-wrap gap-2 pl-10 -mt-2">
                     {latestSources.map((src, i) => (
-                      <a
+                      <button
                         key={i}
-                        href={src.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        onClick={() => setOpenSource(src)}
                         className="flex items-center gap-1.5 text-xs bg-muted hover:bg-muted/70 rounded-full px-3 py-1.5 max-w-[220px]"
                         data-testid={`search-source-${i}`}
                       >
@@ -1369,7 +1369,8 @@ export default function Chat() {
                           alt=""
                         />
                         <span className="truncate">{src.title}</span>
-                      </a>
+                        <ChevronRight className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
+                      </button>
                     ))}
                   </div>
                 )}
@@ -1656,6 +1657,32 @@ export default function Chat() {
         onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
       <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" data-testid="input-camera-upload"
         onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
+
+      {/* Source mini-page */}
+      <Dialog open={!!openSource} onOpenChange={(open) => !open && setOpenSource(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              {openSource && (
+                <img
+                  src={`https://www.google.com/s2/favicons?domain=${new URL(openSource.link).hostname}&sz=32`}
+                  className="w-4 h-4 rounded-sm flex-shrink-0"
+                  alt=""
+                />
+              )}
+              <DialogTitle className="text-base">{openSource?.title}</DialogTitle>
+            </div>
+            <DialogDescription>
+              <a href={openSource?.link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
+                {openSource?.link}
+              </a>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto text-sm whitespace-pre-wrap leading-relaxed">
+            {openSource?.rawContent || openSource?.snippet || "No preview available — open the link above to view the full page."}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

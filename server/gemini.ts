@@ -28,6 +28,7 @@ interface SearchResult {
   snippet: string;
   link: string;
   source: string;
+  rawContent?: string;
 }
 
 interface WebSearchResponse {
@@ -313,6 +314,7 @@ export async function searchInternetWithGemini(query: string): Promise<WebSearch
           search_depth: 'basic',
           max_results: 5,
           include_answer: true,
+          include_raw_content: 'text',
         }),
       });
 
@@ -323,6 +325,7 @@ export async function searchInternetWithGemini(query: string): Promise<WebSearch
           snippet: r.content || r.snippet || '',
           link: r.url || '#',
           source: r.source || 'web',
+          rawContent: (r.raw_content || '').substring(0, 6000) || undefined,
         }));
         return {
           results,

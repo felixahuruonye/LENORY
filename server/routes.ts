@@ -430,7 +430,7 @@ You have FULL access to the system. You can:
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.`;
 
-      let searchSources: { title: string; link: string; snippet: string }[] = [];
+      let searchSources: { title: string; link: string; snippet: string; rawContent?: string }[] = [];
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
       const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
       if (wantsSearch) {
@@ -439,7 +439,7 @@ You have FULL access to the system. You can:
           const { searchInternetWithGemini } = await import('./gemini');
           const searchData = await searchInternetWithGemini(content);
           if (searchData.results?.length > 0) {
-            searchSources = searchData.results.map((r: any) => ({ title: r.title, link: r.link, snippet: r.snippet }));
+            searchSources = searchData.results.map((r: any) => ({ title: r.title, link: r.link, snippet: r.snippet, rawContent: r.rawContent }));
             const searchSummary = searchData.results.map((r: any) => `- ${r.title} (${r.link}): ${r.snippet}`).join("\n");
             systemMessage += `\n\n## 🔎 LIVE WEB SEARCH RESULTS (use these to answer accurately, and mention that you searched the web):\n${searchSummary}`;
             logApiUsage("tavily", userId, "/api/chat/send");
