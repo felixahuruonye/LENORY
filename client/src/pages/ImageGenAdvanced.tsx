@@ -31,6 +31,7 @@ export default function ImageGenAdvanced() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [selectedStyle, setSelectedStyle] = useState("photorealistic");
   const [galleryImagePreview, setGalleryImagePreview] = useState<string | null>(null);
+  const [referenceImageBase64, setReferenceImageBase64] = useState<string | null>(null);
 
   // Video state
   const [videoPrompt, setVideoPrompt] = useState("");
@@ -46,6 +47,9 @@ export default function ImageGenAdvanced() {
     if (!file) return;
     const url = URL.createObjectURL(file);
     setGalleryImagePreview(url);
+    const reader = new FileReader();
+    reader.onload = () => setReferenceImageBase64(reader.result as string);
+    reader.readAsDataURL(file);
     // Auto-fill prompt with file name hint
     if (!imagePrompt.trim()) {
       setImagePrompt(`A detailed image inspired by: ${file.name.replace(/\.[^.]+$/, "").replace(/_|-/g, " ")}`);
@@ -81,13 +85,15 @@ export default function ImageGenAdvanced() {
 
   const generateImageMutation = useMutation({
     mutationFn: async (data: { prompt: string; style: string }) => {
-      const response = await apiRequest("POST", "/api/generate-image", { ...data, resolution: "1024" });
+      const response = await apiRequest("POST", "/api/generate-image", { ...data, resolution: "1024", referenceImageBase64 });
       return response.json();
     },
     onSuccess: () => {
       toast({ title: "Image generated!", description: "Your image has been created." });
       queryClient.invalidateQueries({ queryKey: ["/api/generated-images"] });
       setImagePrompt("");
+      setGalleryImagePreview(null);
+      setReferenceImageBase64(null);
     },
     onError: (err: any) => {
       toast({ title: "Generation failed", description: err?.message || "Could not generate image", variant: "destructive" });
@@ -242,7 +248,7 @@ export default function ImageGenAdvanced() {
                   <div className="relative rounded-lg overflow-hidden border border-border">
                     <img src={galleryImagePreview} alt="Reference" className="w-full h-40 object-cover" />
                     <button
-                      onClick={() => { setGalleryImagePreview(null); if (imageGalleryRef.current) imageGalleryRef.current.value = ""; }}
+                      onClick={() => { setGalleryImagePreview(null); setReferenceImageBase64(null); if (imageGalleryRef.current) imageGalleryRef.current.value = ""; }}
                       className="absolute top-2 right-2 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-black/80"
                       data-testid="button-remove-gallery-image"
                     >

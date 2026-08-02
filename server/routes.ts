@@ -1952,7 +1952,7 @@ You have FULL access to the system. You can:
   app.post('/api/generate-image', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
-      const { prompt, relatedTopic, style } = req.body;
+      const { prompt, relatedTopic, style, referenceImageBase64 } = req.body;
       if (!prompt?.trim()) return res.status(400).json({ message: "Prompt is required" });
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
@@ -1982,7 +1982,7 @@ You have FULL access to the system. You can:
       };
       const styleTag = styleHints[style] || "";
       const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
-      const image = await generateImageWithLENORY(effectivePrompt);
+      const image = await generateImageWithLENORY(effectivePrompt, referenceImageBase64);
       logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
       const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });
       if (!isAdmin) {

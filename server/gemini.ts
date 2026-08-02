@@ -1,5 +1,6 @@
 // Gemini AI integration blueprint reference: javascript_gemini
 import { GoogleGenAI } from "@google/genai";
+import { supabaseDb } from "./db";
 
 // Use GOOGLE_API_KEY as the primary key (user's new valid key)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "";
@@ -594,7 +595,7 @@ interface ImageGenerationResult {
   prompt: string;
 }
 
-export async function generateImageWithLENORY(prompt: string): Promise<ImageGenerationResult> {
+export async function generateImageWithLENORY(prompt: string, referenceImageBase64?: string): Promise<ImageGenerationResult> {
   try {
     if (!apiKey) {
       throw new Error("Gemini API key not configured");
@@ -618,7 +619,7 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
     // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
     let imageUrl = "";
     try {
-      imageUrl = await generateImageWithNanoBanana(enhancedPrompt);
+      imageUrl = await generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64);
       console.log("✅ Image generated with Gemini Nano Banana");
     } catch (nanoBananaError) {
       console.warn("Nano Banana generation failed, trying Stability fallback:", nanoBananaError);
@@ -635,6 +636,18 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
       }
     }
 
+    // Convert the data URL into a real Storage URL — embedding multi-MB base64
+    // directly in JSON responses caused truncated responses ("Unexpected end
+    // of JSON input") and bloated the database with megabytes of text per row.
+    if (imageUrl.startsWith("data:")) {
+      try {
+        imageUrl = await uploadImageToStorage(imageUrl);
+      } catch (uploadErr) {
+        console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
+        // Keep the data URL as a last resort — better a possibly-large response than none at all
+      }
+    }
+
     return {
       url: imageUrl,
       prompt: enhancedPrompt
@@ -646,14 +659,41 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
   }
 }
 
-async function generateImageWithNanoBanana(prompt: string): Promise<string> {
+async function uploadImageToStorage(dataUrl: string): Promise<string> {
+  if (!supabaseDb) throw new Error("Supabase not configured");
+  const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid data URL format");
+  const [, mimeType, base64Data] = match;
+  const ext = mimeType.split("/")[1] || "png";
+  const buffer = Buffer.from(base64Data, "base64");
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const BUCKET = "generated-images";
+
+  let { error } = await supabaseDb.storage.from(BUCKET).upload(fileName, buffer, { contentType: mimeType, upsert: false });
+  if (error && /bucket not found/i.test(error.message)) {
+    await supabaseDb.storage.createBucket(BUCKET, { public: true });
+    ({ error } = await supabaseDb.storage.from(BUCKET).upload(fileName, buffer, { contentType: mimeType, upsert: false }));
+  }
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+
+  const { data } = supabaseDb.storage.from(BUCKET).getPublicUrl(fileName);
+  return data.publicUrl;
+}
+
+async function generateImageWithNanoBanana(prompt: string, referenceImageBase64?: string): Promise<string> {
   if (!apiKey) throw new Error("Gemini API key not configured");
+  const parts: any[] = [];
+  if (referenceImageBase64) {
+    const match = referenceImageBase64.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+  }
+  parts.push({ text: prompt });
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-image",
-    contents: prompt,
+    contents: [{ parts }] as any,
   });
-  const parts = (response as any)?.candidates?.[0]?.content?.parts || [];
-  for (const part of parts) {
+  const responseParts = (response as any)?.candidates?.[0]?.content?.parts || [];
+  for (const part of responseParts) {
     if (part.inlineData?.data) {
       const mimeType = part.inlineData.mimeType || "image/png";
       return `data:${mimeType};base64,${part.inlineData.data}`;
