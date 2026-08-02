@@ -25,6 +25,10 @@ import Courses from "@/pages/Courses";
 import Marketplace from "@/pages/Marketplace";
 import Exams from "@/pages/Exams";
 import WebsiteGenerator from "@/pages/WebsiteGenerator";
+import WebsiteBuilder from "@/pages/WebsiteBuilder";
+import WebsiteEditor from "@/pages/WebsiteEditor";
+import WebsiteDeploy from "@/pages/WebsiteDeploy";
+import WebsiteTemplates from "@/pages/WebsiteTemplates";
 import ViewWebsite from "@/pages/ViewWebsite";
 import WebsiteMenu from "@/pages/WebsiteMenu";
 import WebsiteLearn from "@/pages/WebsiteLearn";
@@ -108,6 +112,14 @@ function Router() {
       <Route path="/audio" component={AudioSystem} />
       <Route path="/agents" component={AgentsPanel} />
       <Route path="/website-generator" component={WebsiteGenerator} />
+      <Route path="/website-builder" component={WebsiteBuilder} />
+      <Route path="/website-builder/search" component={WebsiteBuilder} />
+      <Route path="/website-builder/apps" component={WebsiteBuilder} />
+      <Route path="/website-builder/launchpad" component={WebsiteBuilder} />
+      <Route path="/website-builder/partners" component={WebsiteBuilder} />
+      <Route path="/website-templates" component={WebsiteTemplates} />
+      <Route path="/website-editor/:id" component={WebsiteEditor} />
+      <Route path="/website-deploy" component={WebsiteDeploy} />
       <Route path="/website-menu" component={WebsiteMenu} />
       <Route path="/website-learn/:id" component={WebsiteLearn} />
       <Route path="/website-debug/:id" component={WebsiteDebug} />
