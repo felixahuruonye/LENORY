@@ -30,18 +30,23 @@ interface Voice {
 }
 
 const VOICES: Voice[] = [
-  // Nigerian voices (YarnGPT)
-  { id: "idera", name: "Idera", description: "Warm Nigerian female, clear diction", accent: "Nigerian English", language: "en-NG", sample: "Hello! I am LENORY, your AI learning assistant. I am here to help you excel in your studies.", category: "nigerian", speaker: "idera" },
-  { id: "temi", name: "Temi", description: "Friendly Lagos female voice", accent: "Nigerian English", language: "en-NG", sample: "Welcome back! Ready to learn something new today? Let me help you understand this topic.", category: "nigerian", speaker: "temi" },
-  { id: "jide", name: "Jide", description: "Professional Nigerian male", accent: "Nigerian English", language: "en-NG", sample: "Good day! I am your LENORY assistant. Tell me what you need help with today.", category: "nigerian", speaker: "jide" },
-  { id: "chidi", name: "Chidi", description: "Deep, authoritative Nigerian male", accent: "Nigerian English", language: "en-NG", sample: "Alright, let us get started. I will walk you through this concept step by step.", category: "nigerian", speaker: "chidi" },
-  { id: "yoruba_female", name: "Adunola", description: "Yoruba-accented English female", accent: "Yoruba English", language: "yo", sample: "Bawo ni! LENORY niyi, mo wa lati ran yin lowo pelu eko yin.", category: "nigerian", speaker: "yoruba_female" },
-  { id: "yoruba_male", name: "Biodun", description: "Yoruba-accented English male", accent: "Yoruba English", language: "yo", sample: "E kaaro! Emi LENORY ni. Jeki n gba yin lowo pelu eko yin loni.", category: "nigerian", speaker: "yoruba_male" },
-  { id: "igbo_female", name: "Chioma", description: "Igbo-accented English female", accent: "Igbo English", language: "ig", sample: "Nnoo! Abu m LENORY. Anọ m ebe a inyere gị aka na mmụta gị.", category: "nigerian", speaker: "igbo_female" },
-  { id: "igbo_male", name: "Emeka", description: "Igbo-accented English male", accent: "Igbo English", language: "ig", sample: "Good morning! I am LENORY. Let me help you with your studies today.", category: "nigerian", speaker: "igbo_male" },
-  { id: "hausa_male", name: "Ibrahim", description: "Hausa-accented English male", accent: "Hausa English", language: "ha", sample: "Sannu! Ni ne LENORY. Zan taimake ku da karatunku yau.", category: "nigerian", speaker: "hausa_male" },
-  { id: "hausa_female", name: "Fatima", description: "Hausa-accented English female", accent: "Hausa English", language: "ha", sample: "Barka da zuwa! Ni LENORY ce. Na zo taimakon karatunki.", category: "nigerian", speaker: "hausa_female" },
-  { id: "pidgin", name: "Bola", description: "Nigerian Pidgin English voice", accent: "Naija Pidgin", language: "pcm", sample: "How far! Na me be LENORY. I dey here to help you with your school work, no worry.", category: "nigerian", speaker: "pidgin" },
+  // Nigerian voices (YarnGPT) — these are the real voice IDs YarnGPT's API accepts
+  { id: "idera", name: "Idera", description: "Melodic, gentle", accent: "Nigerian English", language: "en-NG", sample: "Hello! I am LENORY, your AI learning assistant. I am here to help you excel in your studies.", category: "nigerian", speaker: "Idera" },
+  { id: "emma", name: "Emma", description: "Authoritative, deep", accent: "Nigerian English", language: "en-NG", sample: "Welcome back! Ready to learn something new today? Let me help you understand this topic.", category: "nigerian", speaker: "Emma" },
+  { id: "zainab", name: "Zainab", description: "Soothing, gentle", accent: "Nigerian English", language: "en-NG", sample: "Good day! I am your LENORY assistant. Tell me what you need help with today.", category: "nigerian", speaker: "Zainab" },
+  { id: "osagie", name: "Osagie", description: "Smooth, calm", accent: "Nigerian English", language: "en-NG", sample: "Alright, let us get started. I will walk you through this concept step by step.", category: "nigerian", speaker: "Osagie" },
+  { id: "wura", name: "Wura", description: "Young, sweet", accent: "Nigerian English", language: "en-NG", sample: "Hi there! Let's make studying fun today.", category: "nigerian", speaker: "Wura" },
+  { id: "jude", name: "Jude", description: "Warm, confident", accent: "Nigerian English", language: "en-NG", sample: "Good morning! I am LENORY. Let me help you with your studies today.", category: "nigerian", speaker: "Jude" },
+  { id: "chinenye", name: "Chinenye", description: "Engaging, warm", accent: "Nigerian English", language: "en-NG", sample: "Welcome! I'm excited to help you learn something new.", category: "nigerian", speaker: "Chinenye" },
+  { id: "tayo", name: "Tayo", description: "Upbeat, energetic", accent: "Nigerian English", language: "en-NG", sample: "Let's get this study session started!", category: "nigerian", speaker: "Tayo" },
+  { id: "regina", name: "Regina", description: "Mature, warm", accent: "Nigerian English", language: "en-NG", sample: "Hello, I'm here to guide you through today's lesson.", category: "nigerian", speaker: "Regina" },
+  { id: "femi", name: "Femi", description: "Rich, reassuring", accent: "Nigerian English", language: "en-NG", sample: "Don't worry, we'll work through this together.", category: "nigerian", speaker: "Femi" },
+  { id: "adaora", name: "Adaora", description: "Warm, engaging", accent: "Nigerian English", language: "en-NG", sample: "Nnoo! I'm here to help you with your studies.", category: "nigerian", speaker: "Adaora" },
+  { id: "umar", name: "Umar", description: "Calm, smooth", accent: "Nigerian English", language: "en-NG", sample: "Sannu! Let's begin today's lesson.", category: "nigerian", speaker: "Umar" },
+  { id: "mary", name: "Mary", description: "Energetic, youthful", accent: "Nigerian English", language: "en-NG", sample: "Hey! Ready to dive into something new?", category: "nigerian", speaker: "Mary" },
+  { id: "nonso", name: "Nonso", description: "Bold, resonant", accent: "Nigerian English", language: "en-NG", sample: "Let's tackle this topic with confidence.", category: "nigerian", speaker: "Nonso" },
+  { id: "remi", name: "Remi", description: "Melodious, warm", accent: "Nigerian English", language: "en-NG", sample: "How far! I'm here to make learning easy for you.", category: "nigerian", speaker: "Remi" },
+  { id: "adam", name: "Adam", description: "Deep, clear", accent: "Nigerian English", language: "en-NG", sample: "Good day! Let's get straight into it.", category: "nigerian", speaker: "Adam" },
 
   // International voices (OpenAI via VAPI)
   { id: "alloy", name: "Alloy", description: "Neutral, balanced AI voice", accent: "American English", language: "en-US", sample: "Hello! I'm LENORY, your AI learning assistant. How can I help you today?", category: "international", speaker: "alloy" },

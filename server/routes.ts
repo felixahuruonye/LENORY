@@ -3132,33 +3132,37 @@ You have FULL access to the system. You can:
     }
   });
 
+  app.post('/api/vapi/log-call', supabaseAuth, async (req: any, res: Response) => {
+    logApiUsage("vapi", req.userId, "/api/vapi/log-call");
+    res.json({ logged: true });
+  });
+
   // ─── YARNGPT TTS ────────────────────────────────────────────────────────────
 
   app.post('/api/tts/yarngpt', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { text, speaker = "idera" } = req.body;
+      const { text, speaker = "Idera" } = req.body;
       if (!text) return res.status(400).json({ error: "text is required" });
-      const hfResponse = await fetch("https://olamilekan-yarngpt.hf.space/run/predict", {
+      const apiKey = process.env.YARNGPT_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "YarnGPT is not configured (missing YARNGPT_API_KEY)" });
+
+      const ytResponse = await fetch("https://yarngpt.ai/api/v1/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: [text.slice(0, 500), speaker] }),
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.slice(0, 2000), voice: speaker, response_format: "mp3" }),
         signal: AbortSignal.timeout(30000),
       });
-      if (!hfResponse.ok) {
-        const errText = await hfResponse.text().catch(() => "");
-        console.warn(`YarnGPT failed (${hfResponse.status}): ${errText.slice(0, 200)}`);
-        return res.status(502).json({ error: "YarnGPT TTS service unavailable" });
+
+      if (!ytResponse.ok) {
+        const errText = await ytResponse.text().catch(() => "");
+        console.warn(`YarnGPT failed (${ytResponse.status}): ${errText.slice(0, 200)}`);
+        return res.status(502).json({ error: `YarnGPT TTS service error (${ytResponse.status})` });
       }
-      const data: any = await hfResponse.json();
-      const audioData = data?.data?.[0];
-      if (!audioData) return res.status(502).json({ error: "No audio data in YarnGPT response" });
-      if (typeof audioData === "string" && audioData.startsWith("http")) {
-        return res.json({ audioUrl: audioData });
-      }
-      if (audioData?.data) {
-        return res.json({ audioBase64: audioData.data, mimeType: audioData.mime_type || "audio/wav" });
-      }
-      return res.json({ audioData });
+
+      const arrayBuffer = await ytResponse.arrayBuffer();
+      const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
+      logApiUsage("yarngpt", req.userId, "/api/tts/yarngpt");
+      res.json({ audioBase64, mimeType: "audio/mpeg" });
     } catch (error: any) {
       console.error("YarnGPT TTS error:", error);
       res.status(500).json({ error: "TTS request failed" });

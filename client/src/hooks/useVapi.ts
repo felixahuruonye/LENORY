@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import Vapi from "@vapi-ai/web";
+import { apiRequest } from "@/lib/queryClient";
 
 // ============================================================
 // TYPES
@@ -64,6 +65,7 @@ export function useVapi(publicKey?: string): UseVapiReturn {
         await vapiRef.current.start(options);
         setIsCallActive(true);
         setError(null);
+        apiRequest("POST", "/api/vapi/log-call", {}).catch(() => {});
       } catch (err: any) {
         setError(err.message || "Failed to start call");
         console.error("Vapi start error:", err);

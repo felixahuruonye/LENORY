@@ -601,25 +601,19 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
       throw new Error("Gemini API key not configured");
     }
 
-    console.log("🎨 LENORY: Generating image with Stability AI for:", prompt);
-    
-    // Use Gemini to enhance and refine the image prompt
-    const enhancedPromptResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `You are an expert image prompt engineer. Take this simple image description and expand it into a detailed, vivid, and specific image prompt for Stability AI.
-
-Original prompt: "${prompt}"
-
-Provide ONLY the enhanced prompt without any additional text or explanation.`,
-    });
-
-    const enhancedPrompt = enhancedPromptResponse.text?.trim() || prompt;
-    console.log("✅ Enhanced prompt:", enhancedPrompt);
+    console.log("🎨 LENORY: Generating image for:", prompt);
+    // Skip the separate prompt-enhancement call — it was a second full Gemini
+    // round trip before image generation even started, pushing total time
+    // close to (or past) Render's request timeout and causing truncated
+    // responses ("Unexpected end of JSON input"). Nano Banana handles a
+    // plain descriptive prompt well on its own.
+    const enhancedPrompt = prompt;
 
     // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
     let imageUrl = "";
     try {
-      imageUrl = await generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64);
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 20000));
+      imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
       console.log("✅ Image generated with Gemini Nano Banana");
     } catch (nanoBananaError) {
       console.warn("Nano Banana generation failed, trying Stability fallback:", nanoBananaError);
@@ -641,7 +635,8 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
     // of JSON input") and bloated the database with megabytes of text per row.
     if (imageUrl.startsWith("data:")) {
       try {
-        imageUrl = await uploadImageToStorage(imageUrl);
+        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 8000));
+        imageUrl = await Promise.race([uploadImageToStorage(imageUrl), uploadTimeout]);
       } catch (uploadErr) {
         console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
         // Keep the data URL as a last resort — better a possibly-large response than none at all

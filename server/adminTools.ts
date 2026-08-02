@@ -468,6 +468,7 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
     { provider: "openrouter-deepseek", displayName: "OpenRouter (DeepSeek)", hasRealApi: false, dashboardUrl: "https://openrouter.ai/settings/credits" },
     { provider: "openrouter",          displayName: "OpenRouter (Claude/DeepSeek)", hasRealApi: true, dashboardUrl: "https://openrouter.ai/settings/credits" },
     { provider: "tavily",              displayName: "Tavily (Web Search)", hasRealApi: true, dashboardUrl: "https://app.tavily.com/billing" },
+    { provider: "yarngpt",             displayName: "YarnGPT (Nigerian TTS)", hasRealApi: false, dashboardUrl: "https://yarngpt.ai/pricing" },
     { provider: "gemini-nano-banana",  displayName: "Gemini Nano Banana (Image Gen)", hasRealApi: false, dashboardUrl: "https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas" },
   ];
 
