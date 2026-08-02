@@ -8,7 +8,7 @@ import os from "os";
 import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
-import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances } from "./adminTools";
+import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits } from "./creditsStore";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
