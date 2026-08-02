@@ -50,6 +50,15 @@ export default function AdminDashboard() {
     enabled: isAuthorized,
   });
 
+  const { data: cohorts, isLoading: cohortsLoading } = useQuery<any>({
+    queryKey: ["/api/admin/user-cohorts"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/user-cohorts");
+      return res.json();
+    },
+    enabled: isAuthorized && activeTab === "users",
+  });
+
   const { data: stats = { revenue: 0, activeUsers: 0 } } = useQuery({
     queryKey: ["/api/admin/stats"],
     enabled: isAuthorized,
@@ -376,6 +385,68 @@ export default function AdminDashboard() {
         </div>
 
         {/* Users Tab */}
+        {activeTab === "users" && (
+          <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Signup Cohorts</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {cohortsLoading || !cohorts ? (
+                <div className="flex justify-center p-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                  {Object.entries(cohorts.buckets).map(([label, count]: [string, any]) => (
+                    <div key={label} className="rounded-lg border border-border p-3 text-center">
+                      <div className="text-2xl font-bold">{count}</div>
+                      <div className="text-xs text-muted-foreground mt-1">{label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Full User Directory</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {cohortsLoading || !cohorts ? (
+                <div className="flex justify-center p-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : (
+                <div className="relative overflow-x-auto rounded-lg border border-border max-h-[500px] overflow-y-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-muted/50 text-muted-foreground sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Name</th>
+                        <th className="px-4 py-3 font-semibold">Email</th>
+                        <th className="px-4 py-3 font-semibold">ID</th>
+                        <th className="px-4 py-3 font-semibold">Joined</th>
+                        <th className="px-4 py-3 font-semibold">Last Active</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {cohorts.directory.map((u: any) => (
+                        <tr key={u.id} className="hover:bg-muted/20 transition-colors">
+                          <td className="px-4 py-3">{u.fullName}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
+                          <td className="px-4 py-3 font-mono text-xs">{u.id?.slice(0, 12)}...</td>
+                          <td className="px-4 py-3 text-xs">{new Date(u.joinedAt).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {u.lastActive ? new Date(u.lastActive).toLocaleString() : "No activity recorded"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          </>
+        )}
+
         {activeTab === "users" && (
           <Card>
             <CardHeader>

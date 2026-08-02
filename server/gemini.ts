@@ -615,20 +615,24 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
     const enhancedPrompt = enhancedPromptResponse.text?.trim() || prompt;
     console.log("✅ Enhanced prompt:", enhancedPrompt);
 
-    // Try to generate with Stability AI, fallback to placeholder if API key missing
+    // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
     let imageUrl = "";
-    
-    if (process.env.STABILITY_API_KEY) {
-      try {
-        imageUrl = await generateImageWithStabilityAI(enhancedPrompt);
-        console.log("✅ Image generated with Stability AI");
-      } catch (stabilityError) {
-        console.warn("Stability AI generation failed, using placeholder:", stabilityError);
+    try {
+      imageUrl = await generateImageWithNanoBanana(enhancedPrompt);
+      console.log("✅ Image generated with Gemini Nano Banana");
+    } catch (nanoBananaError) {
+      console.warn("Nano Banana generation failed, trying Stability fallback:", nanoBananaError);
+      if (process.env.STABILITY_API_KEY) {
+        try {
+          imageUrl = await generateImageWithStabilityAI(enhancedPrompt);
+          console.log("✅ Image generated with Stability AI (fallback)");
+        } catch (stabilityError) {
+          console.warn("Stability AI fallback also failed, using placeholder:", stabilityError);
+          imageUrl = generatePlaceholderImage(prompt);
+        }
+      } else {
         imageUrl = generatePlaceholderImage(prompt);
       }
-    } else {
-      console.warn("STABILITY_API_KEY not set, using placeholder image");
-      imageUrl = generatePlaceholderImage(prompt);
     }
 
     return {
@@ -640,6 +644,22 @@ Provide ONLY the enhanced prompt without any additional text or explanation.`,
     console.error("Error generating image with Gemini:", errorMsg);
     throw error;
   }
+}
+
+async function generateImageWithNanoBanana(prompt: string): Promise<string> {
+  if (!apiKey) throw new Error("Gemini API key not configured");
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash-image",
+    contents: prompt,
+  });
+  const parts = (response as any)?.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      const mimeType = part.inlineData.mimeType || "image/png";
+      return `data:${mimeType};base64,${part.inlineData.data}`;
+    }
+  }
+  throw new Error("Nano Banana returned no image data");
 }
 
 async function generateImageWithStabilityAI(prompt: string): Promise<string> {

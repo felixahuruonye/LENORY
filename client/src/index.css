@@ -581,4 +581,35 @@ html, body {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* Create Studio — signature aperture reveal for generated images */
+  .studio-bg {
+    background:
+      radial-gradient(circle at 15% 10%, rgba(139, 92, 246, 0.16), transparent 45%),
+      radial-gradient(circle at 85% 20%, rgba(34, 211, 238, 0.12), transparent 40%),
+      radial-gradient(circle at 50% 100%, rgba(245, 185, 66, 0.08), transparent 50%),
+      #0b0b14;
+  }
+  .dark .studio-bg {
+    background:
+      radial-gradient(circle at 15% 10%, rgba(139, 92, 246, 0.22), transparent 45%),
+      radial-gradient(circle at 85% 20%, rgba(34, 211, 238, 0.15), transparent 40%),
+      radial-gradient(circle at 50% 100%, rgba(245, 185, 66, 0.1), transparent 50%),
+      #08080f;
+  }
+  @keyframes aperture-in {
+    0% { opacity: 0; transform: scale(0.85) rotate(-3deg); filter: blur(16px) saturate(0.6); }
+    60% { opacity: 1; filter: blur(2px) saturate(1.1); }
+    100% { opacity: 1; transform: scale(1) rotate(0deg); filter: blur(0) saturate(1); }
+  }
+  .animate-aperture-in {
+    animation: aperture-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes orbit-shimmer {
+    to { transform: rotate(360deg); }
+  }
+  .orbit-ring {
+    background: conic-gradient(from 0deg, #8b5cf6, #22d3ee, #f5b942, #8b5cf6);
+    animation: orbit-shimmer 2.2s linear infinite;
+  }
 }

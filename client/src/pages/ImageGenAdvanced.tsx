@@ -158,8 +158,8 @@ export default function ImageGenAdvanced() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-background/80 border-b border-primary/10">
+    <div className="min-h-screen studio-bg">
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-background/60 border-b border-violet-500/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-4">
@@ -168,7 +168,7 @@ export default function ImageGenAdvanced() {
               </Button>
               <div className="flex items-center gap-3">
                 <img src="/favicon.png" alt="LENORY" className="h-7 w-7 rounded-lg object-cover" />
-                <h1 className="text-xl font-bold">Create Studio</h1>
+                <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-violet-400 via-cyan-300 to-amber-300 bg-clip-text text-transparent">Create Studio</h1>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -257,13 +257,16 @@ export default function ImageGenAdvanced() {
                 <div className="flex gap-2">
                   <Button
                     size="lg"
-                    className="flex-1"
+                    className="flex-1 bg-gradient-to-r from-violet-600 via-violet-500 to-cyan-500 hover:from-violet-500 hover:via-violet-400 hover:to-cyan-400 text-white border-0 relative overflow-hidden"
                     onClick={() => generateImageMutation.mutate({ prompt: imagePrompt, style: selectedStyle })}
                     disabled={generateImageMutation.isPending || !imagePrompt.trim()}
                     data-testid="button-generate-image"
                   >
                     {generateImageMutation.isPending ? (
-                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+                      <>
+                        <span className="orbit-ring w-4 h-4 rounded-full mr-2 [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))]" />
+                        Generating...
+                      </>
                     ) : (
                       <><Wand2 className="h-4 w-4 mr-2" />Generate (2 credits)</>
                     )}
@@ -292,19 +295,20 @@ export default function ImageGenAdvanced() {
             {/* Image History */}
             <div className="space-y-6">
               {generatedImages.length > 0 && (
-                <Card className="overflow-hidden" data-testid="card-preview">
+                <Card className="overflow-hidden border-violet-500/30 shadow-[0_0_40px_-12px_rgba(139,92,246,0.35)]" data-testid="card-preview">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
-                      <History className="h-5 w-5 text-primary" />
+                      <History className="h-5 w-5 text-violet-400" />
                       Latest Image
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="w-full aspect-square bg-secondary/50 rounded-lg overflow-hidden flex items-center justify-center">
                       <img
+                        key={generatedImages[0].imageUrl}
                         src={generatedImages[0].imageUrl}
                         alt={generatedImages[0].prompt}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover animate-aperture-in"
                         data-testid="img-preview"
                         onError={(e) => {
                           const target = e.currentTarget;

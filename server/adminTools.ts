@@ -69,6 +69,27 @@ export async function getApiUsageSummary() {
 }
 
 // Real balance check — Stability AI has a genuine, documented balance endpoint.
+export async function getTavilyBalance(): Promise<{ available: boolean; credits?: number; limit?: number; error?: string }> {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key) return { available: false, error: "TAVILY_API_KEY not configured" };
+  try {
+    const res = await fetch("https://api.tavily.com/usage", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => `HTTP ${res.status}`);
+      return { available: false, error: `Tavily API returned ${res.status}: ${text.substring(0, 100)}` };
+    }
+    const data = await res.json();
+    const usage = data.key?.usage ?? data.account?.usage ?? 0;
+    const limit = data.key?.limit ?? data.account?.limit ?? 1000;
+    return { available: true, credits: Math.max(limit - usage, 0), limit };
+  } catch (e) {
+    return { available: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function getStabilityBalance(): Promise<{ available: boolean; credits?: number; error?: string }> {
   const key = process.env.STABILITY_API_KEY;
   if (!key) return { available: false, error: "STABILITY_API_KEY not configured" };
@@ -367,6 +388,7 @@ export async function getModelUsageByTier() {
 // ── Provider balance dashboard ───────────────────────────────────────────────
 const PROVIDER_COST_PER_CALL_USD: Record<string, number> = {
   "gemini":             0.0001,
+  "gemini-nano-banana": 0.04,
   "openrouter-deepseek":0.0003,
   "openrouter":         0.002,
   "stability-image":    0.04,
@@ -374,6 +396,7 @@ const PROVIDER_COST_PER_CALL_USD: Record<string, number> = {
   "groq":               0.00005,
   "assemblyai":         0.005,
   "vapi":               0.05,
+  "tavily":             0.008,
 };
 
 export interface ProviderBalanceEntry {
@@ -434,6 +457,7 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
 
   const stabilityResult = await getStabilityBalance();
   const openrouterResult = await getOpenRouterBalance();
+  const tavilyResult = await getTavilyBalance();
 
   const PROVIDER_DEFS: { provider: string; displayName: string; hasRealApi: boolean; dashboardUrl: string }[] = [
     { provider: "gemini",              displayName: "Gemini (Google AI)",  hasRealApi: false, dashboardUrl: "https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas" },
@@ -443,6 +467,8 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
     { provider: "groq",                displayName: "Groq (Whisper STT)",  hasRealApi: false, dashboardUrl: "https://console.groq.com/settings/billing" },
     { provider: "openrouter-deepseek", displayName: "OpenRouter (DeepSeek)", hasRealApi: false, dashboardUrl: "https://openrouter.ai/settings/credits" },
     { provider: "openrouter",          displayName: "OpenRouter (Claude/DeepSeek)", hasRealApi: true, dashboardUrl: "https://openrouter.ai/settings/credits" },
+    { provider: "tavily",              displayName: "Tavily (Web Search)", hasRealApi: true, dashboardUrl: "https://app.tavily.com/billing" },
+    { provider: "gemini-nano-banana",  displayName: "Gemini Nano Banana (Image Gen)", hasRealApi: false, dashboardUrl: "https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas" },
   ];
 
   const fetchedAt = new Date().toISOString();
@@ -477,6 +503,15 @@ export async function getProviderBalances(): Promise<ProviderBalancesResult> {
         status = (balance ?? 0) < 100 ? "red" : (balance ?? 0) < 500 ? "yellow" : "green";
       } else {
         balanceError = openrouterResult.error || "Unavailable";
+        status = "red";
+      }
+    } else if (def.provider === "tavily") {
+      if (tavilyResult.available) {
+        balance     = tavilyResult.credits;
+        balanceUnit = "credits";
+        status = (balance ?? 0) < 100 ? "red" : (balance ?? 0) < 300 ? "yellow" : "green";
+      } else {
+        balanceError = tavilyResult.error || "Unavailable";
         status = "red";
       }
     } else {
@@ -551,6 +586,61 @@ export function getRecentErrors() {
 }
 
 // ── Real usage overview ──────────────────────────────────────────────────────
+export async function getUserCohorts() {
+  const users = await storage.getUsers();
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+
+  const buckets = {
+    "1-7 days": 0,
+    "7-14 days": 0,
+    "14-30 days": 0,
+    "30-60 days": 0,
+    "60-90 days": 0,
+    "90+ days / 1 year": 0,
+  };
+
+  // Real "last active" signal: most recent chat message per user (session tracking
+  // isn't populated anywhere in the app yet, so this is the best real data we have).
+  let lastActiveByUser: Record<string, string> = {};
+  try {
+    if (supabaseDb) {
+      const { data } = await supabaseDb
+        .from("chat_messages")
+        .select("user_id, created_at")
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      for (const row of data || []) {
+        if (!lastActiveByUser[row.user_id]) lastActiveByUser[row.user_id] = row.created_at;
+      }
+    }
+  } catch {}
+
+  const directory = users.map((u: any) => {
+    const createdAt = new Date(u.createdAt).getTime();
+    const ageDays = (now - createdAt) / day;
+    if (ageDays <= 7) buckets["1-7 days"]++;
+    else if (ageDays <= 14) buckets["7-14 days"]++;
+    else if (ageDays <= 30) buckets["14-30 days"]++;
+    else if (ageDays <= 60) buckets["30-60 days"]++;
+    else if (ageDays <= 90) buckets["60-90 days"]++;
+    else buckets["90+ days / 1 year"]++;
+
+    return {
+      id: u.id,
+      fullName: [u.firstName, u.lastName].filter(Boolean).join(" ") || "—",
+      email: u.email,
+      joinedAt: u.createdAt,
+      lastActive: lastActiveByUser[u.id] || null,
+      tier: u.subscriptionTier || "free",
+    };
+  });
+
+  directory.sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+
+  return { buckets, directory, totalUsers: users.length };
+}
+
 export async function getAdminOverview() {
   const users = await storage.getUsers();
 

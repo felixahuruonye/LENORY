@@ -914,6 +914,18 @@ You have FULL access to the system. You can:
   });
 
   // ─── PLATFORM HEALTH ──────────────────────────────────────────────────────
+  app.get('/api/admin/user-cohorts', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      const { getUserCohorts } = await import('./adminTools');
+      res.json(await getUserCohorts());
+    } catch (error) {
+      console.error("Error fetching user cohorts:", error);
+      res.status(500).json({ message: "Failed to fetch user cohorts" });
+    }
+  });
+
   app.get('/api/admin/platform-health', supabaseAuth, async (req: any, res: Response) => {
     try {
       const requester = await storage.getUser(req.userId);
@@ -1971,7 +1983,7 @@ You have FULL access to the system. You can:
       const styleTag = styleHints[style] || "";
       const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
       const image = await generateImageWithLENORY(effectivePrompt);
-      logApiUsage("stability-image", userId, "/api/generate-image");
+      logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
       const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });
       if (!isAdmin) {
         const newBalance = await deductCredits(userId, 2);
