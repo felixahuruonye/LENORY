@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import Vapi from "@vapi-ai/web";
 
 // ============================================================
 // TYPES
@@ -111,16 +112,8 @@ export function useVapi(publicKey?: string): UseVapiReturn {
       return;
     }
 
-    // Try to get Vapi from window (CDN) or global scope
-    const VapiClass = (window as any).Vapi || (typeof Vapi !== "undefined" && Vapi);
-
-    if (!VapiClass) {
-      setError("Vapi SDK not loaded. Ensure the script is included.");
-      return;
-    }
-
     try {
-      const vapi = new VapiClass(key) as VapiSDK;
+      const vapi = new Vapi(key) as unknown as VapiSDK;
       vapiRef.current = vapi;
       setIsInitialized(true);
       setError(null);
