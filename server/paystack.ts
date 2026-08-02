@@ -49,7 +49,7 @@ export async function initializePayment(
       amount, // Amount in kobo
       reference,
       metadata,
-      callback_url: `${process.env.REPLIT_DOMAINS?.split(",")[0] || "http://localhost:5000"}/marketplace?payment=success`,
+      callback_url: `${process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || process.env.REPLIT_DOMAINS?.split(",")[0] || "http://localhost:5000"}/marketplace?payment=success`,
     }),
   });
 

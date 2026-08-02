@@ -134,6 +134,22 @@ export default function AdminDashboard() {
     onError: () => toast({ title: "Reset failed", variant: "destructive" }),
   });
 
+  const [reconcileReference, setReconcileReference] = useState("");
+  const reconcilePaymentMutation = useMutation({
+    mutationFn: async (reference: string) => {
+      const res = await apiRequest("POST", "/api/admin/reconcile-payment", { reference });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Reconcile failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({ title: `Fixed! ${data.userEmail} is now on ${data.appliedTier}`, description: data.note });
+      setReconcileReference("");
+      refetchUsers();
+    },
+    onError: (err: any) => toast({ title: "Couldn't reconcile", description: err.message, variant: "destructive" }),
+  });
+
   // ─── FETCH FUNCTIONS ────────────────────────────────────────────────────
   const fetchPlatformHealth = async () => {
     try {
@@ -556,6 +572,33 @@ export default function AdminDashboard() {
         {/* Credits Tab */}
         {activeTab === "credits" && (
           <div className="space-y-6">
+            <Card className="border-destructive/40">
+              <CardHeader>
+                <CardTitle>Fix a Stuck Payment</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  If a user paid but their plan didn't upgrade, paste their Paystack reference (e.g. sub_xxxxx) below.
+                  This re-verifies directly with Paystack and applies the correct plan — it will not double-add credits.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="sub_FwQlv7kGK-MlH3GzxFc0C"
+                    value={reconcileReference}
+                    onChange={(e) => setReconcileReference(e.target.value)}
+                    data-testid="input-reconcile-reference"
+                  />
+                  <Button
+                    onClick={() => reconcilePaymentMutation.mutate(reconcileReference)}
+                    disabled={reconcilePaymentMutation.isPending || !reconcileReference.trim()}
+                    data-testid="button-reconcile-payment"
+                  >
+                    {reconcilePaymentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reconcile"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Adjust User Credits</CardTitle>

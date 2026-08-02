@@ -17,11 +17,13 @@ import {
 import { Link } from "wouter";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 export default function Marketplace() {
   const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
+  const [verifyingPayment, setVerifyingPayment] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -36,10 +38,49 @@ export default function Marketplace() {
     }
   }, [user, authLoading, toast]);
 
-  if (authLoading || !user) {
+  // Handle the redirect back from Paystack after payment — this was completely
+  // missing before, so a successful payment never actually got confirmed here
+  // and upgrades relied 100% on the webhook with no visible fallback.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") !== "success") return;
+    const reference = params.get("reference") || params.get("trxref");
+    if (!reference) return;
+
+    setVerifyingPayment(true);
+    (async () => {
+      try {
+        const res = await apiRequest("POST", "/api/payments/verify", { reference });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          toast({ title: "Payment confirmed!", description: `You're now on the ${data.tier} plan.` });
+          queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
+        } else {
+          toast({
+            title: "Payment received, but upgrade didn't apply",
+            description: data.message || "Please contact support with your payment reference so we can fix this manually.",
+            variant: "destructive",
+          });
+        }
+      } catch {
+        toast({
+          title: "Couldn't confirm payment",
+          description: "If you were charged, contact support with your payment reference — we'll fix it manually.",
+          variant: "destructive",
+        });
+      } finally {
+        setVerifyingPayment(false);
+        window.history.replaceState({}, "", "/marketplace");
+      }
+    })();
+  }, [authLoading, user]);
+
+  if (authLoading || !user || verifyingPayment) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-pulse text-muted-foreground">Loading...</div>
+        <div className="animate-pulse text-muted-foreground">{verifyingPayment ? "Confirming your payment..." : "Loading..."}</div>
       </div>
     );
   }

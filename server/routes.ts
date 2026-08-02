@@ -2654,6 +2654,48 @@ You have FULL access to the system. You can:
 
   // ─── PRICING & PAYMENT ──────────────────────────────────────────────────────
 
+  app.post('/api/admin/reconcile-payment', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const adminUser = await storage.getUser(req.userId);
+      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      const { reference } = req.body;
+      if (!reference) return res.status(400).json({ message: "reference is required" });
+
+      const paystackResponse = await verifyPayment(reference);
+      if (!paystackResponse.status || paystackResponse.data?.status !== "success") {
+        return res.status(400).json({ message: "Paystack does not show this payment as successful", detail: paystackResponse.message });
+      }
+      const tierId = paystackResponse.data.metadata?.tierId;
+      const userId = paystackResponse.data.metadata?.userId;
+      if (!tierId || !userId) {
+        return res.status(400).json({ message: "This payment has no tier/user metadata attached — can't determine what to grant." });
+      }
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: `No user found with id ${userId}` });
+
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
+      const updated = await storage.updateUser(userId, {
+        subscriptionTier: tierId,
+        subscriptionExpiresAt: expiresAt,
+        paystackCustomerId: paystackResponse.data.customer.email,
+      });
+      const { dailyAdd } = getTierLimits(tierId);
+      await getOrCreateCredits(userId, tierId);
+      // Don't re-add credits if this reference was already reconciled before (avoid double top-up)
+      res.json({
+        success: true,
+        userEmail: targetUser.email,
+        appliedTier: tierId,
+        subscriptionTierNowSaved: (updated as any)?.subscriptionTier === tierId,
+        note: "Tier applied. Credits were NOT re-added here to avoid double-crediting — use Adjust User Credits if they still need a manual top-up.",
+      });
+    } catch (error: any) {
+      console.error("Reconcile payment error:", error);
+      res.status(500).json({ message: "Failed to reconcile payment", detail: error?.message });
+    }
+  });
+
   app.post('/api/payments/initialize', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -2693,18 +2735,33 @@ You have FULL access to the system. You can:
 
   app.post('/api/payments/verify', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { reference, tierId } = req.body;
+      const { reference } = req.body;
       const userId = req.userId;
+      if (!reference) return res.status(400).json({ message: "reference is required" });
       const paystackResponse = await verifyPayment(reference);
       if (paystackResponse.status && paystackResponse.data?.status === "success") {
+        // Trust the tier from Paystack's own verified metadata (set at initialization),
+        // never a client-supplied value — otherwise a user could claim any tier for any payment.
+        const verifiedTierId = paystackResponse.data.metadata?.tierId;
+        const verifiedUserId = paystackResponse.data.metadata?.userId;
+        if (!verifiedTierId || verifiedUserId !== userId) {
+          return res.status(403).json({ message: "This payment reference doesn't match your account or plan." });
+        }
         const expiresAt = new Date();
         expiresAt.setMonth(expiresAt.getMonth() + 1);
-        await storage.updateUser(userId, {
-          subscriptionTier: tierId,
+        const updated = await storage.updateUser(userId, {
+          subscriptionTier: verifiedTierId,
           subscriptionExpiresAt: expiresAt,
           paystackCustomerId: paystackResponse.data.customer.email,
         });
-        res.json({ success: true, message: "Subscription activated" });
+        if (!updated || (updated as any).subscriptionTier !== verifiedTierId) {
+          logAdminError("payments-verify", `updateUser did not persist subscriptionTier for user ${userId} -> ${verifiedTierId}`);
+          return res.status(500).json({ message: "Payment verified but upgrade failed to save. Contact support with your reference." });
+        }
+        const { dailyAdd } = getTierLimits(verifiedTierId);
+        await getOrCreateCredits(userId, verifiedTierId);
+        await addCredits(userId, dailyAdd, verifiedTierId);
+        res.json({ success: true, message: "Subscription activated", tier: verifiedTierId });
       } else {
         res.status(400).json({ message: "Payment verification failed" });
       }
@@ -2747,11 +2804,14 @@ You have FULL access to the system. You can:
         }
         const expiresAt = new Date();
         expiresAt.setMonth(expiresAt.getMonth() + 1);
-        await storage.updateUser(userId, {
+        const updated = await storage.updateUser(userId, {
           subscriptionTier: tierId,
           subscriptionExpiresAt: expiresAt,
           paystackCustomerId: event.data.customer?.email,
         } as any);
+        if (!updated || (updated as any).subscriptionTier !== tierId) {
+          logAdminError("paystack-webhook", `subscriptionTier did NOT persist for user ${userId} -> ${tierId} (ref: ${event.data.reference}). Credits will still be added below — this is exactly the bug where credits update but tier doesn't.`);
+        }
         const { dailyAdd } = getTierLimits(tierId);
         await getOrCreateCredits(userId, tierId);
         await addCredits(userId, dailyAdd, tierId);
