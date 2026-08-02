@@ -38,18 +38,26 @@ function userFromAuth(authUser: any): User {
   };
 }
 
-// Attempt to enrich profile from local API (non-blocking, best-effort)
-async function tryFetchServerProfile(userId: string, accessToken: string): Promise<Partial<User> | null> {
+// Fetch the real user record from our database — this is the ONLY source of
+// truth for subscriptionTier. Retries once on failure instead of silently
+// giving up, since a single failed fetch previously meant the user was stuck
+// seeing stale/wrong tier data (from Supabase Auth metadata) for the entire
+// session with no way to recover except a hard refresh.
+async function fetchServerProfile(userId: string, accessToken: string, attempt = 1): Promise<Partial<User> | null> {
   try {
     const resp = await fetch('/api/auth/user', {
       headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     if (resp.ok) {
       const data = await resp.json();
       if (data?.id) return data as Partial<User>;
     }
   } catch {}
+  if (attempt < 2) {
+    await new Promise((r) => setTimeout(r, 800));
+    return fetchServerProfile(userId, accessToken, attempt + 1);
+  }
   return null;
 }
 
@@ -66,15 +74,21 @@ export function useAuth() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
         if (session?.user) {
-          // Set user immediately from auth data
+          // Paint instantly from auth metadata so the UI isn't blank...
           setUser(userFromAuth(session.user));
-          setIsLoading(false);
-          // Enrich in background from server profile
-          tryFetchServerProfile(session.user.id, session.access_token).then(serverProfile => {
-            if (isMounted && serverProfile) {
+          // ...but the tier/plan shown is not trustworthy until this resolves.
+          // This was the root cause of "payment fixed in the database but the
+          // app still shows free everywhere": the old code treated the
+          // metadata guess as good enough and only patched it in the
+          // background, best-effort, with no retry — so a single slow or
+          // failed request left the user permanently stuck on stale data.
+          const serverProfile = await fetchServerProfile(session.user.id, session.access_token);
+          if (isMounted) {
+            if (serverProfile) {
               setUser(prev => prev ? { ...prev, ...serverProfile } : prev);
             }
-          });
+            setIsLoading(false);
+          }
           return;
         }
       } catch (err: any) {
@@ -90,15 +104,14 @@ export function useAuth() {
       if (!isMounted) return;
 
       if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
-        // Set user instantly from auth data
         setUser(userFromAuth(session.user));
-        setIsLoading(false);
-        // Enrich in background
-        tryFetchServerProfile(session.user.id, session.access_token).then(serverProfile => {
-          if (isMounted && serverProfile) {
+        const serverProfile = await fetchServerProfile(session.user.id, session.access_token);
+        if (isMounted) {
+          if (serverProfile) {
             setUser(prev => prev ? { ...prev, ...serverProfile } : prev);
           }
-        });
+          setIsLoading(false);
+        }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsLoading(false);
@@ -150,6 +163,15 @@ export function useAuth() {
     return { error: error ? new Error(error.message) : null };
   }, []);
 
+  const refetchUser = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return;
+    const serverProfile = await fetchServerProfile(session.user.id, session.access_token);
+    if (serverProfile) {
+      setUser(prev => prev ? { ...prev, ...serverProfile } : userFromAuth(session.user));
+    }
+  }, []);
+
   return {
     user,
     isLoading,
@@ -159,5 +181,6 @@ export function useAuth() {
     signIn,
     signUp,
     resetPassword: resetPasswordRequest,
+    refetchUser,
   };
 }

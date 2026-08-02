@@ -1663,6 +1663,18 @@ class SupabaseStorage extends DatabaseStorage {
           const mapped = mapSupabaseUser(data);
           if (mapped?.email === STORAGE_ADMIN_EMAIL) {
             (mapped as any).subscriptionTier = 'premium';
+          } else if (
+            (mapped as any)?.subscriptionTier &&
+            (mapped as any).subscriptionTier !== 'free' &&
+            (mapped as any).subscriptionExpiresAt &&
+            new Date((mapped as any).subscriptionExpiresAt) < new Date()
+          ) {
+            // No cron job exists to auto-downgrade expired subscriptions — this
+            // was a real gap where a tier could stay "pro"/"premium" forever
+            // past its paid period. Enforce it here instead: self-healing on
+            // the very next read after expiry, no scheduled job needed.
+            (mapped as any).subscriptionTier = 'free';
+            this.updateUser(id, { subscriptionTier: 'free', subscriptionExpiresAt: null }).catch(() => {});
           }
           return mapped;
         }

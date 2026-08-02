@@ -20,7 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
 export default function Marketplace() {
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading, refetchUser } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [verifyingPayment, setVerifyingPayment] = useState(false);
@@ -55,7 +55,7 @@ export default function Marketplace() {
         const data = await res.json();
         if (res.ok && data.success) {
           toast({ title: "Payment confirmed!", description: `You're now on the ${data.tier} plan.` });
-          queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          await refetchUser();
           queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
         } else {
           toast({
