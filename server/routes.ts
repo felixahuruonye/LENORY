@@ -1982,7 +1982,8 @@ You have FULL access to the system. You can:
       };
       const styleTag = styleHints[style] || "";
       const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
-      const image = await generateImageWithLENORY(effectivePrompt, referenceImageBase64);
+      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 22000));
+      const image = await Promise.race([generateImageWithLENORY(effectivePrompt, referenceImageBase64), overallTimeout]);
       logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
       const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });
       if (!isAdmin) {

@@ -612,22 +612,14 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
     // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
     let imageUrl = "";
     try {
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 20000));
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 15000));
       imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
       console.log("✅ Image generated with Gemini Nano Banana");
     } catch (nanoBananaError) {
-      console.warn("Nano Banana generation failed, trying Stability fallback:", nanoBananaError);
-      if (process.env.STABILITY_API_KEY) {
-        try {
-          imageUrl = await generateImageWithStabilityAI(enhancedPrompt);
-          console.log("✅ Image generated with Stability AI (fallback)");
-        } catch (stabilityError) {
-          console.warn("Stability AI fallback also failed, using placeholder:", stabilityError);
-          imageUrl = generatePlaceholderImage(prompt);
-        }
-      } else {
-        imageUrl = generatePlaceholderImage(prompt);
-      }
+      console.warn("Nano Banana generation failed:", nanoBananaError);
+      // Stability AI is currently confirmed broken (invalid/expired key returning 401)
+      // — skip it rather than waste more time on a guaranteed-to-fail fallback.
+      imageUrl = generatePlaceholderImage(prompt);
     }
 
     // Convert the data URL into a real Storage URL — embedding multi-MB base64
@@ -635,7 +627,7 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
     // of JSON input") and bloated the database with megabytes of text per row.
     if (imageUrl.startsWith("data:")) {
       try {
-        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 8000));
+        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 5000));
         imageUrl = await Promise.race([uploadImageToStorage(imageUrl), uploadTimeout]);
       } catch (uploadErr) {
         console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
