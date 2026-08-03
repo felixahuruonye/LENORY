@@ -63,7 +63,11 @@ export default function LiveAI() {
 
   // VAPI Live voice call — wire transcripts directly into chat messages via ref callback
   const vapi = useVapi({
-    onMessage: (msg) => vapiMessageHandlerRef.current?.(msg),
+    onMessage: (msg) => {
+      if ((msg.role === "user" || msg.role === "assistant") && msg.content) {
+        vapiMessageHandlerRef.current?.({ role: msg.role, content: msg.content });
+      }
+    },
   });
 
   // Note: MediaRecorder refs removed - all audio uses PCM streaming via ScriptProcessor
@@ -885,7 +889,7 @@ export default function LiveAI() {
                     {vapi.status === "idle" || vapi.status === "error" ? (
                       <Button
                         size="sm"
-                        onClick={() => vapi.startCall()}
+                        onClick={() => vapi.start()}
                         className="gap-1"
                         data-testid="button-start-vapi-call"
                       >
@@ -896,7 +900,7 @@ export default function LiveAI() {
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={vapi.stopCall}
+                        onClick={vapi.stop}
                         className="gap-1"
                         data-testid="button-stop-vapi-call"
                       >

@@ -3077,8 +3077,9 @@ You have FULL access to the system. You can:
 
   app.post('/api/chat/analyze-vision', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { base64, mimeType, fileName, prompt, sessionId } = req.body;
-      if (!base64 || !mimeType) return res.status(400).json({ error: "Missing base64 or mimeType" });
+      const { base64, mimeType: rawMimeType, fileName, prompt, sessionId } = req.body;
+      if (!base64 || !rawMimeType) return res.status(400).json({ error: "Missing base64 or mimeType" });
+      const mimeType = (rawMimeType === "application/octet-stream" || !rawMimeType) ? "image/jpeg" : rawMimeType;
       let noteContextInstruction = "";
       if (sessionId) {
         try {
@@ -3086,6 +3087,11 @@ You have FULL access to the system. You can:
           if (session?.summary?.startsWith("__NOTE_CONTEXT__")) {
             const noteContent = session.summary.substring("__NOTE_CONTEXT__".length);
             noteContextInstruction = `You are helping a student practise using their own uploaded notes. Answer using ONLY the note content below — if the note doesn't cover the question, say so clearly.\n\nSTUDENT'S NOTE:\n${noteContent}\n\n`;
+          } else if (session?.summary?.startsWith("KBFOLDER:")) {
+            const folderId = session.summary.substring("KBFOLDER:".length).split(":")[0];
+            const files = await storage.getKBFiles(folderId);
+            const materials = files.map((f: any) => `--- ${f.name} ---\n${(f.extracted_text || "").substring(0, 3000)}`).join("\n\n").substring(0, 12000);
+            if (materials) noteContextInstruction = `You are helping the student study material from their Knowledge Base folder. Consider this context alongside the file being analyzed:\n\n${materials}\n\n`;
           }
         } catch {}
       }

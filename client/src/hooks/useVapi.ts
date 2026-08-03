@@ -24,10 +24,15 @@ export interface UseVapiReturn {
   messages: VapiMessage[];
   error: string | null;
   isInitialized: boolean;
+  isSpeaking: boolean;
+  callDurationSeconds: number;
+  status: "idle" | "connecting" | "active" | "error";
   start: (options?: { customData?: any }) => Promise<void>;
   stop: () => void;
   toggle: () => void;
   clearMessages: () => void;
+  startCall: (options?: { customData?: any }) => Promise<void>;
+  stopCall: () => void;
 }
 
 // Vapi SDK types (simplified)
@@ -42,8 +47,13 @@ interface VapiSDK {
 // HOOK
 // ============================================================
 
-export function useVapi(publicKey?: string): UseVapiReturn {
+export function useVapi(options?: string | { publicKey?: string; onMessage?: (msg: VapiMessage) => void }): UseVapiReturn {
+  const publicKey = typeof options === "string" ? options : options?.publicKey;
+  const onMessageCallback = typeof options === "object" ? options?.onMessage : undefined;
   const [isCallActive, setIsCallActive] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [callDurationSeconds, setCallDurationSeconds] = useState(0);
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [transcript, setTranscript] = useState("");
   const [messages, setMessages] = useState<VapiMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +61,9 @@ export function useVapi(publicKey?: string): UseVapiReturn {
 
   const vapiRef = useRef<VapiSDK | null>(null);
   const onMessageRef = useRef<((msg: VapiMessage) => void) | null>(null);
+  useEffect(() => {
+    onMessageRef.current = onMessageCallback || null;
+  }, [onMessageCallback]);
 
   // ============================================================
   // START CALL
@@ -126,12 +139,21 @@ export function useVapi(publicKey?: string): UseVapiReturn {
         setError(null);
         setTranscript("");
         setMessages([]);
+        setCallDurationSeconds(0);
+        if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = setInterval(() => setCallDurationSeconds((s) => s + 1), 1000);
       });
 
       // ─── EVENT: call-end ───────────────────────────────────
       vapi.on("call-end", () => {
         setIsCallActive(false);
+        setIsSpeaking(false);
+        if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
       });
+
+      // ─── EVENT: speech-start / speech-end (assistant is talking) ──
+      vapi.on("speech-start", () => setIsSpeaking(true));
+      vapi.on("speech-end", () => setIsSpeaking(false));
 
       // ─── EVENT: error ──────────────────────────────────────
       vapi.on("error", (err: any) => {
@@ -202,15 +224,22 @@ export function useVapi(publicKey?: string): UseVapiReturn {
   // ============================================================
   // RETURN
   // ============================================================
+  const status: "idle" | "connecting" | "active" | "error" = error ? "error" : isCallActive ? "active" : "idle";
+
   return {
     isCallActive,
     transcript,
     messages,
     error,
     isInitialized,
+    isSpeaking,
+    callDurationSeconds,
+    status,
     start,
     stop,
     toggle,
     clearMessages,
+    startCall: start,
+    stopCall: stop,
   };
 }

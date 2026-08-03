@@ -367,7 +367,7 @@ function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessage
           <div className="flex gap-3">
             {(status === "idle" || status === "error") && (
               <Button
-                onClick={() => startCall(chatMessages?.map((m) => ({ role: m.role, content: m.content })))}
+                onClick={() => startCall({ customData: { history: chatMessages?.map((m) => ({ role: m.role, content: m.content })) } })}
                 className="bg-primary"
                 data-testid="button-start-voice-call"
               >
@@ -517,7 +517,12 @@ export default function Chat() {
       const results = await Promise.all(filesToSend.map(async ({ file }) => {
         try {
           const base64 = await fileToBase64(file);
-          const mimeType = file.type || "application/octet-stream";
+          const extToMime: Record<string, string> = {
+            jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+            gif: "image/gif", heic: "image/heic", heif: "image/heif", pdf: "application/pdf",
+          };
+          const ext = file.name.split(".").pop()?.toLowerCase() || "";
+          const mimeType = file.type || extToMime[ext] || "image/jpeg";
           const res = await Promise.race([
             apiRequest("POST", "/api/chat/analyze-vision", {
               base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
