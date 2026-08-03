@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom';
 // client/src/components/VoiceHistoryModal.tsx
 import { useState, useEffect } from "react";
 import {
@@ -23,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useNavigate } from "react-router-dom";
+import { useLocation } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 
 interface TranscriptMessage {
@@ -51,7 +50,7 @@ export function VoiceHistoryModal({ open, onOpenChange }: VoiceHistoryModalProps
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null);
   const [viewingTranscript, setViewingTranscript] = useState<Recording | null>(null);
   const { toast } = useToast();
-  const navigate = useNavigate();
+  const [, navigate] = useLocation();
 
   // Fetch recordings when modal opens
   const fetchRecordings = async () => {

@@ -669,18 +669,36 @@ export class DatabaseStorage implements IStorage {
 
   // Generated image operations
   async createGeneratedImage(image: InsertGeneratedImage): Promise<GeneratedImage> {
-    const [newImage] = await db.insert(generatedImages).values(image).returning();
-    return newImage;
+    const now = new Date().toISOString();
+    const row = {
+      id: (image as any).id || nanoid(),
+      user_id: image.userId,
+      prompt: image.prompt,
+      image_url: image.imageUrl,
+      related_topic: (image as any).relatedTopic || null,
+      tags: (image as any).tags || null,
+      created_at: now,
+    };
+    if (supabaseDb) {
+      const { data, error } = await supabaseDb.from('generated_images').insert(row).select().single();
+      if (error) { console.error('createGeneratedImage error:', error); throw new Error(`Failed to save generated image: ${error.message}`); }
+      return { id: data.id, userId: data.user_id, prompt: data.prompt, imageUrl: data.image_url, relatedTopic: data.related_topic, tags: data.tags, createdAt: data.created_at } as GeneratedImage;
+    }
+    return { id: row.id, userId: image.userId, prompt: image.prompt, imageUrl: image.imageUrl, relatedTopic: (image as any).relatedTopic || null, tags: (image as any).tags || null, createdAt: new Date() } as unknown as GeneratedImage;
   }
 
   async getGeneratedImagesByUser(userId: string): Promise<GeneratedImage[]> {
-    const images = await db.select().from(generatedImages).where(eq(generatedImages.userId, userId)).orderBy(desc(generatedImages.createdAt));
-    return images.map((img: any) => ({ ...img, imageUrl: (img as any).imageUrl })) as GeneratedImage[];
+    if (!supabaseDb) return [];
+    const { data, error } = await supabaseDb.from('generated_images').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    if (error) { console.error('getGeneratedImagesByUser error:', error); return []; }
+    return (data || []).map((d: any) => ({ id: d.id, userId: d.user_id, prompt: d.prompt, imageUrl: d.image_url, relatedTopic: d.related_topic, tags: d.tags, createdAt: d.created_at })) as GeneratedImage[];
   }
 
   async getGeneratedImagesByTopic(userId: string, topic: string): Promise<GeneratedImage[]> {
-    const images = await db.select().from(generatedImages).where(and(eq(generatedImages.userId, userId), eq(generatedImages.relatedTopic, topic))).orderBy(desc(generatedImages.createdAt));
-    return images.map((img: any) => ({ ...img, imageUrl: (img as any).imageUrl })) as GeneratedImage[];
+    if (!supabaseDb) return [];
+    const { data, error } = await supabaseDb.from('generated_images').select('*').eq('user_id', userId).eq('related_topic', topic).order('created_at', { ascending: false });
+    if (error) { console.error('getGeneratedImagesByTopic error:', error); return []; }
+    return (data || []).map((d: any) => ({ id: d.id, userId: d.user_id, prompt: d.prompt, imageUrl: d.image_url, relatedTopic: d.related_topic, tags: d.tags, createdAt: d.created_at })) as GeneratedImage[];
   }
 
   async deleteGeneratedImage(userId: string, imageId: string): Promise<void> {
@@ -854,16 +872,36 @@ export class DatabaseStorage implements IStorage {
 
   // Recording operations
   async createRecording(recording: InsertRecording): Promise<Recording> {
-    const [newRecording] = await db.insert(recordings).values(recording).returning();
-    return newRecording;
+    const row = {
+      id: (recording as any).id || nanoid(),
+      user_id: recording.userId,
+      session_id: (recording as any).sessionId || null,
+      title: recording.title,
+      audio_data: recording.audioData,
+      transcript: recording.transcript,
+      duration: recording.duration,
+      created_at: new Date().toISOString(),
+    };
+    if (supabaseDb) {
+      const { data, error } = await supabaseDb.from('recordings').insert(row).select().single();
+      if (error) { console.error('createRecording error:', error); throw new Error(`Failed to save recording: ${error.message}`); }
+      return { id: data.id, userId: data.user_id, sessionId: data.session_id, title: data.title, audioData: data.audio_data, transcript: data.transcript, duration: data.duration, createdAt: data.created_at } as Recording;
+    }
+    return { ...row, userId: row.user_id, sessionId: row.session_id, audioData: row.audio_data, createdAt: new Date() } as unknown as Recording;
   }
 
   async getRecordingsByUser(userId: string): Promise<Recording[]> {
-    return await db.select().from(recordings).where(eq(recordings.userId, userId)).orderBy(desc(recordings.createdAt));
+    if (!supabaseDb) return [];
+    const { data, error } = await supabaseDb.from('recordings').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    if (error) { console.error('getRecordingsByUser error:', error); return []; }
+    return (data || []).map((d: any) => ({ id: d.id, userId: d.user_id, sessionId: d.session_id, title: d.title, audioData: d.audio_data, transcript: d.transcript, duration: d.duration, createdAt: d.created_at })) as Recording[];
   }
 
   async deleteRecording(id: string): Promise<void> {
-    await db.delete(recordings).where(eq(recordings.id, id));
+    if (supabaseDb) {
+      const { error } = await supabaseDb.from('recordings').delete().eq('id', id);
+      if (error) console.error('deleteRecording error:', error);
+    }
   }
 
   // Generated Lesson operations
