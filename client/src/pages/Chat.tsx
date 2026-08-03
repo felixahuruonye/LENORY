@@ -367,7 +367,25 @@ function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessage
           <div className="flex gap-3">
             {(status === "idle" || status === "error") && (
               <Button
-                onClick={() => startCall({ customData: { history: chatMessages?.map((m) => ({ role: m.role, content: m.content })) } })}
+                onClick={() => {
+                  const history = chatMessages?.map((m) => `${m.role}: ${m.content}`).join("\n") || "";
+                  startCall({
+                    name: "LENORY Live Tutor",
+                    firstMessage: "Hey, I'm here! Want to keep going with what we were just talking about, or start something new?",
+                    firstMessageMode: "assistant-speaks-first",
+                    model: {
+                      provider: "openai",
+                      model: "gpt-4o-mini",
+                      messages: [
+                        {
+                          role: "system",
+                          content: `You are LENORY, a warm AI study companion continuing a voice conversation with a student. This is a spoken call — keep responses short, natural, and conversational, no markdown or lists. ${history ? `Here is the recent chat history for context:\n${history}` : ""}`,
+                        },
+                      ],
+                    },
+                    voice: { provider: "openai", voiceId: "nova" },
+                  });
+                }}
                 className="bg-primary"
                 data-testid="button-start-voice-call"
               >

@@ -28,6 +28,31 @@ const GEMINI_VOICES = [
   { id: "Puck", name: "Puck", description: "Playful & energetic" },
 ];
 
+// Real inline VAPI assistant config — previously vapi.start() was called with
+// NO configuration at all (no assistant ID, no first message, nothing), which
+// is why the call never actually spoke or responded meaningfully.
+function buildLiveAIAssistantConfig() {
+  return {
+    name: "LENORY Live Tutor",
+    firstMessage: "Hi! I'm LENORY, your AI study companion. What would you like to talk through today?",
+    firstMessageMode: "assistant-speaks-first",
+    model: {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are LENORY, a warm and encouraging AI study companion for Nigerian students. Keep responses conversational and concise — this is a spoken voice call, not a text chat, so avoid long lists, markdown, or anything hard to say out loud. Ask short follow-up questions to keep the conversation going, explain concepts clearly and patiently, and check in on the student's understanding.",
+        },
+      ],
+    },
+    voice: {
+      provider: "openai",
+      voiceId: "nova",
+    },
+  };
+}
+
 export default function LiveAI() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -889,7 +914,7 @@ export default function LiveAI() {
                     {vapi.status === "idle" || vapi.status === "error" ? (
                       <Button
                         size="sm"
-                        onClick={() => vapi.start()}
+                        onClick={() => vapi.start(buildLiveAIAssistantConfig())}
                         className="gap-1"
                         data-testid="button-start-vapi-call"
                       >

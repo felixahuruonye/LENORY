@@ -27,18 +27,18 @@ export interface UseVapiReturn {
   isSpeaking: boolean;
   callDurationSeconds: number;
   status: "idle" | "connecting" | "active" | "error";
-  start: (options?: { customData?: any }) => Promise<void>;
+  start: (options?: any) => Promise<void>;
   stop: () => void;
   toggle: () => void;
   clearMessages: () => void;
-  startCall: (options?: { customData?: any }) => Promise<void>;
+  startCall: (options?: any) => Promise<void>;
   stopCall: () => void;
 }
 
 // Vapi SDK types (simplified)
 interface VapiSDK {
   on(event: string, callback: (data: any) => void): void;
-  start(options?: { customData?: any }): Promise<void>;
+  start(options?: any): Promise<void>;
   stop(): void;
   send(data: any): void;
 }
@@ -69,7 +69,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
   // START CALL
   // ============================================================
   const start = useCallback(
-    async (options?: { customData?: any }) => {
+    async (options?: any) => {
       if (!vapiRef.current) {
         setError("Vapi not initialized. Call init first.");
         return;

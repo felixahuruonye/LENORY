@@ -109,19 +109,21 @@ export default function VoiceGallery() {
         audio.onerror = () => { setPlayingId(null); toast({ title: "Preview failed", description: "Could not play this voice sample", variant: "destructive" }); };
         await audio.play();
       } else {
-        // International voices: use browser TTS as preview
-        if ("speechSynthesis" in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(voice.sample);
-          utterance.lang = voice.language;
-          utterance.rate = 0.95;
-          utterance.onend = () => setPlayingId(null);
-          setPlayingId(voice.id);
-          setLoadingId(null);
-          window.speechSynthesis.speak(utterance);
-        } else {
-          throw new Error("Browser TTS not available");
-        }
+        // International voices: real OpenAI TTS (these ARE OpenAI voice IDs)
+        const res = await apiRequest("POST", "/api/tts/openai", {
+          text: voice.sample,
+          voice: voice.speaker,
+        });
+        const data = await res.json();
+        if (!data.audioBase64) throw new Error("No audio data returned");
+        const src = `data:${data.mimeType || "audio/mpeg"};base64,${data.audioBase64}`;
+        const audio = new Audio(src);
+        audioRef.current = audio;
+        setPlayingId(voice.id);
+        setLoadingId(null);
+        audio.onended = () => setPlayingId(null);
+        audio.onerror = () => { setPlayingId(null); toast({ title: "Preview failed", description: "Could not play this voice sample", variant: "destructive" }); };
+        await audio.play();
       }
     } catch (err: any) {
       setLoadingId(null);

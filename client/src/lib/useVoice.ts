@@ -1,37 +1,41 @@
 import { useCallback, useRef, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-export const GEMINI_VOICES = [
-  { id: "Aoede", name: "Aoede", description: "Bright & melodic", gender: "female", lang: "en-US" },
-  { id: "Charon", name: "Charon", description: "Deep & authoritative", gender: "male", lang: "en-US" },
-  { id: "Fenrir", name: "Fenrir", description: "Strong & commanding", gender: "male", lang: "en-US" },
-  { id: "Kore", name: "Kore", description: "Warm & nurturing", gender: "female", lang: "en-US" },
-  { id: "Puck", name: "Puck", description: "Playful & energetic", gender: "neutral", lang: "en-US" },
+export const OPENAI_VOICES = [
+  { id: "alloy", name: "Alloy", description: "Neutral, balanced", gender: "neutral", lang: "en-US" },
+  { id: "echo", name: "Echo", description: "Clear, articulate male", gender: "male", lang: "en-US" },
+  { id: "fable", name: "Fable", description: "Expressive, warm", gender: "neutral", lang: "en-US" },
+  { id: "onyx", name: "Onyx", description: "Deep, authoritative male", gender: "male", lang: "en-US" },
+  { id: "nova", name: "Nova", description: "Warm, expressive female", gender: "female", lang: "en-US" },
+  { id: "shimmer", name: "Shimmer", description: "Bright, energetic female", gender: "female", lang: "en-US" },
 ];
 
+// These are the real 16 voice IDs YarnGPT's API actually accepts
 export const NIGERIAN_VOICES = [
-  { id: "idera", name: "Idera", description: "Warm Nigerian female", gender: "female", lang: "en-NG", nigerian: true },
-  { id: "temi", name: "Temi", description: "Friendly Lagos female voice", gender: "female", lang: "en-NG", nigerian: true },
-  { id: "jide", name: "Jide", description: "Professional Nigerian male", gender: "male", lang: "en-NG", nigerian: true },
-  { id: "chidi", name: "Chidi", description: "Deep Nigerian male", gender: "male", lang: "en-NG", nigerian: true },
-  { id: "yoruba_female", name: "Adunola (Yoruba)", description: "Yoruba female", gender: "female", lang: "yo", nigerian: true },
-  { id: "igbo_female", name: "Chioma (Igbo)", description: "Igbo female", gender: "female", lang: "ig", nigerian: true },
-  { id: "hausa_male", name: "Ibrahim (Hausa)", description: "Hausa male", gender: "male", lang: "ha", nigerian: true },
-  { id: "pidgin", name: "Bola (Pidgin)", description: "Naija Pidgin", gender: "female", lang: "pcm", nigerian: true },
+  { id: "Idera", name: "Idera", description: "Melodic, gentle", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Emma", name: "Emma", description: "Authoritative, deep", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Zainab", name: "Zainab", description: "Soothing, gentle", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Osagie", name: "Osagie", description: "Smooth, calm", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Wura", name: "Wura", description: "Young, sweet", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Jude", name: "Jude", description: "Warm, confident", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Chinenye", name: "Chinenye", description: "Engaging, warm", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Tayo", name: "Tayo", description: "Upbeat, energetic", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Regina", name: "Regina", description: "Mature, warm", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Femi", name: "Femi", description: "Rich, reassuring", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Adaora", name: "Adaora", description: "Warm, engaging", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Umar", name: "Umar", description: "Calm, smooth", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Mary", name: "Mary", description: "Energetic, youthful", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Nonso", name: "Nonso", description: "Bold, resonant", gender: "male", lang: "en-NG", nigerian: true },
+  { id: "Remi", name: "Remi", description: "Melodious, warm", gender: "female", lang: "en-NG", nigerian: true },
+  { id: "Adam", name: "Adam", description: "Deep, clear", gender: "male", lang: "en-NG", nigerian: true },
 ];
 
-export const AVAILABLE_VOICES = [...NIGERIAN_VOICES, ...GEMINI_VOICES];
+export const AVAILABLE_VOICES = [...NIGERIAN_VOICES, ...OPENAI_VOICES];
 
-const DEFAULT_VOICE = "idera";
+const DEFAULT_VOICE = "Idera";
 
-// Nigerian YarnGPT speaker IDs — routed through our TTS proxy, not browser speech
-const YARNGPT_SPEAKERS = new Set([
-  "idera", "temi", "jide", "chidi",
-  "yoruba_female", "yoruba_male",
-  "igbo_female", "igbo_male",
-  "hausa_male", "hausa_female",
-  "pidgin",
-]);
+// Nigerian voices go through the real YarnGPT API; everything else uses real OpenAI TTS
+const YARNGPT_SPEAKERS = new Set(NIGERIAN_VOICES.map((v) => v.id));
 
 function preprocessTextForSpeech(text: string): string {
   let processed = text;
@@ -153,8 +157,35 @@ export function useVoice() {
         return;
       }
 
-      // Gemini / international voices — browser SpeechSynthesis
-      browserSpeak(processedText, preferredVoice);
+      // International voices — real OpenAI TTS, browser speech only as a last-resort fallback
+      try {
+        if (yarngptAudioRef.current) { yarngptAudioRef.current.pause(); yarngptAudioRef.current = null; }
+        if (synthRef.current) synthRef.current.cancel();
+        setIsPlaying(true);
+
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token || "";
+
+        const resp = await fetch("/api/tts/openai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ text: processedText.slice(0, 2000), voice: preferredVoice }),
+        });
+
+        if (!resp.ok) throw new Error("OpenAI TTS failed");
+        const data = await resp.json();
+        if (!data.audioBase64) throw new Error("No audio data returned");
+
+        const audio = new Audio(`data:${data.mimeType || "audio/mpeg"};base64,${data.audioBase64}`);
+        yarngptAudioRef.current = audio;
+        audio.onended = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
+        audio.onerror = () => { setIsPlaying(false); yarngptAudioRef.current = null; };
+        await audio.play();
+      } catch (err) {
+        console.warn("OpenAI TTS error, falling back to browser speech:", err);
+        setIsPlaying(false);
+        browserSpeak(processedText, preferredVoice);
+      }
     },
     [selectedVoice, browserSpeak]
   );

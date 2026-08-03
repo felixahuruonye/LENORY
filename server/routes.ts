@@ -3206,6 +3206,39 @@ You have FULL access to the system. You can:
 
   // ─── YARNGPT TTS ────────────────────────────────────────────────────────────
 
+  app.post('/api/tts/openai', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { text, voice = "alloy" } = req.body;
+      if (!text) return res.status(400).json({ error: "text is required" });
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "OpenAI TTS is not configured (missing OPENAI_API_KEY)" });
+
+      const validVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+      const safeVoice = validVoices.includes(voice) ? voice : "alloy";
+
+      const oaResponse = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "tts-1", input: text.slice(0, 2000), voice: safeVoice, response_format: "mp3" }),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (!oaResponse.ok) {
+        const errText = await oaResponse.text().catch(() => "");
+        console.warn(`OpenAI TTS failed (${oaResponse.status}): ${errText.slice(0, 200)}`);
+        return res.status(502).json({ error: `OpenAI TTS error (${oaResponse.status})` });
+      }
+
+      const arrayBuffer = await oaResponse.arrayBuffer();
+      const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
+      logApiUsage("openai-tts", req.userId, "/api/tts/openai");
+      res.json({ audioBase64, mimeType: "audio/mpeg" });
+    } catch (error: any) {
+      console.error("OpenAI TTS error:", error);
+      res.status(500).json({ error: "TTS request failed" });
+    }
+  });
+
   app.post('/api/tts/yarngpt', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { text, speaker = "Idera" } = req.body;
