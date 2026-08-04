@@ -25,6 +25,7 @@ export interface UseVapiReturn {
   error: string | null;
   isInitialized: boolean;
   isSpeaking: boolean;
+  hasGreeted: boolean;
   callDurationSeconds: number;
   status: "idle" | "connecting" | "active" | "error";
   start: (options?: any) => Promise<void>;
@@ -52,6 +53,12 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
   const onMessageCallback = typeof options === "object" ? options?.onMessage : undefined;
   const [isCallActive, setIsCallActive] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  // Tracks whether the assistant has spoken at least once this call. Before
+  // this existed, the UI showed "Listening..." the instant the call
+  // connected — even while the assistant's first greeting was still being
+  // synthesized — which made the connect delay look like a broken mic
+  // instead of what it actually was (TTS still generating).
+  const [hasGreeted, setHasGreeted] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
   const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [transcript, setTranscript] = useState("");
@@ -140,6 +147,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
         setTranscript("");
         setMessages([]);
         setCallDurationSeconds(0);
+        setHasGreeted(false);
         if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
         durationIntervalRef.current = setInterval(() => setCallDurationSeconds((s) => s + 1), 1000);
       });
@@ -148,11 +156,12 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
       vapi.on("call-end", () => {
         setIsCallActive(false);
         setIsSpeaking(false);
+        setHasGreeted(false);
         if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
       });
 
       // ─── EVENT: speech-start / speech-end (assistant is talking) ──
-      vapi.on("speech-start", () => setIsSpeaking(true));
+      vapi.on("speech-start", () => { setIsSpeaking(true); setHasGreeted(true); });
       vapi.on("speech-end", () => setIsSpeaking(false));
 
       // ─── EVENT: error ──────────────────────────────────────
@@ -233,6 +242,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
     error,
     isInitialized,
     isSpeaking,
+    hasGreeted,
     callDurationSeconds,
     status,
     start,

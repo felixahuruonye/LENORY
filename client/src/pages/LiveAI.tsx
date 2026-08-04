@@ -32,10 +32,16 @@ const GEMINI_VOICES = [
 // Real inline VAPI assistant config — previously vapi.start() was called with
 // NO configuration at all (no assistant ID, no first message, nothing), which
 // is why the call never actually spoke or responded meaningfully.
+//
+// NOTE: startSpeakingPlan previously used "smartEndpointingEnabled: true",
+// which is not a real Vapi field (the actual field is smartEndpointingPlan
+// with a provider) — so smart endpointing was silently never active. Fixed
+// to the documented LiveKit "aggressive" wait function, which cuts the
+// endpointing delay from ~0.6-2.7s down to ~0.2-0.6s.
 function buildLiveAIAssistantConfig() {
   return {
     name: "LENORY Live Tutor",
-    firstMessage: "Hi! I'm LENORY, your AI study companion. What would you like to talk through today?",
+    firstMessage: "Hi, I'm LENORY! What are we studying today?",
     firstMessageMode: "assistant-speaks-first",
     model: {
       provider: "openai",
@@ -56,7 +62,15 @@ function buildLiveAIAssistantConfig() {
     },
     startSpeakingPlan: {
       waitSeconds: 0.4,
-      smartEndpointingEnabled: true,
+      smartEndpointingPlan: {
+        provider: "livekit",
+        waitFunction: "2000 / (1 + exp(-10 * (x - 0.5)))",
+      },
+    },
+    stopSpeakingPlan: {
+      numWords: 0,
+      voiceSeconds: 0.15,
+      backoffSeconds: 0.8,
     },
   };
 }
@@ -485,11 +499,20 @@ export default function LiveAI() {
       
       pcmStreamRef.current = stream;
       
-      // Connect to Gemini Live first
+      // Connect to Gemini Live first, and actually wait for the socket to be
+      // open instead of guessing with a fixed 1s delay (which was either too
+      // slow on a fast connection or, on a slow one, not long enough).
       if (geminiWsRef.current?.readyState !== WebSocket.OPEN) {
         connectToGeminiLive();
-        // Wait for connection
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise<void>((resolve) => {
+          const start = Date.now();
+          const check = setInterval(() => {
+            if (geminiWsRef.current?.readyState === WebSocket.OPEN || Date.now() - start > 4000) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 50);
+        });
       }
       
       // Create audio context at 16kHz
@@ -500,14 +523,35 @@ export default function LiveAI() {
       
       // Create media stream source
       const source = audioContext.createMediaStreamSource(stream);
+
+      // Browser autoGainControl alone doesn't reliably lift a whispered
+      // earbud-mic signal above the old fixed silence threshold — it was
+      // getting dropped as "silence" and never sent to Gemini at all. A
+      // compressor evens out the dynamic range first (so louder speech
+      // doesn't clip once boosted), then a gain stage lifts quiet/whispered
+      // audio so it's actually audible to the RMS check and to Gemini.
+      const compressor = audioContext.createDynamicsCompressor();
+      compressor.threshold.value = -50;
+      compressor.knee.value = 30;
+      compressor.ratio.value = 8;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = 3.5; // boost quiet/whispered input
+
+      source.connect(compressor);
+      compressor.connect(gainNode);
       
       // Create script processor for PCM extraction (4096 buffer size)
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       pcmProcessorRef.current = processor;
       
-      // Voice activity detection
+      // Voice activity detection — lowered from 0.01 so whispered speech
+      // (which sits well under that threshold even after gain) still
+      // registers as voice instead of being silently discarded.
       let silenceFrames = 0;
-      const SILENCE_THRESHOLD = 0.01;
+      const SILENCE_THRESHOLD = 0.0025;
       const SILENCE_FRAMES_LIMIT = 25; // ~1.5 seconds at 16kHz
       let hasVoice = false;
       
@@ -560,8 +604,9 @@ export default function LiveAI() {
         }
       };
       
-      // Connect the audio graph
-      source.connect(processor);
+      // Connect the audio graph — through the compressor + gain stage now,
+      // instead of straight from the raw mic source.
+      gainNode.connect(processor);
       processor.connect(audioContext.destination);
       
       isStreamingRef.current = true;

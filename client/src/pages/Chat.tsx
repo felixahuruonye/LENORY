@@ -288,7 +288,7 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 
 // ─── VAPI Voice Panel ─────────────────────────────────────────────────────────
 function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; chatMessages?: { role: string; content: string }[]; sessionId?: string | null }) {
-  const { status, isSpeaking, transcript, messages, callDurationSeconds, startCall, stopCall, error } = useVapi();
+  const { status, isSpeaking, hasGreeted, transcript, messages, callDurationSeconds, startCall, stopCall, error } = useVapi();
   const prevStatusRef = useRef<string>(status);
   const [creditError, setCreditError] = useState<string | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -405,7 +405,7 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
             <p className="font-medium">
               {status === "idle" && "Ready to talk"}
               {status === "connecting" && "Connecting..."}
-              {status === "active" && (isSpeaking ? "LENORY is speaking..." : "Listening...")}
+              {status === "active" && (isSpeaking ? "LENORY is speaking..." : hasGreeted ? "Listening..." : "Getting ready...")}
               {status === "error" && "Connection failed"}
             </p>
             {transcript && <p className="text-sm text-muted-foreground mt-1 italic">"{transcript}"</p>}
@@ -431,7 +431,7 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
                   const history = chatMessages?.map((m) => `${m.role}: ${m.content}`).join("\n") || "";
                   startCall({
                     name: "LENORY Live Tutor",
-                    firstMessage: "Hey, I'm here! Want to keep going with what we were just talking about, or start something new?",
+                    firstMessage: "Hey, I'm here! Keep going, or something new?",
                     firstMessageMode: "assistant-speaks-first",
                     model: {
                       provider: "openai",
@@ -445,7 +445,14 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
                     },
                     voice: getVapiVoiceForCall(),
                     transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
-                    startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingEnabled: true },
+                    // smartEndpointingEnabled was not a real Vapi field — smart
+                    // endpointing was silently never active. This is the real
+                    // field name, using Vapi's documented "aggressive" preset.
+                    startSpeakingPlan: {
+                      waitSeconds: 0.4,
+                      smartEndpointingPlan: { provider: "livekit", waitFunction: "2000 / (1 + exp(-10 * (x - 0.5)))" },
+                    },
+                    stopSpeakingPlan: { numWords: 0, voiceSeconds: 0.15, backoffSeconds: 0.8 },
                   });
                 }}
                 className="bg-primary"
