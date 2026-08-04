@@ -103,6 +103,30 @@ export default function LiveAI() {
     },
   });
 
+  // Bill the VAPI call in real time (20cr/min, ticked every 10s) and hang up
+  // with a warning the moment credits run low — previously this call had no
+  // runtime billing or low-balance protection at all.
+  useEffect(() => {
+    if (vapi.status !== "active") return;
+    const heartbeat = setInterval(async () => {
+      try {
+        const { apiRequest } = await import("@/lib/queryClient");
+        const res = await apiRequest("POST", "/api/voice/heartbeat", {});
+        const data = await res.json();
+        if (data?.lowCredits) {
+          toast({ title: "Low credits", description: "Top up or upgrade your plan to keep using LENORY Voice AI. Ending call.", variant: "destructive" });
+          setTimeout(() => vapi.stop(), 3000);
+        }
+      } catch (e: any) {
+        if (String(e?.message || "").startsWith("402")) {
+          toast({ title: "Insufficient credits", description: "Please top up or upgrade your plan.", variant: "destructive" });
+          vapi.stop();
+        }
+      }
+    }, 10000);
+    return () => clearInterval(heartbeat);
+  }, [vapi.status]);
+
   // Note: MediaRecorder refs removed - all audio uses PCM streaming via ScriptProcessor
   const messageCountRef = useRef(0);
   const initRef = useRef(false);
@@ -922,7 +946,21 @@ export default function LiveAI() {
                     {vapi.status === "idle" || vapi.status === "error" ? (
                       <Button
                         size="sm"
-                        onClick={() => vapi.start(buildLiveAIAssistantConfig())}
+                        onClick={async () => {
+                          try {
+                            const { apiRequest } = await import("@/lib/queryClient");
+                            await apiRequest("POST", "/api/live-ai/voice-start", {});
+                          } catch (e: any) {
+                            let msg = "You need at least 20 credits to start a voice session. Please top up.";
+                            try {
+                              const parsed = JSON.parse(String(e?.message || "").replace(/^\d+:\s*/, ""));
+                              if (parsed?.message) msg = parsed.message;
+                            } catch {}
+                            toast({ title: "Insufficient credits", description: msg, variant: "destructive" });
+                            return;
+                          }
+                          vapi.start(buildLiveAIAssistantConfig());
+                        }}
                         className="gap-1"
                         data-testid="button-start-vapi-call"
                       >

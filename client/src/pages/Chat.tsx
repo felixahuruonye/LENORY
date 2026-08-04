@@ -290,6 +290,35 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; chatMessages?: { role: string; content: string }[]; sessionId?: string | null }) {
   const { status, isSpeaking, transcript, messages, callDurationSeconds, startCall, stopCall, error } = useVapi();
   const prevStatusRef = useRef<string>(status);
+  const [creditError, setCreditError] = useState<string | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Bill the call in real time (20cr/min, ticked every 10s) instead of only
+  // at the end — and hang up with a warning the moment credits run low,
+  // instead of letting the call run for free once the balance is gone.
+  useEffect(() => {
+    if (status === "active") {
+      heartbeatRef.current = setInterval(async () => {
+        try {
+          const res = await apiRequest("POST", "/api/voice/heartbeat", {});
+          const data = await res.json();
+          if (data?.lowCredits) {
+            setCreditError("You're running low on credits — top up or upgrade your plan to keep using LENORY Voice AI. Ending call.");
+            setTimeout(() => stopCall(), 3000);
+          }
+        } catch (e: any) {
+          if (String(e?.message || "").startsWith("402")) {
+            setCreditError("Insufficient credits — please top up or upgrade your plan.");
+            stopCall();
+          }
+        }
+      }, 10000);
+    } else if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+    return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); };
+  }, [status, stopCall]);
 
   // When the call actually ends (was active/connecting, now idle), save a
   // Groq-cleaned transcript into this chat session and deduct real credits
@@ -332,9 +361,9 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
           </button>
         </div>
 
-        {error && (
+        {(error || creditError) && (
           <div className="mb-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">
-            {error}
+            {creditError || error}
           </div>
         )}
 
@@ -385,7 +414,20 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
           <div className="flex gap-3">
             {(status === "idle" || status === "error") && (
               <Button
-                onClick={() => {
+                onClick={async () => {
+                  setCreditError(null);
+                  try {
+                    await apiRequest("POST", "/api/live-ai/voice-start", {});
+                  } catch (e: any) {
+                    let msg = "You need at least 20 credits to start a voice session. Please top up.";
+                    try {
+                      const jsonPart = String(e?.message || "").replace(/^\d+:\s*/, "");
+                      const parsed = JSON.parse(jsonPart);
+                      if (parsed?.message) msg = parsed.message;
+                    } catch {}
+                    setCreditError(msg);
+                    return;
+                  }
                   const history = chatMessages?.map((m) => `${m.role}: ${m.content}`).join("\n") || "";
                   startCall({
                     name: "LENORY Live Tutor",

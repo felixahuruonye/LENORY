@@ -2,8 +2,18 @@
 import { WebSocket as WS } from "ws";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { storage } from "./storage";
+import { getOrCreateCredits, deductCredits } from "./creditsStore";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const REAL_ADMIN_EMAIL = "felixahuruonye@gmail.com";
+
+// Live voice costs 20 credits/min — same rate as the Vapi call path.
+// Billed in 10s ticks so a dropped connection never leaves a call unbilled
+// for more than 10s, and so we can warn + hang up before a user goes negative.
+const CREDITS_PER_TICK = Math.round((20 / 60) * 10); // 3
+const TICK_MS = 10_000;
+const MIN_CREDITS_TO_START = 20;
+const LOW_BALANCE_WARNING_THRESHOLD = 20;
 
 interface GeminiLiveSession {
   ws: WS;
@@ -17,6 +27,10 @@ interface GeminiLiveSession {
   liveSession: any | null;
   isStreaming: boolean;
   chatContext?: any[]; // ─── NEW: Stores loaded chat messages for context
+  isAdmin: boolean;
+  tier: string;
+  billingInterval?: ReturnType<typeof setInterval>;
+  endingForLowCredits: boolean;
 }
 
 const activeSessions = new Map<string, GeminiLiveSession>();
@@ -35,7 +49,36 @@ const LIVE_MODEL = "gemini-2.0-flash-live-001";
 // ─── UPDATED: Accept sessionId parameter ────────────────────────────────────
 export async function handleGeminiLiveConnection(ws: WS, userId: string, chatSessionId: string = '') {
   const sessionId = `live_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
+
+  // ─── CREDIT GATE — checked BEFORE we ever open a Gemini Live connection ───
+  // This used to not exist at all: any WebSocket connection here got free,
+  // unmetered Gemini Live audio streaming. This is what was running up the bill.
+  let isAdmin = false;
+  let tier = "free";
+  try {
+    const user = await storage.getUser(userId);
+    isAdmin = user?.email === REAL_ADMIN_EMAIL;
+    tier = (user as any)?.subscriptionTier || "free";
+    if (!isAdmin) {
+      const credits = await getOrCreateCredits(userId, tier);
+      if (credits.balance < MIN_CREDITS_TO_START) {
+        ws.send(JSON.stringify({
+          type: "error",
+          error: "INSUFFICIENT_CREDITS",
+          balance: credits.balance,
+          message: `You need at least ${MIN_CREDITS_TO_START} credits to start a voice session. Top up or upgrade your plan to continue.`,
+        }));
+        ws.close();
+        return;
+      }
+    }
+  } catch (e) {
+    console.error("Credit gate check failed for Gemini Live connection:", e);
+    ws.send(JSON.stringify({ type: "error", message: "Could not verify credits. Please try again." }));
+    ws.close();
+    return;
+  }
+
   const session: GeminiLiveSession = {
     ws,
     userId,
@@ -48,10 +91,20 @@ export async function handleGeminiLiveConnection(ws: WS, userId: string, chatSes
     liveSession: null,
     isStreaming: false,
     chatContext: [],
+    isAdmin,
+    tier,
+    endingForLowCredits: false,
   };
   
   activeSessions.set(sessionId, session);
   console.log(`Gemini Live session started: ${sessionId} for user: ${userId}${chatSessionId ? ` with chat context: ${chatSessionId}` : ''}`);
+
+  // Bill every 10s while the session is open. If the user runs low, speak a
+  // warning through the live model itself and hang up right after — never
+  // silently let a session run once the user can't afford it.
+  if (!isAdmin) {
+    session.billingInterval = setInterval(() => runBillingTick(session), TICK_MS);
+  }
 
   // ─── NEW: Load chat context if chatSessionId is provided ──────────────────
   if (chatSessionId) {
@@ -339,10 +392,60 @@ async function handleTextInput(session: GeminiLiveSession, text: string) {
   }
 }
 
+// Deduct one tick's worth of credits. If the user is now under the warning
+// threshold, speak a warning through Gemini and end the call right after —
+// giving them a heads-up instead of the call just cutting out mid-sentence.
+async function runBillingTick(session: GeminiLiveSession) {
+  if (!session.isConnected || session.endingForLowCredits) return;
+  try {
+    const credits = await getOrCreateCredits(session.userId, session.tier);
+    if (credits.balance < CREDITS_PER_TICK) {
+      await endSessionForLowCredits(session, credits.balance);
+      return;
+    }
+    const newBalance = await deductCredits(session.userId, CREDITS_PER_TICK);
+    if (newBalance !== null && newBalance < LOW_BALANCE_WARNING_THRESHOLD) {
+      await endSessionForLowCredits(session, newBalance);
+    } else {
+      session.ws.send(JSON.stringify({ type: "credits_update", balance: newBalance }));
+    }
+  } catch (e) {
+    console.error("Gemini Live billing tick failed:", e);
+  }
+}
+
+async function endSessionForLowCredits(session: GeminiLiveSession, balance: number) {
+  if (session.endingForLowCredits) return;
+  session.endingForLowCredits = true;
+  session.ws.send(JSON.stringify({
+    type: "low_credits_warning",
+    balance,
+    message: "You're running low on credits — please top up or upgrade your plan to keep using LENORY Voice AI.",
+  }));
+  // Make the AI actually say it out loud before the call ends, instead of
+  // just cutting the audio and leaving the user confused.
+  try {
+    if (session.liveSession) {
+      await session.liveSession.send({
+        text: "[SYSTEM: The user is almost out of credits. Say, in your own warm voice, that they're low on credits and should top up or upgrade their plan to keep using LENORY Voice AI, then say goodbye. Keep it to one short sentence.]",
+      });
+    }
+  } catch (e) {
+    console.error("Failed to send low-credit spoken warning:", e);
+  }
+  // Give the TTS time to actually play before we close the socket.
+  setTimeout(() => {
+    session.ws.send(JSON.stringify({ type: "call_ending", reason: "INSUFFICIENT_CREDITS" }));
+    try { session.ws.close(); } catch {}
+    closeSession(session.sessionId);
+  }, 6000);
+}
+
 function closeSession(sessionId: string) {
   const session = activeSessions.get(sessionId);
   if (session) {
     session.isConnected = false;
+    if (session.billingInterval) clearInterval(session.billingInterval);
     if (session.liveSession) {
       try {
         session.liveSession.close?.();
