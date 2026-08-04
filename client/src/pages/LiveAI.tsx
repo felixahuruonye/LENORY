@@ -11,6 +11,7 @@ import { QuickActions } from "@/components/live-ai/QuickActions";
 import { AvatarDisplay } from "@/components/live-ai/AvatarDisplay";
 import { useAuth } from "@/hooks/useAuth";
 import { useVapi } from "@/hooks/useVapi";
+import { getVapiVoiceForCall } from "@/lib/useVoice";
 import { VoiceHistoryModal } from "@/components/VoiceHistoryModal";
 
 interface Message {
@@ -46,9 +47,16 @@ function buildLiveAIAssistantConfig() {
         },
       ],
     },
-    voice: {
-      provider: "openai",
-      voiceId: "nova",
+    voice: getVapiVoiceForCall(),
+    transcriber: {
+      provider: "deepgram",
+      model: "nova-2",
+      language: "en",
+      smartFormat: true,
+    },
+    startSpeakingPlan: {
+      waitSeconds: 0.4,
+      smartEndpointingEnabled: true,
     },
   };
 }

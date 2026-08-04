@@ -68,7 +68,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { useVoice } from "@/lib/useVoice";
+import { useVoice, getVapiVoiceForCall } from "@/lib/useVoice";
 import { useVapi } from "@/hooks/useVapi";
 import { detectFeatureOpen } from "@/lib/featureRegistry";
 import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shared/schema";
@@ -287,8 +287,26 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 }
 
 // ─── VAPI Voice Panel ─────────────────────────────────────────────────────────
-function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessages?: { role: string; content: string }[] }) {
-  const { status, isSpeaking, transcript, callDurationSeconds, startCall, stopCall, error } = useVapi();
+function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; chatMessages?: { role: string; content: string }[]; sessionId?: string | null }) {
+  const { status, isSpeaking, transcript, messages, callDurationSeconds, startCall, stopCall, error } = useVapi();
+  const prevStatusRef = useRef<string>(status);
+
+  // When the call actually ends (was active/connecting, now idle), save a
+  // Groq-cleaned transcript into this chat session and deduct real credits
+  // for the call — previously nothing happened here at all.
+  useEffect(() => {
+    const wasLive = prevStatusRef.current === "active" || prevStatusRef.current === "connecting";
+    if (wasLive && status === "idle" && messages.length > 0) {
+      apiRequest("POST", "/api/vapi/end-call", {
+        sessionId,
+        messages: messages.filter((m) => m.role === "user" || m.role === "assistant"),
+        durationSeconds: callDurationSeconds,
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sessionId] }))
+        .catch(() => {});
+    }
+    prevStatusRef.current = status;
+  }, [status, messages, sessionId, callDurationSeconds]);
 
   const formatDuration = (secs: number) => {
     const m = Math.floor(secs / 60).toString().padStart(2, "0");
@@ -322,7 +340,7 @@ function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessage
 
         {chatMessages && chatMessages.length > 0 && status === "idle" && (
           <div className="mb-3 p-3 rounded-lg bg-primary/5 border border-primary/15 text-xs text-muted-foreground">
-            LENORY will remember your last {Math.min(chatMessages.length, 6)} messages from this conversation.
+            LENORY remembers this whole conversation ({chatMessages.length} message{chatMessages.length === 1 ? "" : "s"}).
           </div>
         )}
 
@@ -383,7 +401,9 @@ function VapiPanel({ onClose, chatMessages }: { onClose: () => void; chatMessage
                         },
                       ],
                     },
-                    voice: { provider: "openai", voiceId: "nova" },
+                    voice: getVapiVoiceForCall(),
+                    transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
+                    startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingEnabled: true },
                   });
                 }}
                 className="bg-primary"
@@ -1306,6 +1326,7 @@ export default function Chat() {
               <VapiPanel
                 onClose={() => setShowVapiPanel(false)}
                 chatMessages={messages?.map((m: any) => ({ role: m.role, content: m.content }))}
+                sessionId={currentSessionId}
               />
             )}
 

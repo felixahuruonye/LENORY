@@ -60,6 +60,20 @@ function preprocessTextForSpeech(text: string): string {
   return processed;
 }
 
+// VAPI only supports specific voice providers natively (OpenAI, ElevenLabs, etc.) —
+// it cannot use YarnGPT directly. If the user picked a Nigerian voice for
+// previews/read-aloud, map it to the closest OpenAI voice by gender for live
+// calls; otherwise use their exact OpenAI voice pick. Keeps one consistent
+// "default voice" across Voice Gallery, read-aloud, and both Live AI surfaces.
+export function getVapiVoiceForCall(): { provider: "openai"; voiceId: string } {
+  if (typeof window === "undefined") return { provider: "openai", voiceId: "nova" };
+  const preferred = localStorage.getItem("lenory_default_voice") || "Idera";
+  const nigerian = NIGERIAN_VOICES.find((v) => v.id === preferred);
+  if (nigerian) return { provider: "openai", voiceId: nigerian.gender === "male" ? "onyx" : "nova" };
+  const openai = OPENAI_VOICES.find((v) => v.id === preferred);
+  return { provider: "openai", voiceId: openai?.id || "nova" };
+}
+
 export function useVoice() {
   const [selectedVoice, setSelectedVoice] = useState(() => {
     if (typeof window !== "undefined") {

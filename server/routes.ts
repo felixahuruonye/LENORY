@@ -3204,6 +3204,59 @@ You have FULL access to the system. You can:
     res.json({ logged: true });
   });
 
+  // Called when a Live AI voice call ends: Groq cleans up the raw message
+  // list into a readable transcript, saves it into the chat session it
+  // belongs to, and deducts real credits for the call (20 credits/minute,
+  // matching what the UI has always shown but never actually charged).
+  app.post('/api/vapi/end-call', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const { sessionId, messages, durationSeconds } = req.body;
+      if (!Array.isArray(messages) || messages.length === 0) return res.json({ saved: false, reason: "No messages to save" });
+
+      // Credit deduction — 20 credits per minute, matching the UI's stated rate
+      const user = await storage.getUser(userId);
+      if (user?.email !== ADMIN_EMAIL) {
+        const minutes = Math.max(1, Math.ceil((durationSeconds || 60) / 60));
+        await deductCredits(userId, minutes * 20);
+      }
+
+      // Groq cleans up the raw turn-by-turn messages into a readable transcript
+      let cleanTranscript = messages.map((m: any) => `${m.role === "user" ? "Student" : "LENORY"}: ${m.content}`).join("\n");
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
+        try {
+          const OpenAI = (await import("openai")).default;
+          const groq = new OpenAI({ apiKey: groqKey, baseURL: "https://api.groq.com/openai/v1" });
+          const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              { role: "system", content: "Clean up this raw voice call transcript into a clear, readable back-and-forth between Student and LENORY. Fix obvious transcription errors, remove filler words, keep it faithful to what was actually said. Output only the cleaned transcript, no extra commentary." },
+              { role: "user", content: cleanTranscript },
+            ],
+            temperature: 0.3,
+          });
+          cleanTranscript = completion.choices[0]?.message?.content || cleanTranscript;
+        } catch (e) {
+          console.warn("Groq call-cleanup failed, saving raw transcript instead:", e);
+        }
+      }
+
+      if (sessionId) {
+        await storage.createChatMessage({
+          userId, sessionId,
+          role: "assistant",
+          content: `🎙️ **Live Voice Call Summary**\n\n${cleanTranscript}`,
+          attachments: null,
+        });
+      }
+      res.json({ saved: !!sessionId, transcript: cleanTranscript });
+    } catch (error) {
+      console.error("End-call save error:", error);
+      res.status(500).json({ message: "Failed to save call summary" });
+    }
+  });
+
   // ─── YARNGPT TTS ────────────────────────────────────────────────────────────
 
   app.post('/api/tts/openai', supabaseAuth, async (req: any, res: Response) => {
