@@ -94,6 +94,18 @@ export default function AdminDashboard() {
     gcTime: 10 * 60 * 1000,
   });
 
+  // AI chat model cooldown status (which Groq/OpenRouter models are
+  // currently rate-limited/over quota and when each resets).
+  const { data: aiProviderStatus, isLoading: aiStatusLoading, refetch: refetchAiStatus } = useQuery<{
+    cooldowns: { model: string; resetsInSeconds: number; resetsAt: string; reason: string }[];
+  }>({
+    queryKey: ["/api/admin/ai-provider-status"],
+    enabled: isAuthorized,
+    staleTime: 15 * 1000,
+    refetchInterval: 15 * 1000,
+    gcTime: 60 * 1000,
+  });
+
   // ─── MUTATIONS ───────────────────────────────────────────────────────────
   const adjustCreditsMutation = useMutation({
     mutationFn: async ({ userId, action, amount }: { userId: string; action: string; amount: number }) => {
@@ -666,6 +678,59 @@ export default function AdminDashboard() {
         {/* Providers Tab */}
         {activeTab === "providers" && (
           <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Zap className="h-5 w-5 text-amber-500" />
+                      Chat AI Model Status
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Which Groq/OpenRouter chat models are currently rate-limited or over quota, and exactly when each resets. Auto-refreshes every 15s.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetchAiStatus()}
+                    disabled={aiStatusLoading}
+                    data-testid="button-refresh-ai-provider-status"
+                  >
+                    {aiStatusLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {aiStatusLoading && !aiProviderStatus ? (
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span className="text-sm">Checking model status…</span>
+                  </div>
+                ) : !aiProviderStatus?.cooldowns?.length ? (
+                  <div className="flex items-center gap-2 text-sm text-emerald-500">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    All chat models available — nothing on cooldown right now.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {aiProviderStatus.cooldowns.map((c) => (
+                      <div key={c.model} className="flex items-center justify-between rounded-lg border border-border p-3 text-sm flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-red-500" />
+                          <span className="font-medium">{c.model}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground flex items-center gap-3">
+                          <span>Resets in {Math.ceil(c.resetsInSeconds / 60)} min ({new Date(c.resetsAt).toLocaleTimeString()})</span>
+                          <span className="truncate max-w-[240px]" title={c.reason}>{c.reason}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between flex-wrap gap-3">

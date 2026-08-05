@@ -53,8 +53,16 @@ function fallbackGetOrCreate(userId: string, tier: string): CreditRecord {
   const rec = emergencyFallbackStore.get(userId)!;
   if (rec.lastDailyReset !== today) {
     const limits = getTierLimits(tier);
-    rec.balance = Math.min(rec.balance + limits.dailyAdd, limits.maxBalance);
-    rec.dailyGiven = limits.dailyAdd;
+    const currentMonth = monthKey();
+    const isNewMonth = rec.lastMonthlyReset !== currentMonth;
+    if (isNewMonth) { rec.monthlyUsed = 0; rec.lastMonthlyReset = currentMonth; }
+    const hasHitMonthlyQuota = !isNewMonth && rec.monthlyUsed >= limits.maxBalance;
+    if (!hasHitMonthlyQuota) {
+      rec.balance = Math.min(rec.balance + limits.dailyAdd, limits.maxBalance);
+      rec.dailyGiven = limits.dailyAdd;
+    } else {
+      rec.dailyGiven = 0;
+    }
     rec.lastDailyReset = today;
   }
   return rec;
@@ -120,14 +128,25 @@ export async function getOrCreateCredits(userId: string, tier: string = "free"):
 
     // Daily reset
     if (data.last_daily_reset !== today) {
-      const newBalance = Math.min(data.balance + limits.dailyAdd, limits.maxBalance);
       const currentMonth = monthKey();
       const isNewMonth = data.last_monthly_reset !== currentMonth;
+      const monthlyUsedSoFar = isNewMonth ? 0 : data.monthly_used;
+      // The daily top-up used to run unconditionally, every day, forever —
+      // so a free user could draw far more than their monthly allotment
+      // (e.g. 10/day × 30 days = 300 credits/month on a "30 credit" tier)
+      // at zero cost to them and real cost to us. Once they've used their
+      // tier's monthly allotment, stop topping up until the calendar month
+      // actually rolls over — balance settles at whatever's left (usually
+      // 0) instead of being silently refilled.
+      const hasHitMonthlyQuota = !isNewMonth && monthlyUsedSoFar >= limits.maxBalance;
+      const newBalance = hasHitMonthlyQuota
+        ? data.balance
+        : Math.min(data.balance + limits.dailyAdd, limits.maxBalance);
       const updated = await supabaseAdmin
         .from("user_credits")
         .update({
           balance: newBalance,
-          daily_given: limits.dailyAdd,
+          daily_given: hasHitMonthlyQuota ? 0 : limits.dailyAdd,
           last_daily_reset: today,
           monthly_used: isNewMonth ? 0 : data.monthly_used,
           last_monthly_reset: isNewMonth ? currentMonth : data.last_monthly_reset,
