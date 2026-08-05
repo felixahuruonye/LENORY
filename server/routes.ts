@@ -370,6 +370,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } catch {}
         }
       }
+      // Fallback: a session not explicitly opened "from" a KB folder had no
+      // way to ever pull in folder material — even mid-conversation, asking
+      // the AI to "use my knowledge base" did nothing because kbFolderContext
+      // stayed empty for the session's whole lifetime. If the user's message
+      // references their knowledge base/folder/notes and no folder is linked
+      // yet, look up their folders now instead of just telling them "no access".
+      let userKbFoldersForPrompt: { id: string; name: string }[] = [];
+      if (!kbFolderContext) {
+        const mentionsKb = /knowledge\s*base|my\s+folder|kb\s+folder|my\s+notes/i.test(content);
+        try {
+          const folders = await storage.getKBFolders(userId);
+          userKbFoldersForPrompt = folders.map((f: any) => ({ id: f.id, name: f.name }));
+          if (mentionsKb && folders.length > 0) {
+            // Prefer a folder named in the message; otherwise use the most
+            // recently updated one — a reasonable default rather than
+            // silently picking nothing.
+            const named = folders.find((f: any) => content.toLowerCase().includes(String(f.name || "").toLowerCase()));
+            const target = named || folders[0];
+            const folderFiles = await storage.getKBFiles(target.id);
+            const materials = folderFiles.map((f: any) => `--- ${f.name} ---\n${(f.extracted_text || "").substring(0, 3000)}`).join("\n\n").substring(0, 12000);
+            if (materials) {
+              kbFolderContext = `The student is asking you to use material from their Knowledge Base folder "${target.name}". Answer using ONLY the material below — if it doesn't cover the question, say so clearly instead of guessing.\n\nFOLDER MATERIAL:\n${materials}\n\n`;
+              // Persist the link so the rest of this session keeps this
+              // folder's context automatically, matching how the explicit
+              // "start chat from folder" flow behaves.
+              if (sessionId) {
+                try { await storage.updateChatSession(sessionId, { summary: `KBFOLDER:${target.id}:${target.name}` }); } catch {}
+              }
+            }
+          }
+        } catch {}
+      }
       let userProgress: any[] = [];
       let examResults: any[] = [];
       try {
@@ -464,6 +496,8 @@ You have FULL access to the system. You can:
       }
       if (kbFolderContext) {
         systemMessage += `\n\n## 📚 KNOWLEDGE BASE FOLDER CONTEXT:\n${kbFolderContext}`;
+      } else if (userKbFoldersForPrompt.length > 0) {
+        systemMessage += `\n\n## 📚 KNOWLEDGE BASE:\nThe student has these Knowledge Base folders: ${userKbFoldersForPrompt.map(f => `"${f.name}"`).join(", ")}. If they ask you to use material from one, you now have access to it automatically — just answer using it. Don't tell them you lack access; if it's ambiguous which folder they mean, ask them to name it.`;
       }
       if (extraContext) {
         systemMessage += `\n\n## ADDITIONAL CONTEXT:\n${extraContext}`;
