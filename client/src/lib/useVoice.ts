@@ -65,11 +65,32 @@ function preprocessTextForSpeech(text: string): string {
 // previews/read-aloud, map it to the closest OpenAI voice by gender for live
 // calls; otherwise use their exact OpenAI voice pick. Keeps one consistent
 // "default voice" across Voice Gallery, read-aloud, and both Live AI surfaces.
-export function getVapiVoiceForCall(): { provider: "openai"; voiceId: string } {
+// VAPI's built-in voice providers don't include YarnGPT — but Vapi does
+// support a "Custom TTS" webhook, which server/vapiCustomTts.ts implements
+// to bridge real YarnGPT audio into Vapi's calls. So a Nigerian voice
+// picked as the default now actually sounds like that voice on Live AI
+// calls, not just an approximated OpenAI voice — with a fallbackPlan to the
+// old approximation in case the bridge has any trouble (adds a network hop
+// + transcode step, so it's slightly slower than Vapi's native voices).
+export function getVapiVoiceForCall(): any {
   if (typeof window === "undefined") return { provider: "openai", voiceId: "nova" };
   const preferred = localStorage.getItem("lenory_default_voice") || "Idera";
   const nigerian = NIGERIAN_VOICES.find((v) => v.id === preferred);
-  if (nigerian) return { provider: "openai", voiceId: nigerian.gender === "male" ? "onyx" : "nova" };
+  if (nigerian) {
+    const fallbackVoiceId = nigerian.gender === "male" ? "onyx" : "nova";
+    const clientSecret = (import.meta as any).env?.VITE_VAPI_CUSTOM_TTS_SECRET;
+    return {
+      provider: "custom-voice",
+      server: {
+        url: `${window.location.origin}/api/vapi/custom-tts/yarngpt?speaker=${encodeURIComponent(nigerian.id)}`,
+        timeoutSeconds: 20,
+        ...(clientSecret ? { secret: clientSecret } : {}),
+      },
+      fallbackPlan: {
+        voices: [{ provider: "openai", voiceId: fallbackVoiceId }],
+      },
+    };
+  }
   const openai = OPENAI_VOICES.find((v) => v.id === preferred);
   return { provider: "openai", voiceId: openai?.id || "nova" };
 }

@@ -13,6 +13,7 @@ import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCred
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
+import { registerVapiCustomTtsRoutes } from "./vapiCustomTts";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
   chatWithAI,
@@ -82,6 +83,7 @@ function getGitHubAuthUrl(userId: string): string {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   registerKbRoutes(app);
+  registerVapiCustomTtsRoutes(app);
   // Wire up Replit AI Integrations
   registerChatRoutes(app);
 
