@@ -105,6 +105,11 @@ function Router() {
       <Route path="/memory" component={MemoryPanel} />
       <Route path="/study-plans" component={StudyPlans} />
       <Route path="/notes" component={Notes} />
+      {/* Alias — AdvancedDashboard's Knowledge Base tile used to link here
+          before that route existed, which is why the button didn't open
+          anything. Keeping this alias too in case anything else (bookmarks,
+          old links) still points at /knowledge-base. */}
+      <Route path="/knowledge-base" component={Notes} />
       <Route path="/shared/:code" component={SharedFolder} />
       <Route path="/languages" component={Languages} />
       <Route path="/pricing" component={Pricing} />

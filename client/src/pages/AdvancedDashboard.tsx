@@ -78,7 +78,7 @@ export default function AdvancedDashboard() {
     { id: "memory", name: "Memory Panel", icon: Brain, description: "Learning memory system", color: "from-teal-500 to-cyan-500", href: "/memory", keywords: ["memory", "learn", "remember", "notes", "history"] },
     { id: "cbt", name: "CBT Mode", icon: Monitor, description: "Exam simulation (JAMB/WAEC/NECO)", color: "from-amber-500 to-yellow-500", href: "/cbt-mode", keywords: ["exam", "test", "cbt", "jamb", "waec", "practice"] },
     { id: "workspace", name: "Project Workspace", icon: FolderOpen, description: "Organize your projects", color: "from-purple-500 to-pink-500", href: "/project-workspace", keywords: ["project", "workspace", "organize", "folder", "task"] },
-    { id: "knowledge", name: "Knowledge Base", icon: BookOpen, description: "Folder-based file storage with AI", color: "from-indigo-500 to-blue-500", href: "/knowledge-base", keywords: ["knowledge", "base", "notes", "folders", "study"] },
+    { id: "knowledge", name: "Knowledge Base", icon: BookOpen, description: "Folder-based file storage with AI", color: "from-indigo-500 to-blue-500", href: "/notes", keywords: ["knowledge", "base", "notes", "folders", "study"] },
     { id: "settings", name: "Settings", icon: Settings, description: "Customize your experience", color: "from-indigo-500 to-blue-500", href: "/settings", keywords: ["settings", "config", "preferences", "customize"] },
   ];
 
@@ -445,7 +445,7 @@ export default function AdvancedDashboard() {
               if (cat.value !== 'all' && !showAllCategories) return null;
               const CatIcon = cat.icon;
               const categoryLinks: Record<string, string> = {
-                all: "/chat", chat: "/chat", memory: "/memory", notes: "/knowledge-base",
+                all: "/chat", chat: "/chat", memory: "/memory", notes: "/notes",
                 study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-builder",
                 image: "/image-gen", project: "/project-workspace", lesson: "/chat",
               };
