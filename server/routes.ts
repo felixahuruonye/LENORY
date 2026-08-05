@@ -8,7 +8,7 @@ import os from "os";
 import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
-import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions } from "./adminTools";
+import { REAL_ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits } from "./creditsStore";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
@@ -335,7 +335,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
       // Credit check
-      if (user?.email !== ADMIN_EMAIL) {
+      if (user?.email !== REAL_ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
         const totalCost = 1 + (isLongPaste ? 12 : 0);
         const credits = await getOrCreateCredits(userId, tier);
@@ -585,7 +585,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
       const isAdminUser = user?.email === REAL_ADMIN_EMAIL;
-      if (user?.email !== ADMIN_EMAIL) {
+      if (user?.email !== REAL_ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
         const totalCost = 1 + (req.body.isLongPaste ? 12 : 0);
         const credits = await getOrCreateCredits(userId, tier);
@@ -1269,7 +1269,7 @@ You have FULL access to the system. You can:
       if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       const generated = await generateWebsiteWithGemini(prompt);
       const website = await storage.createGeneratedWebsite({ userId, title: generated.title, description: `Generated from: ${prompt.substring(0, 100)}...`, prompt, htmlCode: generated.html || "", cssCode: generated.css || "", jsCode: generated.js || "", tags: [], isFavorite: false });
-      if (user?.email !== ADMIN_EMAIL) await deductCredits(userId, 10);
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 10);
       res.json(website);
     } catch (error) { res.status(500).json({ message: `Failed to generate website: ${error instanceof Error ? error.message : "Unknown error"}` }); }
   });
@@ -1703,7 +1703,7 @@ You have FULL access to the system. You can:
       const gate = await checkCreditGate(req.userId, user?.email, tier, 5, "Course syllabus generation");
       if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       const syllabus = await generateSyllabus(topic);
-      if (user?.email !== ADMIN_EMAIL) await deductCredits(req.userId, 5);
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(req.userId, 5);
       res.json(syllabus);
     } catch (error) { res.status(500).json({ message: "Failed to generate syllabus" }); }
   });
@@ -1952,7 +1952,7 @@ You have FULL access to the system. You can:
       if (!prompt?.trim()) return res.status(400).json({ message: "Prompt is required" });
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
-      const isAdmin = user?.email === ADMIN_EMAIL;
+      const isAdmin = user?.email === REAL_ADMIN_EMAIL;
       if (!isAdmin) {
         const MONTHLY_IMAGE_LIMITS: Record<string, number> = { free: 5, pro: 50, premium: Infinity };
         const limit = MONTHLY_IMAGE_LIMITS[tier] ?? 5;
@@ -2084,7 +2084,7 @@ You have FULL access to the system. You can:
     try {
       const userId = req.userId;
       const user = await storage.getUser(userId);
-      if (user?.email !== ADMIN_EMAIL) {
+      if (user?.email !== REAL_ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
         if (credits.balance < 20) {
@@ -2230,9 +2230,8 @@ You have FULL access to the system. You can:
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
       }
       const user = await storage.getUser(userId);
-      const ADMIN_EMAIL = REAL_ADMIN_EMAIL;
       let creditsDeducted = 0;
-      if (user?.email !== ADMIN_EMAIL && durationSeconds > 0) {
+      if (user?.email !== REAL_ADMIN_EMAIL && durationSeconds > 0) {
         const durationMinutes = Math.ceil(durationSeconds / 60);
         const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
@@ -2398,12 +2397,11 @@ You have FULL access to the system. You can:
       if (!examType || !subject) return res.status(400).json({ message: 'Exam type and subject required' });
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      const ADMIN_EMAIL = REAL_ADMIN_EMAIL;
       const gate = await checkCreditGate(userId, user?.email, tier, 5, "CBT question generation");
       if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       console.log(`📚 Generating ${count} questions for ${subject} (${examType})...`);
       const questions = await generateQuestionsWithLENORY(examType, subject, Math.min(count, 250));
-      if (user?.email !== ADMIN_EMAIL) await deductCredits(userId, 5);
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 5);
       res.json({ questions });
     } catch (error: any) {
       console.error("Question generation error:", error);
@@ -2654,7 +2652,7 @@ You have FULL access to the system. You can:
   app.post('/api/admin/reconcile-payment', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
-      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      if (adminUser?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
       const { reference } = req.body;
       if (!reference) return res.status(400).json({ message: "reference is required" });
 
@@ -2880,7 +2878,6 @@ You have FULL access to the system. You can:
 
   // ─── CREDIT SYSTEM ──────────────────────────────────────────────────────────
 
-  const ADMIN_EMAIL = REAL_ADMIN_EMAIL;
 
   app.get('/api/user/credits', supabaseAuth, async (req: any, res: Response) => {
     try {
@@ -2894,7 +2891,7 @@ You have FULL access to the system. You can:
         used: credits.monthlyUsed,
         limit: maxBalance,
         tier,
-        isAdmin: user?.email === ADMIN_EMAIL,
+        isAdmin: user?.email === REAL_ADMIN_EMAIL,
       });
     } catch {
       res.status(500).json({ message: "Failed to get credits" });
@@ -2914,7 +2911,7 @@ You have FULL access to the system. You can:
         maxMonthly: maxBalance,
         dailyLimit: dailyAdd,
         tier,
-        isAdmin: user?.email === ADMIN_EMAIL,
+        isAdmin: user?.email === REAL_ADMIN_EMAIL,
         dailyGiven: credits.dailyGiven,
       });
     } catch (error) {
@@ -2927,7 +2924,7 @@ You have FULL access to the system. You can:
       const userId = req.userId;
       const { amount = 1 } = req.body;
       const user = await storage.getUser(userId);
-      if (user?.email === ADMIN_EMAIL) {
+      if (user?.email === REAL_ADMIN_EMAIL) {
         return res.json({ success: true, balance: 9999, message: "Admin: unlimited" });
       }
       const tier = user?.subscriptionTier || 'free';
@@ -3002,7 +2999,7 @@ You have FULL access to the system. You can:
   app.get('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
-      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      if (adminUser?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
       const { userId } = req.params;
       const targetUser = await storage.getUser(userId);
       const tier = (targetUser as any)?.subscriptionTier || 'free';
@@ -3016,7 +3013,7 @@ You have FULL access to the system. You can:
   app.post('/api/admin/credits/:userId/reset-daily', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
-      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      if (adminUser?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
       const { userId } = req.params;
       const targetUser = await storage.getUser(userId);
       const tier = (targetUser as any)?.subscriptionTier || 'free';
@@ -3031,7 +3028,7 @@ You have FULL access to the system. You can:
   app.post('/api/admin/credits/:userId/reset-monthly', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
-      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      if (adminUser?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
       const { userId } = req.params;
       const targetUser = await storage.getUser(userId);
       const tier = (targetUser as any)?.subscriptionTier || 'free';
@@ -3046,7 +3043,7 @@ You have FULL access to the system. You can:
   app.post('/api/admin/credits/:userId', supabaseAuth, async (req: any, res: Response) => {
     try {
       const adminUser = await storage.getUser(req.userId);
-      if (adminUser?.email !== ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      if (adminUser?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ error: "Forbidden" });
       const { userId } = req.params;
       const { amount, action } = req.body;
       const targetUser = await storage.getUser(userId);
@@ -3154,7 +3151,7 @@ You have FULL access to the system. You can:
     try {
       const userId = req.userId;
       const user = await storage.getUser(userId);
-      if (user?.email === ADMIN_EMAIL) {
+      if (user?.email === REAL_ADMIN_EMAIL) {
         return res.json({ success: true, creditsDeducted: 0, newBalance: null, lowCredits: false });
       }
       const tier = (user as any)?.subscriptionTier || 'free';
@@ -3180,7 +3177,7 @@ You have FULL access to the system. You can:
       const userId = req.userId;
       const { durationSeconds = 0 } = req.body;
       const user = await storage.getUser(userId);
-      const isAdmin = user?.email === ADMIN_EMAIL;
+      const isAdmin = user?.email === REAL_ADMIN_EMAIL;
       if (isAdmin || durationSeconds <= 0) {
         return res.json({ success: true, creditsDeducted: 0, durationSeconds, minutes: 0 });
       }
@@ -3212,7 +3209,7 @@ You have FULL access to the system. You can:
 
       // Credit deduction — 20 credits per minute, matching the UI's stated rate
       const user = await storage.getUser(userId);
-      if (user?.email !== ADMIN_EMAIL) {
+      if (user?.email !== REAL_ADMIN_EMAIL) {
         const minutes = Math.max(1, Math.ceil((durationSeconds || 60) / 60));
         await deductCredits(userId, minutes * 20);
       }
@@ -3356,12 +3353,12 @@ You have FULL access to the system. You can:
       if (!replicateToken) return res.status(500).json({ error: "Video generation not configured on this server." });
       const userId = req.userId;
       const user = await storage.getUser(userId);
-      if ((user as any)?.subscriptionTier !== 'premium' && user?.email !== ADMIN_EMAIL) {
+      if ((user as any)?.subscriptionTier !== 'premium' && user?.email !== REAL_ADMIN_EMAIL) {
         return res.status(403).json({ error: "Video generation is only available in Premium plan." });
       }
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "prompt is required" });
-      if (user?.email !== ADMIN_EMAIL) {
+      if (user?.email !== REAL_ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
         if (credits.balance < 5) {
@@ -3457,7 +3454,7 @@ You have FULL access to the system. You can:
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const data = groqResData as any;
-      if (user?.email !== ADMIN_EMAIL && data.duration) {
+      if (user?.email !== REAL_ADMIN_EMAIL && data.duration) {
         const minutes = Math.ceil(data.duration / 60 / 5);
         const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
