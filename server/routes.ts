@@ -10,6 +10,7 @@ import path from "path";
 import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits } from "./creditsStore";
+import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
@@ -502,39 +503,21 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       ];
 
       let aiResponse: string;
-      sendStatus("writing", 6);
+      let modelUsedForLog = "gemini";
+      sendStatus("thinking", 5);
       if (overrideResponse) {
         aiResponse = overrideResponse;
-      } else if (isAdvanced) {
-        try {
-          const openRouterKey = process.env.OPENROUTER_API_KEY;
-          if (openRouterKey) {
-            const orRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${openRouterKey}`, "Content-Type": "application/json", "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" },
-              body: JSON.stringify({ model: "deepseek/deepseek-coder", messages: messages.map((m: any) => ({ role: m.role, content: m.content })), temperature: 0.3, max_tokens: 4096 }),
-            });
-            if (orRes.ok) {
-              const orData = await orRes.json();
-              aiResponse = orData.choices?.[0]?.message?.content || "";
-              if (!aiResponse.trim()) throw new Error("Empty DeepSeek response");
-            } else {
-              throw new Error(`OpenRouter error: ${orRes.status}`);
-            }
-          } else {
-            throw new Error("No OPENROUTER_API_KEY");
-          }
-        } catch (deepseekErr) {
-          aiResponse = await chatWithAISmartFallback(messages as any);
-        }
       } else {
         try {
-          aiResponse = await chatWithAISmartFallback(messages as any);
+          const result = await chatCompletionWithFailover(messages as any, isAdvanced ? "ultra" : "fast");
+          aiResponse = result.text;
+          modelUsedForLog = result.modelUsed;
           if (!aiResponse || aiResponse.trim() === "") aiResponse = "I received your message but had trouble formulating a response. Please try again.";
         } catch (aiError) {
           aiResponse = "I'm having trouble connecting to my AI services right now. Please try again in a moment.";
         }
       }
+      sendStatus("writing", 6);
 
       try {
         await storage.createMemoryEntry({ userId, type: "chat_interaction", data: { userMessage: content.substring(0, 500), aiResponse: aiResponse.substring(0, 500), timestamp: new Date().toISOString() } });
@@ -565,7 +548,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         } catch (titleError) {}
       }
 
-      logApiUsage(isAdvanced ? "openrouter-deepseek" : "gemini", userId, "/api/chat/send");
+      logApiUsage(modelUsedForLog, userId, "/api/chat/send");
       const finalPayload = { success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined };
       if (wantsStream) {
         res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
@@ -854,6 +837,19 @@ You have FULL access to the system. You can:
       res.json(getApiKeyStatus());
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch key status" });
+    }
+  });
+
+  // Which chat models are currently on cooldown (rate-limited / over quota)
+  // and when each one resets — so Felix can check this instead of guessing
+  // from server logs.
+  app.get('/api/admin/ai-provider-status', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      res.json({ cooldowns: getProviderCooldownStatus() });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch provider status" });
     }
   });
 
