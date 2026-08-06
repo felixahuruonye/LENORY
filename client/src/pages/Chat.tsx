@@ -434,22 +434,34 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
                     firstMessage: "Hey, I'm here! Keep going, or something new?",
                     firstMessageMode: "assistant-speaks-first",
                     model: {
-                      provider: "openai",
-                      model: "gpt-4o-mini",
+                      // Switched from OpenAI gpt-4o-mini to Groq for much
+                      // faster "thinking" time — Groq's inference is
+                      // dramatically faster token-for-token, which is what
+                      // actually determines how long the AI stays silent
+                      // before responding on a live call.
+                      provider: "groq",
+                      model: "openai/gpt-oss-120b",
                       messages: [
                         {
                           role: "system",
-                          content: `You are LENORY, a warm AI study companion continuing a voice conversation with a student. This is a spoken call — keep responses short, natural, and conversational, no markdown or lists. ${history ? `Here is the recent chat history for context:\n${history}` : ""}`,
+                          content: `You are LENORY, a warm AI study companion continuing a voice conversation with a student. This is a spoken call — keep responses short, natural, and conversational, no markdown or lists. ${history ? `Here is the recent chat history for context:\n${history}` : ""}\n\nVOICE & SPEAKING STYLE:\n- Speak in a calm, clear, and SLOW pace – like a patient tutor explaining to a beginner.\n- Enunciate each word clearly – avoid mumbling or rushing.\n- When asked to spell a word, spell it letter by letter slowly, with a pause between each letter (e.g., "C-A-T").\n- Use natural, conversational Nigerian English – warm, friendly, and encouraging.\n- Pause briefly between sentences to give the student time to process.\n- If the student seems confused, rephrase your explanation in simpler terms.\n- Match the student's energy – if they speak fast, you can speed up slightly, but always stay clear.\n\nSPELLING INSTRUCTIONS:\nWhen the user says "spell", "how do you spell", or similar, respond with:\n- The word clearly spelled out, letter by letter, with about 1 second pause between letters.\n- Example: "The word is C-A-T. That's C for Charlie, A for Alpha, T for Tango."\n- Always offer to use the word in a sentence for context.\n\nPRONUNCIATION HELP:\n- If the user asks how to pronounce a word, break it into syllables and say each part slowly.\n- Use Nigerian examples and references to make it relatable.`,
                         },
                       ],
                     },
+                    // NOTE: Vapi's docs say provider-level "speed" control is
+                    // currently only honored for PlayHT voices, not OpenAI —
+                    // adding it here risked either being silently ignored or
+                    // rejected by assistant validation. Slower pacing is
+                    // instead handled entirely through the system prompt
+                    // above. If you want a literal speed dial, PlayHT is the
+                    // one Vapi voice provider that actually supports it.
                     voice: getVapiVoiceForCall(),
                     transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
                     // smartEndpointingEnabled was not a real Vapi field — smart
                     // endpointing was silently never active. This is the real
                     // field name, using Vapi's documented "aggressive" preset.
                     startSpeakingPlan: {
-                      waitSeconds: 0.4,
+                      waitSeconds: 0.2,
                       smartEndpointingPlan: { provider: "livekit", waitFunction: "2000 / (1 + exp(-10 * (x - 0.5)))" },
                     },
                     stopSpeakingPlan: { numWords: 0, voiceSeconds: 0.15, backoffSeconds: 0.8 },
