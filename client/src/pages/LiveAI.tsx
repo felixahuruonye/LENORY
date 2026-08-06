@@ -54,6 +54,11 @@ function buildLiveAIAssistantConfig() {
       // gpt-4o-mini, that's the tradeoff to weigh against the speed gain.
       provider: "groq",
       model: "openai/gpt-oss-120b",
+      // Safety net: if this exact model ID isn't recognized by Vapi/Groq
+      // (their model lineups shift often), fall back to the previously
+      // working OpenAI model instead of the call silently degrading or
+      // erroring on every turn.
+      fallbackModels: [{ provider: "openai", model: "gpt-4o-mini" }],
       messages: [
         {
           role: "system",

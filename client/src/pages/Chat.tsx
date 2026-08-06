@@ -441,6 +441,7 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
                       // before responding on a live call.
                       provider: "groq",
                       model: "openai/gpt-oss-120b",
+                      fallbackModels: [{ provider: "openai", model: "gpt-4o-mini" }],
                       messages: [
                         {
                           role: "system",
