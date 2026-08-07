@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
@@ -23,6 +24,8 @@ import {
   Clock,
   Volume2,
   AlertTriangle,
+  Pencil,
+  Save,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -48,6 +51,12 @@ interface NoteEntry {
   duration: number;
   subject: string;
   createdAt: number;
+  // Base64 data URL of the original recording, so History can play it back.
+  // Capped at AUDIO_EMBED_MAX_BYTES before saving — history lives entirely
+  // in localStorage (no backend file storage exists in this app), so a
+  // long recording is skipped rather than risking blowing the whole
+  // history's storage quota.
+  audioDataUrl?: string;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -64,7 +73,29 @@ function loadHistory(): NoteEntry[] {
 function saveHistory(notes: NoteEntry[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(notes.slice(0, 50)));
-  } catch {}
+  } catch {
+    // Quota exceeded is likely if too many notes carry embedded audio —
+    // retry once without audio data rather than silently losing the note.
+    try {
+      const stripped = notes.slice(0, 50).map((n) => ({ ...n, audioDataUrl: undefined }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
+    } catch {}
+  }
+}
+
+// History has no backend — everything lives in localStorage — so audio is
+// only embedded as base64 if it's small enough not to blow the quota for
+// the whole history list. ~3MB keeps a handful of notes-with-audio
+// comfortably under typical browser localStorage limits (5-10MB/origin).
+const AUDIO_EMBED_MAX_BYTES = 3 * 1024 * 1024;
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 function formatDuration(seconds: number): string {
@@ -88,6 +119,8 @@ export default function LiveSession() {
   // Processing state
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isFormattingNotes, setIsFormattingNotes] = useState(false);
+  const [isEditingNotes, setIsEditingNotes] = useState(false);
+  const [editedNotesDraft, setEditedNotesDraft] = useState("");
   const [transcript, setTranscript] = useState("");
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [formattedNotes, setFormattedNotes] = useState("");
@@ -96,8 +129,7 @@ export default function LiveSession() {
   // Session meta
   const [sessionTitle, setSessionTitle] = useState("");
   const [subject, setSubject] = useState("");
-  const [activeTab, setActiveTab] = useState<"record" | "notes" | "history">("record");
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"record" | "notes" | "history">("record");  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savingHistoryNoteId, setSavingHistoryNoteId] = useState<string | null>(null);
 
   // History
@@ -304,13 +336,28 @@ export default function LiveSession() {
     }
   }, [transcript, formattedNotes, sessionTitle, toast]);
 
-  const saveNote = useCallback(() => {
+  const saveNote = useCallback(async () => {
     if (!transcript && !formattedNotes) {
       toast({ title: "Nothing to save", description: "Transcribe audio first.", variant: "destructive" });
       return;
     }
 
     const title = sessionTitle || `Note — ${new Date().toLocaleDateString("en-NG", { day: "numeric", month: "short", year: "numeric" })}`;
+    let audioDataUrl: string | undefined;
+    const recordingBlob = audioBlobs[0];
+    if (recordingBlob) {
+      if (recordingBlob.size <= AUDIO_EMBED_MAX_BYTES) {
+        try {
+          audioDataUrl = await blobToDataUrl(recordingBlob);
+        } catch {}
+      } else {
+        toast({
+          title: "Note saved without audio",
+          description: "This recording is too large to keep in history — the notes and transcript are saved, just not the audio playback.",
+        });
+      }
+    }
+
     const entry: NoteEntry = {
       id: Date.now().toString(),
       title,
@@ -320,13 +367,14 @@ export default function LiveSession() {
       duration: recordingDuration,
       subject,
       createdAt: Date.now(),
+      audioDataUrl,
     };
 
     const updated = [entry, ...history];
     setHistory(updated);
     saveHistory(updated);
     toast({ title: "Note saved!", description: `"${title}" saved to history.` });
-  }, [transcript, formattedNotes, sessionTitle, segments, recordingDuration, subject, history, toast]);
+  }, [transcript, formattedNotes, sessionTitle, segments, recordingDuration, subject, history, audioBlobs, toast]);
 
   const deleteNote = useCallback((id: string) => {
     const updated = history.filter(n => n.id !== id);
@@ -647,7 +695,41 @@ export default function LiveSession() {
                         <BookOpen className="w-3.5 h-3.5" />
                         Save Note
                       </Button>
-                      {(formattedNotes || transcript) && (
+                      {(formattedNotes || transcript) && !isEditingNotes && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditedNotesDraft(formattedNotes || transcript);
+                            setIsEditingNotes(true);
+                          }}
+                          data-testid="button-edit-notes"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Edit
+                        </Button>
+                      )}
+                      {isEditingNotes && (
+                        <Button
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => {
+                            // Commit the edit into whichever field is currently
+                            // shown (formatted notes if it exists, otherwise the
+                            // raw transcript) so the change is what gets saved
+                            // to history and used everywhere else.
+                            if (formattedNotes) setFormattedNotes(editedNotesDraft);
+                            else setTranscript(editedNotesDraft);
+                            setIsEditingNotes(false);
+                            toast({ title: "Changes saved", description: "Your edits are applied — tap Save Note to add this to history." });
+                          }}
+                          data-testid="button-save-notes-edit"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Save Changes
+                        </Button>
+                      )}
+                      {(formattedNotes || transcript) && !isEditingNotes && (
                         <Button
                           size="sm"
                           variant="ghost"
@@ -661,7 +743,19 @@ export default function LiveSession() {
                     </div>
                   </div>
 
-                  {formattedNotes ? (
+                  {isEditingNotes ? (
+                    <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+                      <Textarea
+                        value={editedNotesDraft}
+                        onChange={(e) => setEditedNotesDraft(e.target.value)}
+                        className="min-h-[300px] font-mono text-sm"
+                        data-testid="textarea-edit-notes"
+                      />
+                      <Button size="sm" variant="ghost" onClick={() => setIsEditingNotes(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : formattedNotes ? (
                     <div className="rounded-xl border border-border bg-card p-6">
                       <div className="prose prose-sm dark:prose-invert max-w-none
                         prose-headings:font-semibold prose-p:leading-relaxed
@@ -734,6 +828,9 @@ export default function LiveSession() {
                   </div>
 
                   <div className="rounded-xl border border-border bg-card p-6">
+                    {selectedNote.audioDataUrl && (
+                      <audio controls src={selectedNote.audioDataUrl} className="w-full h-10 rounded-lg mb-4" data-testid="audio-history-playback" />
+                    )}
                     {selectedNote.formattedNotes ? (
                       <div className="prose prose-sm dark:prose-invert max-w-none
                         prose-headings:font-semibold prose-p:leading-relaxed
