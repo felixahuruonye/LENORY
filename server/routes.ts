@@ -14,6 +14,7 @@ import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRoute
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
 import { registerVapiCustomTtsRoutes } from "./vapiCustomTts";
+import { tryClaimReference } from "./paymentLedger";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
 import {
   chatWithAI,
@@ -2828,9 +2829,41 @@ You have FULL access to the system. You can:
       res.status(200).send("OK");
       const event = req.body;
       if (event.event === "charge.success") {
-        const { userId, tierId } = event.data.metadata || {};
+        const meta = event.data.metadata || {};
+        const { userId, tierId, type, creditAmount } = meta;
+        const reference = event.data.reference;
+
+        if (type === "credit_topup") {
+          // Credit top-up purchase — previously NOT handled by the webhook
+          // at all (only tier upgrades were), meaning the ONLY thing that
+          // ever credited a top-up was the browser landing back on
+          // /api/credits/topup/callback. If that redirect never completes
+          // (closed tab, dropped connection — common on mobile), the user
+          // paid and got nothing, with no server-side fallback.
+          if (!userId || !creditAmount) {
+            logAdminError("paystack-webhook", `credit_topup missing metadata: ${JSON.stringify(meta)}`);
+            return;
+          }
+          const claimed = await tryClaimReference(reference, "credit_topup", userId, Number(creditAmount));
+          if (!claimed) {
+            console.log(`Paystack webhook: credit_topup ${reference} already processed (likely by the callback), skipping.`);
+            return;
+          }
+          const user = await storage.getUser(userId);
+          const tier = (user as any)?.subscriptionTier || "free";
+          await getOrCreateCredits(userId, tier);
+          await addCredits(userId, Number(creditAmount), tier, true);
+          console.log(`✅ Paystack webhook: user ${userId} topped up ${creditAmount} credits (ref: ${reference})`);
+          return;
+        }
+
         if (!userId || !tierId) {
-          logAdminError("paystack-webhook", `charge.success missing metadata: ${JSON.stringify(event.data.metadata)}`);
+          logAdminError("paystack-webhook", `charge.success missing metadata: ${JSON.stringify(meta)}`);
+          return;
+        }
+        const claimed = await tryClaimReference(reference, "tier_upgrade", userId, 0);
+        if (!claimed) {
+          console.log(`Paystack webhook: tier_upgrade ${reference} already processed, skipping to avoid double-crediting.`);
           return;
         }
         const expiresAt = new Date();
@@ -2869,7 +2902,14 @@ You have FULL access to the system. You can:
       res.json({
         tier: user?.subscriptionTier || 'free',
         expiresAt: user?.subscriptionExpiresAt,
-        isActive: user?.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt) > new Date() : user?.subscriptionTier === 'free',
+        // Was backwards: a paid tier with no expiresAt set (e.g. an admin
+        // grant, or an expiry that failed to persist) evaluated to
+        // isActive: false just because the tier wasn't 'free'. A paid tier
+        // with no expiry should read as active; only an actually-expired
+        // date should read as inactive.
+        isActive: user?.subscriptionTier && user.subscriptionTier !== 'free'
+          ? (user?.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt) > new Date() : true)
+          : true,
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to get subscription status" });
@@ -3017,10 +3057,17 @@ You have FULL access to the system. You can:
       const data = await verifyRes.json();
       if (data.data?.status === 'success') {
         const { userId, creditAmount } = data.data.metadata;
-        const user = await storage.getUser(userId);
-        const tier = (user as any)?.subscriptionTier || 'free';
-        await getOrCreateCredits(userId, tier);
-        await addCredits(userId, Number(creditAmount), tier, true);
+        // Shared with the webhook: whichever of the two gets here first
+        // credits the account; the other sees the reference already
+        // claimed and skips, so a payment is never credited twice even if
+        // both the webhook and this redirect fire for the same charge.
+        const claimed = await tryClaimReference(reference, "credit_topup", userId, Number(creditAmount));
+        if (claimed) {
+          const user = await storage.getUser(userId);
+          const tier = (user as any)?.subscriptionTier || 'free';
+          await getOrCreateCredits(userId, tier);
+          await addCredits(userId, Number(creditAmount), tier, true);
+        }
         res.redirect('/dashboard?topup=success');
       } else {
         res.redirect('/pricing?topup=failed');
@@ -3467,6 +3514,20 @@ You have FULL access to the system. You can:
       const apiKey = process.env.GROQ_API_KEY;
       if (!apiKey) return res.status(500).json({ error: "Speech-to-text is temporarily unavailable." });
       if (!req.file) return res.status(400).json({ error: "No audio file provided." });
+
+      // Was previously checked AFTER already paying Groq for the
+      // transcription, and even then only deducted whatever was left
+      // (including 0) instead of blocking — meaning a 0-credit user could
+      // transcribe unlimited audio for free while we kept paying Groq for
+      // every request. Now gated before the Groq call happens at all.
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, user?.email, tier, 1, "Voice transcription");
+      if (!gate.allowed) {
+        return res.status(402).json({ error: gate.error, message: gate.message, balance: gate.balance });
+      }
+
       const { language = 'en' } = req.body;
       const tmpFile = path.join(os.tmpdir(), `groq_audio_${Date.now()}_${req.file.originalname || 'audio.webm'}`);
       fs.writeFileSync(tmpFile, req.file.buffer);
@@ -3487,12 +3548,9 @@ You have FULL access to the system. You can:
       } finally {
         try { fs.unlinkSync(tmpFile); } catch {}
       }
-      const userId = req.userId;
-      const user = await storage.getUser(userId);
       const data = groqResData as any;
       if (user?.email !== REAL_ADMIN_EMAIL && data.duration) {
         const minutes = Math.ceil(data.duration / 60 / 5);
-        const tier = (user as any)?.subscriptionTier || 'free';
         const credits = await getOrCreateCredits(userId, tier);
         await deductCredits(userId, Math.min(minutes, credits.balance));
       }

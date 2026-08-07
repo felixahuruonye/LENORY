@@ -236,7 +236,7 @@ export default function LiveSession() {
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Unknown error" }));
-          throw new Error(err.error || "Transcription failed");
+          throw new Error(err.message || err.error || "Transcription failed");
         }
 
         const data = await res.json();
