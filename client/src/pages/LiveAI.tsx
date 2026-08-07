@@ -44,21 +44,19 @@ function buildLiveAIAssistantConfig() {
     firstMessage: "Hi, I'm LENORY! What are we studying today?",
     firstMessageMode: "assistant-speaks-first",
     model: {
-      // Switched from OpenAI gpt-4o-mini to Groq — Groq's LPU inference
-      // generates tokens dramatically faster than GPT-4o-mini, which is the
-      // main lever for cutting "thinking" time on voice calls, where every
-      // second of silence before the AI starts talking is felt directly by
-      // the person waiting. Vapi supports Groq as a first-class model
-      // provider, same message format as OpenAI, no config restructuring
-      // needed. If quality on GPT-OSS 120B ever feels worse than
-      // gpt-4o-mini, that's the tradeoff to weigh against the speed gain.
-      provider: "groq",
-      model: "openai/gpt-oss-120b",
-      // Safety net: if this exact model ID isn't recognized by Vapi/Groq
-      // (their model lineups shift often), fall back to the previously
-      // working OpenAI model instead of the call silently degrading or
-      // erroring on every turn.
-      fallbackModels: [{ provider: "openai", model: "gpt-4o-mini" }],
+      // Reverted from Groq (openai/gpt-oss-120b) back to OpenAI gpt-4o-mini.
+      // The Groq attempt was meant to cut response latency, but it appears
+      // to have broken call setup entirely instead — Felix's Render log
+      // showed voice-start firing repeatedly with the call logged as ended
+      // within ~1 second each time, and the UI stuck on "Getting ready..."
+      // I can't verify Vapi/Groq's exact accepted config from this
+      // environment (no egress to api.vapi.ai), so rather than keep
+      // guessing at a working config on a live product, reverting to the
+      // proven-working model. The waitSeconds/smartEndpointingPlan tuning
+      // below is unrelated and stays — that part was verified against
+      // Vapi's real docs and isn't implicated in this failure.
+      provider: "openai",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",

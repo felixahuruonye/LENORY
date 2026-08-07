@@ -434,14 +434,16 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
                     firstMessage: "Hey, I'm here! Keep going, or something new?",
                     firstMessageMode: "assistant-speaks-first",
                     model: {
-                      // Switched from OpenAI gpt-4o-mini to Groq for much
-                      // faster "thinking" time — Groq's inference is
-                      // dramatically faster token-for-token, which is what
-                      // actually determines how long the AI stays silent
-                      // before responding on a live call.
-                      provider: "groq",
-                      model: "openai/gpt-oss-120b",
-                      fallbackModels: [{ provider: "openai", model: "gpt-4o-mini" }],
+                      // Reverted from Groq back to OpenAI gpt-4o-mini — the
+                      // Groq attempt broke call setup (Render logs showed
+                      // voice-start firing repeatedly with the call ending
+                      // within ~1s each time, UI stuck on "Getting
+                      // ready..."). Couldn't verify Vapi/Groq's exact
+                      // accepted config from this environment, so reverting
+                      // to the proven-working model rather than keep
+                      // guessing on a live product.
+                      provider: "openai",
+                      model: "gpt-4o-mini",
                       messages: [
                         {
                           role: "system",
