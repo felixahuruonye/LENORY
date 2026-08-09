@@ -60,6 +60,20 @@ export async function handleGeminiLiveConnection(ws: WS, userId: string, chatSes
     isAdmin = user?.email === REAL_ADMIN_EMAIL;
     tier = (user as any)?.subscriptionTier || "free";
     if (!isAdmin) {
+      // Same tier restriction as /api/live-ai/voice-start (the Vapi call
+      // path) — this raw Gemini Live WebSocket path had no tier check at
+      // all, only a credit-balance check, so a Free-tier user with unspent
+      // daily credits could still get in here even though Free isn't
+      // supposed to have voice access.
+      if (tier !== "pro" && tier !== "premium") {
+        ws.send(JSON.stringify({
+          type: "error",
+          error: "TIER_LOCKED",
+          message: "Live AI voice calls are available on Pro and Premium plans. Upgrade to start a voice session.",
+        }));
+        ws.close();
+        return;
+      }
       const credits = await getOrCreateCredits(userId, tier);
       if (credits.balance < MIN_CREDITS_TO_START) {
         ws.send(JSON.stringify({

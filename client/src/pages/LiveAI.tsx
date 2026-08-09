@@ -1016,11 +1016,13 @@ export default function LiveAI() {
                             await apiRequest("POST", "/api/live-ai/voice-start", {});
                           } catch (e: any) {
                             let msg = "You need at least 20 credits to start a voice session. Please top up.";
+                            let title = "Insufficient credits";
                             try {
                               const parsed = JSON.parse(String(e?.message || "").replace(/^\d+:\s*/, ""));
                               if (parsed?.message) msg = parsed.message;
+                              if (parsed?.error === "TIER_LOCKED") title = "Upgrade required";
                             } catch {}
-                            toast({ title: "Insufficient credits", description: msg, variant: "destructive" });
+                            toast({ title, description: msg, variant: "destructive" });
                             return;
                           }
                           vapi.start(buildLiveAIAssistantConfig());
