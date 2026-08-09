@@ -36,7 +36,12 @@ export async function initializePayment(
   email: string,
   amount: number, // In kobo (smallest currency unit)
   reference: string,
-  metadata?: any
+  metadata?: any,
+  // Previously hardcoded to /marketplace for every caller — correct for the
+  // course-purchase flow (Marketplace.tsx has the matching verify logic
+  // there) but wrong for subscription upgrades, which land on Pricing.tsx
+  // instead. Callers now say where their user should land after checkout.
+  callbackPath: string = "/marketplace?payment=success"
 ): Promise<PaystackInitializeResponse> {
   const response = await fetch(`${PAYSTACK_API_BASE}/transaction/initialize`, {
     method: "POST",
@@ -49,7 +54,7 @@ export async function initializePayment(
       amount, // Amount in kobo
       reference,
       metadata,
-      callback_url: `${process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || process.env.REPLIT_DOMAINS?.split(",")[0] || "http://localhost:5000"}/marketplace?payment=success`,
+      callback_url: `${process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || process.env.REPLIT_DOMAINS?.split(",")[0] || "http://localhost:5000"}${callbackPath}`,
     }),
   });
 

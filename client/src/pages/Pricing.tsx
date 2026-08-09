@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCredits } from "@/hooks/useCredits";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -80,12 +80,59 @@ const TOPUP_PACKS = [
 const TIER_RANK: Record<string, number> = { free: 0, pro: 1, premium: 2 };
 
 export default function Pricing() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading, refetchUser } = useAuth();
   const { credits, topup, isTopupPending } = useCredits();
   const { toast } = useToast();
   const [loading, setLoading] = useState("");
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
 
   const currentTier = (user as any)?.subscriptionTier || "free";
+
+  // Previously subscription upgrades had NO post-payment confirmation flow at
+  // all: Paystack's callback_url was hardcoded to /marketplace (wrong page,
+  // wrong flow) and the dashboard never invalidated cached subscription/user
+  // data — so a successful upgrade could sit "webhook-applied in the DB" for
+  // a while with the app still showing the old (free) tier until a manual
+  // refresh. This mirrors the working credit top-up confirmation pattern:
+  // verify the reference, refetch the real user record, invalidate cached
+  // credits, and show a clear confirmation before clearing the URL.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") !== "success") return;
+    const reference = params.get("reference") || params.get("trxref");
+    if (!reference) return;
+
+    setConfirmingPayment(true);
+    (async () => {
+      try {
+        const res = await apiRequest("POST", "/api/payments/verify", { reference });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          toast({ title: "Payment confirmed!", description: `You're now on the ${data.tier} plan.` });
+          await refetchUser();
+          queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/credits"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/subscription/status"] });
+        } else {
+          toast({
+            title: "Payment received, but upgrade didn't apply",
+            description: data.message || "Please contact support with your payment reference so we can fix this manually.",
+            variant: "destructive",
+          });
+        }
+      } catch {
+        toast({
+          title: "Couldn't confirm payment",
+          description: "If you were charged, contact support with your payment reference — we'll fix it manually.",
+          variant: "destructive",
+        });
+      } finally {
+        setConfirmingPayment(false);
+        window.history.replaceState({}, "", "/pricing");
+      }
+    })();
+  }, [authLoading, user]);
 
   const handleUpgrade = async (tierId: string) => {
     setLoading(tierId);
@@ -122,6 +169,14 @@ export default function Pricing() {
       setLoading("");
     }
   };
+
+  if (confirmingPayment) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground">Confirming your payment...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
