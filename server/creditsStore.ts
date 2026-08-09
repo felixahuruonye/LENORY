@@ -1,6 +1,24 @@
 // server/creditsStore.ts
 // Real, persistent credit tracking. Supabase is the source of truth — a server
 // restart, deploy, or crash must never reset anyone's balance again.
+//
+// REQUIRES a one-time table creation in Supabase for admin-configurable tier
+// limits (getTierLimits/setTierLimits/getAllTierLimits below). Until this
+// table exists, everything still works exactly as before — the hardcoded
+// CREDIT_TIERS defaults are used automatically. Run this once in the
+// Supabase SQL editor to enable live editing from Admin Dashboard → Credits:
+//
+//   create table if not exists tier_config (
+//     tier text primary key,
+//     daily_add integer not null,
+//     max_balance integer not null,
+//     updated_at timestamptz not null default now()
+//   );
+//   insert into tier_config (tier, daily_add, max_balance) values
+//     ('free', 10, 30),
+//     ('pro', 60, 180),
+//     ('premium', 150, 450)
+//   on conflict (tier) do nothing;
 
 import { supabaseAdmin } from "./supabase";
 
@@ -14,16 +32,92 @@ export interface CreditRecord {
 
 // Sized against real Gemini 2.5 Flash pricing ($0.30/1M input, $2.50/1M output).
 // A typical thorough LENORY answer runs ~3000 input + ~1000 output tokens,
-// which costs roughly ₦5 per message at current USD/NGN rates. Adjust here —
-// and only here — as real usage data comes in from the admin dashboard.
+// which costs roughly ₦5 per message at current USD/NGN rates.
+//
+// These are now ONLY the hardcoded seed/fallback defaults. The live source of
+// truth is the `tier_config` Supabase table (editable from Admin Dashboard →
+// Credits → Tier Config), loaded via getTierLimits() below with a short cache.
+// If the table is empty, unreadable, or Supabase is down, these defaults are
+// used automatically — a bad or missing DB row can never break the app.
 export const CREDIT_TIERS: Record<string, { dailyAdd: number; maxBalance: number }> = {
   free: { dailyAdd: 10, maxBalance: 30 },
   pro: { dailyAdd: 60, maxBalance: 180 },
   premium: { dailyAdd: 150, maxBalance: 450 },
 };
 
-export function getTierLimits(tier: string) {
-  return CREDIT_TIERS[tier] || CREDIT_TIERS.free;
+type TierLimits = { dailyAdd: number; maxBalance: number };
+
+let tierConfigCache: Record<string, TierLimits> | null = null;
+let tierConfigCacheAt = 0;
+const TIER_CONFIG_CACHE_MS = 30_000; // 30s — admin edits show up quickly without hitting the DB on every request
+
+async function loadTierConfigFromDb(): Promise<Record<string, TierLimits> | null> {
+  if (!supabaseAdmin) return null;
+  try {
+    const { data, error } = await supabaseAdmin.from("tier_config").select("*");
+    if (error) {
+      logSupabaseError("select tier_config", error);
+      return null;
+    }
+    if (!data || data.length === 0) return null;
+    const merged: Record<string, TierLimits> = {};
+    for (const row of data as any[]) {
+      if (!row?.tier) continue;
+      const dailyAdd = Number(row.daily_add);
+      const maxBalance = Number(row.max_balance);
+      if (!Number.isFinite(dailyAdd) || !Number.isFinite(maxBalance)) continue;
+      merged[row.tier] = { dailyAdd, maxBalance };
+    }
+    return Object.keys(merged).length > 0 ? merged : null;
+  } catch (e) {
+    console.error("[creditsStore] loadTierConfigFromDb threw:", e);
+    return null;
+  }
+}
+
+// The ONLY function that should be used to read tier limits anywhere in the
+// app. DB-backed with a 30s cache, always falling back to CREDIT_TIERS.
+export async function getTierLimits(tier: string): Promise<TierLimits> {
+  const now = Date.now();
+  if (!tierConfigCache || now - tierConfigCacheAt > TIER_CONFIG_CACHE_MS) {
+    const fromDb = await loadTierConfigFromDb();
+    tierConfigCache = fromDb; // may be null — that's fine, we fall back below on every read
+    tierConfigCacheAt = now;
+  }
+  return (tierConfigCache && tierConfigCache[tier]) || CREDIT_TIERS[tier] || CREDIT_TIERS.free;
+}
+
+// Admin-only write path — upserts a tier's live limits into `tier_config` and
+// invalidates the cache immediately so the change is visible on the very next
+// request (not after the 30s window).
+export async function setTierLimits(tier: string, dailyAdd: number, maxBalance: number): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+  try {
+    const { error } = await supabaseAdmin
+      .from("tier_config")
+      .upsert({ tier, daily_add: dailyAdd, max_balance: maxBalance, updated_at: new Date().toISOString() });
+    if (error) {
+      logSupabaseError("upsert tier_config", error);
+      return false;
+    }
+    tierConfigCache = null; // force reload on next getTierLimits() call
+    return true;
+  } catch (e) {
+    console.error("[creditsStore] setTierLimits threw:", e);
+    return false;
+  }
+}
+
+// Returns the full live tier config (DB values merged over defaults) for the
+// admin UI to display and edit.
+export async function getAllTierLimits(): Promise<Record<string, TierLimits>> {
+  const now = Date.now();
+  if (!tierConfigCache || now - tierConfigCacheAt > TIER_CONFIG_CACHE_MS) {
+    const fromDb = await loadTierConfigFromDb();
+    tierConfigCache = fromDb;
+    tierConfigCacheAt = now;
+  }
+  return { ...CREDIT_TIERS, ...(tierConfigCache || {}) };
 }
 
 function todayKey(): string {
@@ -38,10 +132,13 @@ function monthKey(): string {
 // crashing, but nothing here is treated as durable.
 const emergencyFallbackStore = new Map<string, CreditRecord>();
 
+// Supabase is already unreachable whenever this runs, so tier_config (which
+// lives in Supabase) can't be read either — use the hardcoded defaults
+// directly rather than trying to await a DB call that will just fail too.
 function fallbackGetOrCreate(userId: string, tier: string): CreditRecord {
   const today = todayKey();
+  const limits = CREDIT_TIERS[tier] || CREDIT_TIERS.free;
   if (!emergencyFallbackStore.has(userId)) {
-    const limits = getTierLimits(tier);
     emergencyFallbackStore.set(userId, {
       balance: limits.dailyAdd,
       monthlyUsed: 0,
@@ -52,7 +149,6 @@ function fallbackGetOrCreate(userId: string, tier: string): CreditRecord {
   }
   const rec = emergencyFallbackStore.get(userId)!;
   if (rec.lastDailyReset !== today) {
-    const limits = getTierLimits(tier);
     const currentMonth = monthKey();
     const isNewMonth = rec.lastMonthlyReset !== currentMonth;
     if (isNewMonth) { rec.monthlyUsed = 0; rec.lastMonthlyReset = currentMonth; }
@@ -84,7 +180,7 @@ function logSupabaseError(context: string, error: any) {
 // day has started. This is the ONLY function that should read credit state.
 export async function getOrCreateCredits(userId: string, tier: string = "free"): Promise<CreditRecord> {
   const today = todayKey();
-  const limits = getTierLimits(tier);
+  const limits = await getTierLimits(tier);
 
   if (!supabaseAdmin) {
     console.warn("⚠️ Supabase unavailable — using emergency in-memory credits fallback");
@@ -235,7 +331,7 @@ export async function checkCreditGate(
 // Manually force a user's daily top-up right now (admin action), independent
 // of whether their calendar daily-reset window has actually elapsed.
 export async function resetDailyCredits(userId: string, tier: string): Promise<CreditRecord | null> {
-  const limits = getTierLimits(tier);
+  const limits = await getTierLimits(tier);
   const today = todayKey();
   if (!supabaseAdmin) {
     const rec = emergencyFallbackStore.get(userId);
@@ -265,7 +361,7 @@ export async function resetDailyCredits(userId: string, tier: string): Promise<C
 }
 
 export async function resetMonthlyCredits(userId: string, tier: string): Promise<CreditRecord | null> {
-  const limits = getTierLimits(tier);
+  const limits = await getTierLimits(tier);
   const today = todayKey();
   const currentMonth = monthKey();
   if (!supabaseAdmin) {
@@ -297,7 +393,7 @@ export async function resetMonthlyCredits(userId: string, tier: string): Promise
 // Add credits (Paystack top-up, admin adjustment). Caps at the tier's maxBalance
 // unless uncapped is explicitly requested (e.g. an admin override).
 export async function addCredits(userId: string, amount: number, tier: string = "free", uncapped = false): Promise<number | null> {
-  const limits = getTierLimits(tier);
+  const limits = await getTierLimits(tier);
   if (!supabaseAdmin) {
     const rec = emergencyFallbackStore.get(userId);
     if (rec) { rec.balance = uncapped ? rec.balance + amount : Math.min(rec.balance + amount, limits.maxBalance); return rec.balance; }

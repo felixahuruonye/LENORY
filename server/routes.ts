@@ -9,7 +9,7 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions, getActiveUsers, getPlatformHealth, getTotalPlatformCredits, getUserActivity, getUserCohorts, getUserCreditHistory, getUserCredits } from "./adminTools";
-import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits } from "./creditsStore";
+import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits } from "./creditsStore";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -337,17 +337,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       sendStatus("thinking", 5);
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
-      // Credit check
-      if (user?.email !== REAL_ADMIN_EMAIL) {
-        const tier = (user as any)?.subscriptionTier || 'free';
-        const totalCost = 1 + (isLongPaste ? 12 : 0);
-        const credits = await getOrCreateCredits(userId, tier);
-        if (credits.balance < totalCost) {
-          if (wantsStream) { res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance })}\n\n`); return res.end(); }
-          return res.status(402).json({ message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance });
-        }
-        await deductCredits(userId, totalCost);
-      }
+      // Credit check moved below (see "Tier-aware credit check" further down) —
+      // it now runs AFTER we know whether this message qualifies for Ultra mode
+      // and whether a Knowledge Base folder is linked, so the real cost of the
+      // message can actually be charged instead of a flat 1 credit regardless
+      // of which model answers it.
       let currentSession: any = null;
       if (sessionId) {
         currentSession = await storage.getChatSession(sessionId);
@@ -506,10 +500,33 @@ You have FULL access to the system. You can:
         systemMessage += `\n\n## ADDITIONAL CONTEXT:\n${extraContext}`;
       }
       const realUserTier = (user as any)?.subscriptionTier || 'free';
-      const canUseAdvanced = realUserTier === 'pro' || realUserTier === 'premium' || isAdminUser;
+      // Only Premium (or admin) unlocks Ultra-mode models (Claude Sonnet 5, GPT-5.1,
+      // DeepSeek V4, Grok 4 — the most expensive models in the stack). Pro is
+      // capped at Fast (Groq). This used to also allow 'pro', letting any Pro
+      // user use the most expensive models for the price of the cheapest paid plan.
+      const canUseAdvanced = realUserTier === 'premium' || isAdminUser;
       isAdvanced = !!isAdvanced && canUseAdvanced;
       if (isAdvanced) {
         systemMessage += `\n\n## ADVANCED MODE:\nYou are acting as a Technical/Project Specialist. Provide deep analysis, accurate solutions, and help with complex technical tasks.`;
+      }
+
+      // ─── Tier-aware credit check ──────────────────────────────────────────
+      // Previously a flat 1 credit (2nd doc §3b): a cheap Fast/Groq message and
+      // an expensive Ultra/OpenRouter message — especially with several
+      // thousand extra tokens of Knowledge Base folder context injected —
+      // cost the same 1 credit even though their real API cost differs by
+      // 10-100x. Ultra messages now cost more, and a linked KB folder adds a
+      // surcharge on top since it injects extra tokens into every message in
+      // that session, not just this one.
+      const hasKbContext = !!kbFolderContext;
+      const totalCost = (isAdvanced ? 4 : 1) + (hasKbContext ? 1 : 0) + (isLongPaste ? 12 : 0);
+      if (user?.email !== REAL_ADMIN_EMAIL) {
+        const credits = await getOrCreateCredits(userId, realUserTier);
+        if (credits.balance < totalCost) {
+          if (wantsStream) { res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance })}\n\n`); return res.end(); }
+          return res.status(402).json({ message: "Insufficient credits", error: "INSUFFICIENT_CREDITS", balance: credits.balance });
+        }
+        await deductCredits(userId, totalCost);
       }
       systemMessage += `
 
@@ -622,10 +639,20 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
       const isAdminUser = user?.email === REAL_ADMIN_EMAIL;
+      const streamTier = (user as any)?.subscriptionTier || 'free';
+      // This endpoint used to unconditionally call an OpenRouter Ultra model for
+      // EVERY message on EVERY tier, regardless of `isAdvanced` — the exact same
+      // class of bug as the Ultra-gating fix in /api/chat/send, just unguarded
+      // entirely rather than mis-gated to Pro. Only Premium (or admin) may use
+      // Ultra here too.
+      const streamCanUseAdvanced = streamTier === 'premium' || isAdminUser;
+      isAdvanced = !!isAdvanced && streamCanUseAdvanced;
+      // Tier-aware cost, mirroring finding 3b's fix in /api/chat/send: Ultra
+      // messages cost more than Fast, since Ultra runs a materially more
+      // expensive frontier model per message.
       if (user?.email !== REAL_ADMIN_EMAIL) {
-        const tier = (user as any)?.subscriptionTier || 'free';
-        const totalCost = 1 + (req.body.isLongPaste ? 12 : 0);
-        const credits = await getOrCreateCredits(userId, tier);
+        const totalCost = (isAdvanced ? 4 : 1) + (req.body.isLongPaste ? 12 : 0);
+        const credits = await getOrCreateCredits(userId, streamTier);
         if (credits.balance < totalCost) {
           sendEvent({ type: 'error', message: 'Insufficient credits' });
           res.end();
@@ -718,19 +745,30 @@ You have FULL access to the system. You can:
 
       sendEvent({ type: 'status', status: 'writing', estimatedTimeRemaining: 10 });
 
-      const openRouterKey = process.env.OPENROUTER_API_KEY;
-      const ultraModel = process.env.OPENROUTER_ULTRA_MODEL || 'anthropic/claude-3.5-sonnet';
-      
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      // Only Premium/admin (isAdvanced, gated above) reaches OpenRouter's Ultra
+      // model. Everyone else streams from Groq's Fast chain — cheap and fast,
+      // matching the same Free/Pro = Fast, Premium = Ultra split used by
+      // /api/chat/send and server/aiRouter.ts.
+      const useUltra = isAdvanced;
+      const providerUrl = useUltra ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.groq.com/openai/v1/chat/completions';
+      const providerKey = useUltra ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
+      const model = useUltra
+        ? (process.env.OPENROUTER_ULTRA_MODEL || 'anthropic/claude-sonnet-5')
+        : (process.env.GROQ_FAST_MODEL || 'openai/gpt-oss-120b');
+
+      if (!providerKey) {
+        throw new Error(`No API key configured for ${useUltra ? 'OpenRouter' : 'Groq'}`);
+      }
+
+      const response = await fetch(providerUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${openRouterKey}`,
+          'Authorization': `Bearer ${providerKey}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://lenory.app',
-          'X-Title': 'LENORY AI',
+          ...(useUltra ? { 'HTTP-Referer': 'https://lenory.app', 'X-Title': 'LENORY AI' } : {}),
         },
         body: JSON.stringify({
-          model: ultraModel,
+          model,
           messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
           temperature: 0.7,
           max_tokens: 4096,
@@ -739,7 +777,7 @@ You have FULL access to the system. You can:
       });
 
       if (!response.ok) {
-        throw new Error(`OpenRouter error: ${response.status}`);
+        throw new Error(`${useUltra ? 'OpenRouter' : 'Groq'} error: ${response.status}`);
       }
 
       const reader = response.body?.getReader();
@@ -1030,6 +1068,56 @@ You have FULL access to the system. You can:
     } catch (error) {
       console.error("Error fetching user credits:", error);
       res.status(500).json({ message: "Failed to fetch user credits" });
+    }
+  });
+
+  // ─── TIER CONFIG (admin-configurable daily/monthly credit amounts) ───────
+  // Previously CREDIT_TIERS was hardcoded in creditsStore.ts — changing it
+  // required editing code and redeploying. Now backed by the `tier_config`
+  // Supabase table via getAllTierLimits/setTierLimits, with the old hardcoded
+  // values used automatically as a fallback if the table is empty or unreachable.
+  app.get('/api/admin/tier-config', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const tiers = await getAllTierLimits();
+      res.json({ tiers });
+    } catch (error) {
+      console.error("Error fetching tier config:", error);
+      res.status(500).json({ message: "Failed to fetch tier config" });
+    }
+  });
+
+  app.put('/api/admin/tier-config/:tier', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const tier = req.params.tier;
+      const VALID_TIERS = ['free', 'pro', 'premium'];
+      if (!VALID_TIERS.includes(tier)) {
+        return res.status(400).json({ message: "Invalid tier — must be free, pro, or premium" });
+      }
+      const dailyAdd = Number(req.body.dailyAdd);
+      const maxBalance = Number(req.body.maxBalance);
+      if (!Number.isFinite(dailyAdd) || dailyAdd < 0 || !Number.isFinite(maxBalance) || maxBalance < 0) {
+        return res.status(400).json({ message: "dailyAdd and maxBalance must be non-negative numbers" });
+      }
+      if (dailyAdd > maxBalance) {
+        return res.status(400).json({ message: "dailyAdd cannot exceed maxBalance" });
+      }
+      const ok = await setTierLimits(tier, dailyAdd, maxBalance);
+      if (!ok) {
+        return res.status(500).json({ message: "Failed to save tier config — check server logs / Supabase connectivity" });
+      }
+      const tiers = await getAllTierLimits();
+      res.json({ success: true, tiers });
+    } catch (error) {
+      console.error("Error saving tier config:", error);
+      res.status(500).json({ message: "Failed to save tier config" });
     }
   });
 
@@ -1324,22 +1412,39 @@ You have FULL access to the system. You can:
     try { await storage.deleteGeneratedWebsite(req.params.id); res.json({ message: "Website deleted successfully" }); } catch (error) { res.status(500).json({ message: "Failed to delete website" }); }
   });
 
+  // Previously free and unlimited on any tier despite calling a real Gemini
+  // model — matches the existing 10-credit generate gate's pattern, at a
+  // lower cost since explain/debug are cheaper single calls than a full
+  // generate.
   app.post('/api/websites/:id/explain', supabaseAuth, async (req: any, res: Response) => {
     try {
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, user?.email, tier, 2, "Explain code");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       const website = await storage.getGeneratedWebsite(req.params.id);
       if (!website) return res.status(404).json({ message: "Website not found" });
-      res.json({ explanation: await explainCodeForBeginners(website.htmlCode, website.cssCode, website.jsCode || "") });
+      const explanation = await explainCodeForBeginners(website.htmlCode, website.cssCode, website.jsCode || "");
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 2);
+      res.json({ explanation });
     } catch (error) { res.status(500).json({ message: "Failed to explain code" }); }
   });
 
   app.post('/api/websites/:id/debug', supabaseAuth, async (req: any, res: Response) => {
     try {
+      const userId = req.userId;
       const { debugPrompt } = req.body;
       if (!debugPrompt?.trim()) return res.status(400).json({ message: "Debug prompt is required" });
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, user?.email, tier, 3, "Debug code");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
       const website = await storage.getGeneratedWebsite(req.params.id);
       if (!website) return res.status(404).json({ message: "Website not found" });
       const debugResult = await debugCodeWithLENORY(website.htmlCode, website.cssCode, website.jsCode || "", debugPrompt);
       await storage.updateGeneratedWebsite(req.params.id, { htmlCode: debugResult.htmlCode, cssCode: debugResult.cssCode, jsCode: debugResult.jsCode });
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 3);
       res.json({ success: true, updates: { html: debugResult.htmlCode !== website.htmlCode, css: debugResult.cssCode !== website.cssCode, js: (debugResult.jsCode || "") !== (website.jsCode || "") } });
     } catch (error) { res.status(500).json({ success: false, message: error instanceof Error ? error.message : "Debug failed" }); }
   });
@@ -2123,6 +2228,16 @@ You have FULL access to the system. You can:
       const user = await storage.getUser(userId);
       if (user?.email !== REAL_ADMIN_EMAIL) {
         const tier = (user as any)?.subscriptionTier || 'free';
+        // Live AI voice was previously credit-balance gated only — nothing
+        // checked subscriptionTier, so a Free-tier user with unspent daily
+        // credits could use it despite Free not being an intended voice tier.
+        if (tier !== 'pro' && tier !== 'premium') {
+          return res.status(403).json({
+            message: "Live AI voice calls are available on Pro and Premium plans. Upgrade to start a voice session.",
+            error: "TIER_LOCKED",
+            requiredTier: "pro",
+          });
+        }
         const credits = await getOrCreateCredits(userId, tier);
         if (credits.balance < 20) {
           return res.status(402).json({
@@ -2712,7 +2827,7 @@ You have FULL access to the system. You can:
         subscriptionExpiresAt: expiresAt,
         paystackCustomerId: paystackResponse.data.customer.email,
       });
-      const { dailyAdd } = getTierLimits(tierId);
+      const { dailyAdd } = await getTierLimits(tierId);
       await getOrCreateCredits(userId, tierId);
       // Don't re-add credits if this reference was already reconciled before (avoid double top-up)
       res.json({
@@ -2748,7 +2863,8 @@ You have FULL access to the system. You can:
         user.email,
         kobo,
         reference,
-        { userId, tierId, email: user.email }
+        { userId, tierId, email: user.email },
+        "/pricing?payment=success"
       );
       if (paystackResponse.status) {
         res.json({
@@ -2790,7 +2906,7 @@ You have FULL access to the system. You can:
           logAdminError("payments-verify", `updateUser did not persist subscriptionTier for user ${userId} -> ${verifiedTierId}`);
           return res.status(500).json({ message: "Payment verified but upgrade failed to save. Contact support with your reference." });
         }
-        const { dailyAdd } = getTierLimits(verifiedTierId);
+        const { dailyAdd } = await getTierLimits(verifiedTierId);
         await getOrCreateCredits(userId, verifiedTierId);
         await addCredits(userId, dailyAdd, verifiedTierId);
         res.json({ success: true, message: "Subscription activated", tier: verifiedTierId });
@@ -2876,7 +2992,7 @@ You have FULL access to the system. You can:
         if (!updated || (updated as any).subscriptionTier !== tierId) {
           logAdminError("paystack-webhook", `subscriptionTier did NOT persist for user ${userId} -> ${tierId} (ref: ${event.data.reference}). Credits will still be added below — this is exactly the bug where credits update but tier doesn't.`);
         }
-        const { dailyAdd } = getTierLimits(tierId);
+        const { dailyAdd } = await getTierLimits(tierId);
         await getOrCreateCredits(userId, tierId);
         await addCredits(userId, dailyAdd, tierId);
         console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
@@ -2961,7 +3077,7 @@ You have FULL access to the system. You can:
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const credits = await getOrCreateCredits(userId, tier);
-      const { maxBalance } = getTierLimits(tier);
+      const { maxBalance } = await getTierLimits(tier);
       res.json({
         credits: credits.balance,
         used: credits.monthlyUsed,
@@ -2980,7 +3096,7 @@ You have FULL access to the system. You can:
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const credits = await getOrCreateCredits(userId, tier);
-      const { dailyAdd, maxBalance } = getTierLimits(tier);
+      const { dailyAdd, maxBalance } = await getTierLimits(tier);
       res.json({
         balance: credits.balance,
         monthlyUsed: credits.monthlyUsed,
@@ -3337,10 +3453,19 @@ You have FULL access to the system. You can:
 
   app.post('/api/tts/openai', supabaseAuth, async (req: any, res: Response) => {
     try {
+      const userId = req.userId;
       const { text, voice = "alloy" } = req.body;
       if (!text) return res.status(400).json({ error: "text is required" });
       const apiKey = process.env.OPENAI_API_KEY;
       if (!apiKey) return res.status(500).json({ error: "OpenAI TTS is not configured (missing OPENAI_API_KEY)" });
+
+      // Previously free and unlimited on any tier despite billing a real,
+      // paid TTS provider per character — a flat small charge is enough to
+      // close that gap without meaningfully affecting a normal user's flow.
+      const ttsUser = await storage.getUser(userId);
+      const ttsTier = (ttsUser as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, ttsUser?.email, ttsTier, 1, "Read aloud");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
 
       const validVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
       const safeVoice = validVoices.includes(voice) ? voice : "alloy";
@@ -3361,6 +3486,7 @@ You have FULL access to the system. You can:
       const arrayBuffer = await oaResponse.arrayBuffer();
       const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
       logApiUsage("openai-tts", req.userId, "/api/tts/openai");
+      if (ttsUser?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 1);
       res.json({ audioBase64, mimeType: "audio/mpeg" });
     } catch (error: any) {
       console.error("OpenAI TTS error:", error);
@@ -3370,10 +3496,16 @@ You have FULL access to the system. You can:
 
   app.post('/api/tts/yarngpt', supabaseAuth, async (req: any, res: Response) => {
     try {
+      const userId = req.userId;
       const { text, speaker = "Idera" } = req.body;
       if (!text) return res.status(400).json({ error: "text is required" });
       const apiKey = process.env.YARNGPT_API_KEY;
       if (!apiKey) return res.status(500).json({ error: "YarnGPT is not configured (missing YARNGPT_API_KEY)" });
+
+      const ttsUser = await storage.getUser(userId);
+      const ttsTier = (ttsUser as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, ttsUser?.email, ttsTier, 1, "Read aloud");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
 
       const ytResponse = await fetch("https://yarngpt.ai/api/v1/tts", {
         method: "POST",
@@ -3391,6 +3523,7 @@ You have FULL access to the system. You can:
       const arrayBuffer = await ytResponse.arrayBuffer();
       const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
       logApiUsage("yarngpt", req.userId, "/api/tts/yarngpt");
+      if (ttsUser?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, 1);
       res.json({ audioBase64, mimeType: "audio/mpeg" });
     } catch (error: any) {
       console.error("YarnGPT TTS error:", error);
