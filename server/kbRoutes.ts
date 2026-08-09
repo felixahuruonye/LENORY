@@ -9,6 +9,31 @@ import { chatWithAI } from "./gemini";
 import { storage } from "./storage";
 const kbUpload = multer({ storage: multer.memoryStorage() });
 
+const REAL_ADMIN_EMAIL = "felixahuruonye@gmail.com";
+
+// Mirrors the client's UPLOAD_BATCH_LIMITS in Notes.tsx — that check is
+// client-side only (a user can bypass the UI and call this endpoint
+// directly), so it's re-enforced here. The endpoint itself only ever
+// accepts one file per request, so "batch" is approximated as a rolling
+// 60s window: uploading more files than your tier's batch limit within
+// one minute is treated the same as selecting too many at once.
+const UPLOAD_BATCH_LIMITS: Record<string, number> = { free: 1, pro: 5, premium: 15 };
+const UPLOAD_WINDOW_MS = 60_000;
+const recentUploads = new Map<string, number[]>();
+
+function checkUploadRateLimit(userId: string, tier: string): { allowed: boolean; limit: number } {
+  const limit = UPLOAD_BATCH_LIMITS[tier] ?? UPLOAD_BATCH_LIMITS.free;
+  const now = Date.now();
+  const timestamps = (recentUploads.get(userId) || []).filter((t) => now - t < UPLOAD_WINDOW_MS);
+  if (timestamps.length >= limit) {
+    recentUploads.set(userId, timestamps);
+    return { allowed: false, limit };
+  }
+  timestamps.push(now);
+  recentUploads.set(userId, timestamps);
+  return { allowed: true, limit };
+}
+
 async function transcribeAudioBuffer(buffer: Buffer, originalname: string): Promise<string | null> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return null;
@@ -142,6 +167,17 @@ export function registerKbRoutes(app: Express) {
   app.post('/api/kb/folders/:id/files', supabaseAuth, kbUpload.single('file'), async (req: any, res: Response) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const uploader = await storage.getUser(req.userId);
+      const uploaderTier = (uploader as any)?.subscriptionTier || 'free';
+      if (uploader?.email !== REAL_ADMIN_EMAIL) {
+        const rate = checkUploadRateLimit(req.userId, uploaderTier);
+        if (!rate.allowed) {
+          return res.status(403).json({
+            message: `Your plan allows ${rate.limit} file${rate.limit === 1 ? "" : "s"} per minute. Upgrade to upload more at once.`,
+            error: "TIER_LOCKED",
+          });
+        }
+      }
       const { originalname, mimetype, buffer } = req.file;
       let extractedText = "";
       let fileType = "upload";
