@@ -41,6 +41,7 @@ export default function AdminDashboard() {
   const [showTransactions, setShowTransactions] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [tierConfigDraft, setTierConfigDraft] = useState<Record<string, { dailyAdd: string; maxBalance: string }>>({});
 
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
@@ -144,6 +145,47 @@ export default function AdminDashboard() {
       refetchUsers();
     },
     onError: () => toast({ title: "Reset failed", variant: "destructive" }),
+  });
+
+  // ─── TIER CONFIG (daily/monthly credit amounts, DB-backed) ────────────────
+  const { data: tierConfigData, isLoading: tierConfigLoading, refetch: refetchTierConfig } = useQuery({
+    queryKey: ["/api/admin/tier-config"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/tier-config");
+      return res.json();
+    },
+    enabled: isAuthorized,
+    staleTime: 15 * 1000,
+  });
+
+  useEffect(() => {
+    if (!tierConfigData?.tiers) return;
+    const draft: Record<string, { dailyAdd: string; maxBalance: string }> = {};
+    for (const t of ["free", "pro", "premium"]) {
+      const limits = tierConfigData.tiers[t];
+      draft[t] = { dailyAdd: String(limits?.dailyAdd ?? ""), maxBalance: String(limits?.maxBalance ?? "") };
+    }
+    setTierConfigDraft(draft);
+  }, [tierConfigData]);
+
+  const saveTierConfigMutation = useMutation({
+    mutationFn: async (tier: string) => {
+      const draft = tierConfigDraft[tier];
+      const res = await apiRequest("PUT", `/api/admin/tier-config/${tier}`, {
+        dailyAdd: Number(draft.dailyAdd),
+        maxBalance: Number(draft.maxBalance),
+      });
+      return res.json();
+    },
+    onSuccess: (_data, tier) => {
+      toast({ title: `${tier.charAt(0).toUpperCase() + tier.slice(1)} tier updated`, description: "Takes effect within 30 seconds — no redeploy needed." });
+      refetchTierConfig();
+    },
+    onError: (err: any) => {
+      let msg = "Save failed";
+      try { msg = JSON.parse(String(err?.message || "").replace(/^\d+:\s*/, ""))?.message || msg; } catch {}
+      toast({ title: "Save failed", description: msg, variant: "destructive" });
+    },
   });
 
   const [reconcileReference, setReconcileReference] = useState("");
@@ -668,6 +710,66 @@ export default function AdminDashboard() {
                       </Button>
                       <Button variant="outline" onClick={() => setCreditAction(null)} data-testid="button-cancel-credits">Cancel</Button>
                     </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Tier Config — Daily/Monthly Credit Amounts</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Edit how many credits each tier gets per day and their monthly cap. Changes take effect within 30 seconds — no code changes or redeploy needed.
+                </p>
+                {tierConfigLoading && !Object.keys(tierConfigDraft).length ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading tier config...
+                  </div>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    {["free", "pro", "premium"].map((tier) => (
+                      <div key={tier} className="border rounded-lg p-4 space-y-3">
+                        <p className="font-medium capitalize flex items-center gap-2">
+                          {tier === "premium" && <Crown className="h-4 w-4 text-amber-500" />}
+                          {tier}
+                        </p>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Daily credits added</label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={tierConfigDraft[tier]?.dailyAdd ?? ""}
+                            onChange={(e) => setTierConfigDraft((prev) => ({ ...prev, [tier]: { ...prev[tier], dailyAdd: e.target.value } }))}
+                            data-testid={`input-tier-${tier}-daily`}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Monthly cap</label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={tierConfigDraft[tier]?.maxBalance ?? ""}
+                            onChange={(e) => setTierConfigDraft((prev) => ({ ...prev, [tier]: { ...prev[tier], maxBalance: e.target.value } }))}
+                            data-testid={`input-tier-${tier}-max`}
+                          />
+                        </div>
+                        <Button
+                          size="sm"
+                          className="w-full"
+                          onClick={() => saveTierConfigMutation.mutate(tier)}
+                          disabled={saveTierConfigMutation.isPending}
+                          data-testid={`button-save-tier-${tier}`}
+                        >
+                          {saveTierConfigMutation.isPending && saveTierConfigMutation.variables === tier ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "Save"
+                          )}
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </CardContent>
