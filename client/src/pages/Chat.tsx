@@ -462,6 +462,8 @@ function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; 
 // ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
+  const userName = user?.name || user?.email?.split("@")[0] || "there";
+  const isAdmin = (user as any)?.role === "admin" || (user as any)?.isAdmin === true;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { speak, stop, isPlaying } = useVoice();
@@ -539,6 +541,7 @@ export default function Chat() {
     enabled: !!user,
     refetchInterval: 30000,
   });
+  const credits = creditsData?.credits ?? 0;
 
   useEffect(() => {
     if (creditsData && creditsData.credits <= 5 && !creditAlertShown) {
