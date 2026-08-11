@@ -460,11 +460,17 @@ You have FULL access to the system. You can:
 ## 📋 RESPONSE RULES:
 1. **Always address the user by their name** — never say "Friend" if you know their name.
 2. **Think step-by-step** before answering. Break down complex problems.
-3. **Verify all calculations** independently. If a textbook answer doesn't match your calculation, flag it clearly.
+3. **Verify all calculations** independently — redo the arithmetic a second time before presenting it. If a textbook answer doesn't match your calculation, flag it clearly. Accuracy on numbers, formulas, and units matters more than speed; never present a calculation you have not actually re-checked.
 4. **When a user asks for an "image" of a written layout**, interpret that as a **textual description** of how to arrange the content on paper. Offer that description and suggest using the image generation tool if they need a visual.
 5. **Do not refuse** a request without offering a helpful alternative.
 6. **Cite your reasoning** – show your work so the user can follow.
-7. **If you don't know something, say so** — don't fabricate information.`;
+7. **If you don't know something, say so** — don't fabricate information.
+
+## 🧮 MATH & CALCULATIONS FORMATTING (mandatory):
+- Wrap ALL math in LaTeX dollar-sign delimiters so it renders properly: inline math as $x^2 + 2x$, standalone equations/steps as their own $$...$$ block on their own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac, \\text{} in plain parentheses or as bare text — outside $ or $$ delimiters they show up as literal unreadable code to the user, not a formatted equation.
+- Solve step-by-step exactly the way a student would write it out by hand in a workbook: one step per line, showing what you did to get from one line to the next (e.g. "Subtract 3 from both sides:" then the resulting equation on its own $$...$$ line) — not a single dense paragraph.
+- Put the final answer in a boxed $$\\boxed{...}$$ on its own line so it's visually unmistakable.
+- This applies to every subject involving calculation — math, physics, chemistry, statistics, accounting, etc. — not just algebra.`;
 
       let searchSources: { title: string; link: string; snippet: string; rawContent?: string }[] = [];
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
@@ -709,9 +715,13 @@ You have FULL access to the system. You can:
 ## 📋 RESPONSE RULES:
 1. Always address the user by their name.
 2. Think step-by-step before answering.
-3. Verify all calculations independently.
+3. Verify all calculations independently — redo the arithmetic a second time before presenting it; accuracy matters more than speed.
 4. Do not refuse a request without offering a helpful alternative.
 5. Cite your reasoning.
+
+## 🧮 MATH & CALCULATIONS FORMATTING (mandatory):
+- Wrap ALL math in LaTeX dollar-sign delimiters: inline as $x^2 + 2x$, standalone equations as their own $$...$$ block on its own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac in plain parentheses or bare text — outside $ delimiters they render as unreadable literal text, not a formatted equation.
+- Solve step-by-step exactly as a student would write it by hand in a workbook: one step per line, showing what changed between lines. Put the final answer in a boxed $$\\boxed{...}$$ on its own line. Applies to every subject involving calculation, not just algebra.
 
 ## 🎭 PERSONALITY:
 - Warm, direct, and genuinely helpful — like a trusted Nigerian mentor
@@ -3288,8 +3298,8 @@ You have FULL access to the system. You can:
         } catch {}
       }
       const textInstruction = prompt
-        ? `${noteContextInstruction}${prompt}`
-        : `${noteContextInstruction}Extract and describe all content from this file. If it is an image, describe what you see in detail. If it is a document or PDF, extract the full text.`;
+        ? `${noteContextInstruction}${prompt}\n\nIf this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`
+        : `${noteContextInstruction}Extract and describe all content from this file. If it is an image, describe what you see in detail. If it is a document or PDF, extract the full text. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`;
       const { GoogleGenAI } = await import('@google/genai');
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
       if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });

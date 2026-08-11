@@ -109,7 +109,6 @@ function TypingIndicator({ action }: { action?: string | null }) {
 // ─── Code block with copy / expand / download ─────────────────────────────────
 function CodeBlock({ children, className }: { children: string; className?: string }) {
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const lang = className?.replace("language-", "") || "code";
 
   const copy = async () => {
@@ -130,67 +129,36 @@ function CodeBlock({ children, className }: { children: string; className?: stri
     URL.revokeObjectURL(url);
   };
 
+  // No expand/fullscreen mode — code stays inline in a fixed, copyable box.
+  // whitespace-pre-wrap + overflow-x-hidden together guarantee long lines
+  // wrap instead of requiring horizontal scroll/swipe to read.
   return (
-    <>
-      <div className="relative group my-3 rounded-xl overflow-hidden border border-border/50">
-        <div className="flex items-center justify-between px-4 py-2 bg-muted/80 border-b border-border/40">
-          <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={download}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              data-testid="button-download-code"
-              title="Download file"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setExpanded(true)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              data-testid="button-expand-code"
-              title="Expand"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={copy}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              data-testid="button-copy-code"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? "Copied!" : "Copy"}</span>
-            </button>
-          </div>
+    <div className="relative group my-3 rounded-xl overflow-hidden border border-border/50">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/80 border-b border-border/40">
+        <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={download}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="button-download-code"
+            title="Download file"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={copy}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="button-copy-code"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? "Copied!" : "Copy"}</span>
+          </button>
         </div>
-        <pre className="p-4 text-sm bg-muted/30 font-mono leading-relaxed whitespace-pre-wrap break-words">
-          <code>{children}</code>
-        </pre>
       </div>
-
-      {/* Expanded full-screen overlay */}
-      {expanded && (
-        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col" data-testid="overlay-code-expanded">
-          <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-muted/60">
-            <span className="text-sm font-mono text-muted-foreground uppercase tracking-wider">{lang}</span>
-            <div className="flex items-center gap-3">
-              <button onClick={download} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-download-code-expanded">
-                <Download className="w-4 h-4" /><span>Download</span>
-              </button>
-              <button onClick={copy} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-copy-code-expanded">
-                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                <span>{copied ? "Copied!" : "Copy"}</span>
-              </button>
-              <button onClick={() => setExpanded(false)} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-expanded">
-                <X className="w-4 h-4" /><span>Close</span>
-              </button>
-            </div>
-          </div>
-          <pre className="flex-1 overflow-auto p-6 text-sm font-mono leading-relaxed whitespace-pre-wrap break-words">
-            <code>{children}</code>
-          </pre>
-        </div>
-      )}
-    </>
+      <pre className="p-4 text-sm bg-muted/30 font-mono leading-relaxed whitespace-pre-wrap break-words overflow-x-hidden">
+        <code>{children}</code>
+      </pre>
+    </div>
   );
 }
 
@@ -524,6 +492,19 @@ export default function Chat() {
   // was locked for them the moment they tried to send a message.
   const [selectedModel, setSelectedModel] = useState(AI_MODELS.find(m => m.id === "lenory-vision") || AI_MODELS[0]);
   const userPickedModelRef = useRef(false);
+  // Header icon row (Live Session / Dashboard / Settings) auto-hides while
+  // scrolling forward through messages to give more reading room, and comes
+  // back on scroll-up or a tap — the brand row (logo + LENORY) always stays.
+  const [headerIconsVisible, setHeaderIconsVisible] = useState(true);
+  const lastScrollTopRef = useRef(0);
+  const handleMessagesScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const top = e.currentTarget.scrollTop;
+    const goingDown = top > lastScrollTopRef.current + 4;
+    const goingUp = top < lastScrollTopRef.current - 4;
+    if (goingDown && top > 40) setHeaderIconsVisible(false);
+    else if (goingUp || top <= 40) setHeaderIconsVisible(true);
+    lastScrollTopRef.current = top;
+  };
 
   // Chat state
   const searchString = useSearch();
@@ -677,12 +658,20 @@ export default function Chat() {
       // mobile connection, so sending 2+ photos together reliably timed out
       // ALL of them at once (this is exactly what the "took too long" /
       // "Failed to analyze" errors for two files together were). Now
-      // processed with limited concurrency (2 at a time) so files aren't
-      // fighting each other for the same bandwidth.
-      const CONCURRENCY = 2;
+      // processed with limited concurrency so files aren't fighting each
+      // other for the same bandwidth. Raised from 2->3 now that images are
+      // also compressed before upload (see cleanImageFile) — each request is
+      // lighter, so 3 at once is safe without reintroducing the timeout bug.
+      // For a large batch (10-20 files), this still means several sequential
+      // rounds — that's inherent to each file needing its own real model
+      // call, not something concurrency alone can eliminate.
+      const CONCURRENCY = 3;
       const results: Array<{ file: File; ok: boolean; analysis?: string; error?: string }> = [];
       for (let i = 0; i < filesToSend.length; i += CONCURRENCY) {
         const batch = filesToSend.slice(i, i + CONCURRENCY);
+        if (filesToSend.length > CONCURRENCY) {
+          toast({ title: `Analyzing files ${i + 1}-${Math.min(i + CONCURRENCY, filesToSend.length)} of ${filesToSend.length}...` });
+        }
         const batchResults = await Promise.all(batch.map(async ({ file }) => {
           try {
             const { base64, mimeType } = await cleanImageFile(file);
@@ -1352,7 +1341,7 @@ export default function Chat() {
       {/* ── Main area ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
-        <header className="h-14 flex items-center justify-between px-3 border-b border-border bg-background/80 backdrop-blur-sm flex-shrink-0">
+        <header className="h-14 flex items-center justify-between px-3 bg-background/80 backdrop-blur-sm flex-shrink-0">
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} data-testid="button-toggle-sidebar">
               {sidebarOpen ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -1364,7 +1353,7 @@ export default function Chat() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className={`flex items-center gap-1.5 transition-all duration-200 ${headerIconsVisible ? "opacity-100 translate-x-0" : "opacity-0 translate-x-2 pointer-events-none"}`}>
             <Link href="/live-session">
               <Button variant="ghost" size="icon" title="Write My Note" data-testid="link-write-note">
                 <Mic className="w-4 h-4" />
@@ -1381,7 +1370,7 @@ export default function Chat() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" onScroll={handleMessagesScroll} onClick={() => setHeaderIconsVisible(true)}>
           <div className="max-w-3xl mx-auto px-4 py-6 min-h-full flex flex-col">
 
             {/* Empty state — Claude-like */}
