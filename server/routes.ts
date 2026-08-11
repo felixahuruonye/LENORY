@@ -3330,6 +3330,87 @@ You have FULL access to the system. You can:
     }
   });
 
+  // Previously, selecting multiple files fired N completely separate,
+  // isolated Gemini calls — one full network round-trip per file, each with
+  // zero awareness of the others — then the client just concatenated the
+  // results afterward. That's both slow (N round-trips instead of 1) AND not
+  // actually "analyzing them together": the model never saw file 2 while
+  // reading file 1, so it couldn't relate/compare/treat them as one set
+  // (e.g. multiple photographed pages of the same worked problem). This
+  // endpoint sends every file in ONE Gemini request as multiple inlineData
+  // parts, so the model reasons over the whole batch at once and it's a
+  // single round-trip no matter how many files were selected.
+  app.post('/api/chat/analyze-vision-batch', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const { files, prompt, sessionId } = req.body as { files: { base64: string; mimeType: string; fileName?: string }[]; prompt?: string; sessionId?: string };
+      if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: "No files provided" });
+      if (files.length > 20) return res.status(400).json({ error: "Too many files — please send 20 or fewer at once" });
+      for (const f of files) {
+        if (!f.base64 || !f.mimeType) return res.status(400).json({ error: "Each file needs base64 and mimeType" });
+      }
+
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      // 1 credit for the first file, +1 for each additional — a batch of 20
+      // is still one Gemini call, but genuinely more tokens for the model to
+      // read than a single file, so cost should scale with batch size the
+      // same way it already does for a KB-linked chat message.
+      const cost = Math.min(files.length, 10);
+      const gate = await checkCreditGate(userId, user?.email, tier, cost, "Analyze files");
+      if (!gate.allowed) return res.status(402).json({ message: gate.message, error: gate.error, balance: gate.balance });
+
+      let noteContextInstruction = "";
+      if (sessionId) {
+        try {
+          const session = await storage.getChatSession(sessionId);
+          if (session?.summary?.startsWith("__NOTE_CONTEXT__")) {
+            const noteContent = session.summary.substring("__NOTE_CONTEXT__".length);
+            noteContextInstruction = `You are helping a student practise using their own uploaded notes. Answer using ONLY the note content below — if the note doesn't cover the question, say so clearly.\n\nSTUDENT'S NOTE:\n${noteContent}\n\n`;
+          } else if (session?.summary?.startsWith("KBFOLDER:")) {
+            const folderId = session.summary.substring("KBFOLDER:".length).split(":")[0];
+            const kbFiles = await storage.getKBFiles(folderId);
+            const materials = kbFiles.map((f: any) => `--- ${f.name} ---\n${(f.extracted_text || "").substring(0, 3000)}`).join("\n\n").substring(0, 12000);
+            if (materials) noteContextInstruction = `You are helping the student study material from their Knowledge Base folder. Consider this context alongside the files being analyzed:\n\n${materials}\n\n`;
+          }
+        } catch {}
+      }
+
+      const fileList = files.map((f, i) => `${i + 1}. ${f.fileName || `file ${i + 1}`}`).join("\n");
+      const batchInstruction = `${noteContextInstruction}You have been given ${files.length} file${files.length > 1 ? "s" : ""} together in this one request:\n${fileList}\n\n${prompt?.trim() || "Analyze all of these together as one set — extract text, describe content, solve any problems shown, and answer any questions."}\n\nIf the files are multiple pages/photos of the same document or problem set, treat them as one continuous piece of work in the order given, not separate unrelated items. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`;
+
+      const { GoogleGenAI } = await import('@google/genai');
+      const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+      if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      // More content to read than a single-file request, so a bit more
+      // headroom than the 50s single-file timeout — still one round-trip,
+      // not N, so this is still faster overall than the old per-file loop
+      // for anything more than 1 file.
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 75000)
+      );
+      const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
+      parts.push({ text: batchInstruction });
+      const analysisPromise = ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ parts }] as any,
+      });
+      const response = await Promise.race([analysisPromise, timeoutPromise]);
+      const analysis = (response as any).text || "I could not extract content from these files.";
+      console.log(`✅ Batch vision analysis complete for ${files.length} files (${analysis.length} chars)`);
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, cost);
+      res.json({ analysis });
+    } catch (error: any) {
+      const msg: string = error?.message || String(error);
+      console.error("Batch vision analyze error:", msg);
+      if (msg.includes("GEMINI_TIMEOUT")) {
+        return res.status(408).json({ error: "Analysis timed out — try fewer files or smaller files at once.", detail: "TIMEOUT" });
+      }
+      res.status(500).json({ error: "Failed to analyze files", detail: msg });
+    }
+  });
+
   // ─── ASSEMBLYAI TOKEN ──────────────────────────────────────────────────────
 
   app.post('/api/assemblyai/token', supabaseAuth, async (req: any, res: Response) => {

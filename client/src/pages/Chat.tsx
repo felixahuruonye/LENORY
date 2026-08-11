@@ -654,69 +654,80 @@ export default function Chat() {
     const fileNames = filesToSend.map(f => f.file.name).join(", ");
     toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
     try {
-      // Previously all files were analyzed in parallel (Promise.all) — each a
-      // separate multi-MB upload racing the same 45s timeout on the same
-      // mobile connection, so sending 2+ photos together reliably timed out
-      // ALL of them at once (this is exactly what the "took too long" /
-      // "Failed to analyze" errors for two files together were). Now
-      // processed with limited concurrency so files aren't fighting each
-      // other for the same bandwidth. Raised from 2->3 now that images are
-      // also compressed before upload (see cleanImageFile) — each request is
-      // lighter, so 3 at once is safe without reintroducing the timeout bug.
-      // For a large batch (10-20 files), this still means several sequential
-      // rounds — that's inherent to each file needing its own real model
-      // call, not something concurrency alone can eliminate.
-      const CONCURRENCY = 3;
-      const results: Array<{ file: File; ok: boolean; analysis?: string; error?: string }> = [];
-      for (let i = 0; i < filesToSend.length; i += CONCURRENCY) {
-        const batch = filesToSend.slice(i, i + CONCURRENCY);
-        if (filesToSend.length > CONCURRENCY) {
-          toast({ title: `Analyzing files ${i + 1}-${Math.min(i + CONCURRENCY, filesToSend.length)} of ${filesToSend.length}...` });
-        }
-        const batchResults = await Promise.all(batch.map(async ({ file }) => {
-          try {
-            const { base64, mimeType } = await cleanImageFile(file);
-            const res = await Promise.race([
-              apiRequest("POST", "/api/chat/analyze-vision", {
-                base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
-              }),
-              new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000)),
-            ]);
-            if (!res.ok) {
-              let errMsg = `Could not analyze ${file.name}`;
-              try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
-              return { file, ok: false, error: errMsg };
-            }
-            const data = await res.json();
-            return { file, ok: true, analysis: data.analysis || `(No analysis returned for ${file.name})` };
-          } catch (e) {
-            return { file, ok: false, error: e instanceof Error && e.message === "timeout" ? `${file.name} took too long to analyze` : `Failed to analyze ${file.name}` };
-          }
-        }));
-        results.push(...batchResults);
+      // Previously, N files meant N completely separate, isolated Gemini
+      // calls — one full network round-trip per file, each with zero
+      // awareness of the others. That was both slower overall (N round-trips
+      // instead of 1) and NOT actually "analyzing them together" — the model
+      // never saw file 2 while reading file 1. Now every file is compressed
+      // client-side, then sent in ONE request to /api/chat/analyze-vision-batch,
+      // which gives the model all of them at once so it can relate/compare/
+      // treat multiple photos as one continuous document, and it's always a
+      // single round-trip no matter how many files were selected.
+      // Video is capped here: a raw phone video can be 50-200MB+, which is
+      // both a real upload-time cost on mobile data and well past what any
+      // vision model reads inline in a reasonable time — that's a hard
+      // physical limit, not something client-side compression can fix
+      // without full video re-encoding (which browsers can't do quickly
+      // either). Oversized videos are rejected up front with a clear reason
+      // instead of silently stalling toward a timeout.
+      const MAX_VIDEO_BYTES = 15 * 1024 * 1024; // 15MB
+      const tooLargeVideos = filesToSend.filter(({ file }) => file.type.startsWith("video/") && file.size > MAX_VIDEO_BYTES);
+      const sendable = filesToSend.filter(f => !tooLargeVideos.includes(f));
+
+      if (sendable.length === 0) {
+        setPendingFiles([]);
+        toast({ title: "Video too large", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} — please trim to under 15MB or share a shorter clip.`, variant: "destructive" });
+        setIsLoading(false);
+        return;
       }
 
-      const analyses = results.filter(r => r.ok).map(r => `**${r.file.name}:**\n${(r as any).analysis}`);
-      const failures = results.filter(r => !r.ok);
+      const cleaned = await Promise.all(sendable.map(async ({ file }) => {
+        const { base64, mimeType } = await cleanImageFile(file);
+        return { base64, mimeType, fileName: file.name };
+      }));
+
+      let analysis = "";
+      let failed = false;
+      let failMsg = "";
+      try {
+        const res = await Promise.race([
+          apiRequest("POST", "/api/chat/analyze-vision-batch", {
+            files: cleaned, prompt: promptToUse, sessionId: currentSessionId,
+          }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 90000)),
+        ]);
+        if (!res.ok) {
+          failed = true;
+          try { const errData = await res.json(); failMsg = errData.message || errData.error || "Analysis failed"; } catch { failMsg = "Analysis failed"; }
+        } else {
+          const data = await res.json();
+          analysis = data.analysis || "(No analysis returned)";
+        }
+      } catch (e) {
+        failed = true;
+        failMsg = e instanceof Error && e.message === "timeout" ? "Analysis took too long — try fewer or smaller files at once." : "Failed to analyze files";
+      }
 
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
       setPendingFiles([]);
 
-      if (failures.length > 0) {
-        toast({ title: failures.length === filesToSend.length ? "Analysis failed" : "Some files failed", description: failures.map(f => (f as any).error).join(" | "), variant: "destructive" });
+      if (tooLargeVideos.length > 0) {
+        toast({ title: "Some videos skipped", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} exceeded 15MB and weren't sent.`, variant: "destructive" });
+      }
+      if (failed) {
+        toast({ title: "Analysis failed", description: failMsg, variant: "destructive" });
       }
 
       const userLabel = filesToSend.length > 1 ? `Analyze these ${filesToSend.length} files: ${fileNames}` : `Analyze this file: ${fileNames}`;
       const userChatContent = userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel;
 
-      if (analyses.length > 0) {
-        const failureNotes = failures.map(f => `**${f.file.name}:** Could not analyze — ${(f as any).error}`);
-        const allContent = [...failureNotes, ...analyses].join("\n\n");
-        await handleSendMessageWithContent(userChatContent, allContent);
+      if (!failed && analysis) {
+        const skippedNote = tooLargeVideos.length > 0 ? `\n\n*(${tooLargeVideos.map(f => f.file.name).join(", ")} skipped — over 15MB)*` : "";
+        await handleSendMessageWithContent(userChatContent, analysis + skippedNote);
       } else {
         await handleSendMessageWithContent(
           userChatContent,
-          `I wasn't able to analyze ${filesToSend.length === 1 ? "the attached file" : "any of the attached files"} (${fileNames}). Please try again with a smaller file or check the format.`
+          `I wasn't able to analyze ${sendable.length === 1 ? "the attached file" : "the attached files"} (${sendable.map(f => f.file.name).join(", ")}). ${failMsg || "Please try again with a smaller file or check the format."}`
         );
       }
     } finally {
