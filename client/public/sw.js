@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lenory-cache-v6';
+const CACHE_NAME = 'lenory-cache-__BUILD_VERSION__';
 const OFFLINE_URL = '/offline.html';
 
 const STATIC_ASSETS = [

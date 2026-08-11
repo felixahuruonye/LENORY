@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -497,7 +497,7 @@ export default function Chat() {
   // back on scroll-up or a tap — the brand row (logo + LENORY) always stays.
   const [headerIconsVisible, setHeaderIconsVisible] = useState(true);
   const lastScrollTopRef = useRef(0);
-  const handleMessagesScroll = (e: React.UIEvent<HTMLDivElement>) => {
+  const handleMessagesScroll = (e: UIEvent<HTMLDivElement>) => {
     const top = e.currentTarget.scrollTop;
     const goingDown = top > lastScrollTopRef.current + 4;
     const goingUp = top < lastScrollTopRef.current - 4;
