@@ -3295,7 +3295,7 @@ You have FULL access to the system. You can:
       if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
       const ai = new GoogleGenAI({ apiKey: geminiKey });
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 25000)
+        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
       );
       const analysisPromise = ai.models.generateContent({
         model: "gemini-2.5-flash",

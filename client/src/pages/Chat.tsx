@@ -517,7 +517,13 @@ export default function Chat() {
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState(AI_MODELS[0]);
+  // Default to Vision — the one model every tier has unlocked — until we know
+  // the user's real tier, then upgrade to their tier's actual default model
+  // (see effect below). Previously always defaulted to Ultra, so Free and Pro
+  // users landed on a model selector showing "LENORY Ultra" even though it
+  // was locked for them the moment they tried to send a message.
+  const [selectedModel, setSelectedModel] = useState(AI_MODELS.find(m => m.id === "lenory-vision") || AI_MODELS[0]);
+  const userPickedModelRef = useRef(false);
 
   // Chat state
   const searchString = useSearch();
@@ -608,6 +614,56 @@ export default function Chat() {
     reader.readAsDataURL(file);
   });
 
+  // "Image cleaner" — normalizes a photo before it's sent to any model.
+  // Phone camera photos are routinely 3000-4000px and several MB; on a slow
+  // mobile connection, sending that raw (especially several at once) is what
+  // was causing "took too long to analyze" timeouts. Downscaling to a
+  // resolution well above what any vision model actually reads detail at,
+  // and re-encoding as JPEG, cuts a typical photo from several MB to a few
+  // hundred KB — faster upload, faster model read, same or better OCR
+  // accuracy since noise/compression artifacts from the original camera JPEG
+  // are resampled away. Non-images (PDF, docs, video) pass through untouched.
+  const MAX_IMAGE_DIMENSION = 1600;
+  const EXT_TO_MIME: Record<string, string> = {
+    jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+    gif: "image/gif", heic: "image/heic", heif: "image/heif", pdf: "application/pdf",
+    mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+  };
+  const resolveMimeType = (file: File): string => {
+    if (file.type) return file.type;
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return EXT_TO_MIME[ext] || "application/octet-stream";
+  };
+  const cleanImageFile = (file: File): Promise<{ base64: string; mimeType: string }> => new Promise((resolve, reject) => {
+    const mimeType = resolveMimeType(file);
+    if (!mimeType.startsWith("image/") || mimeType === "image/gif") {
+      // GIFs can be animated — resizing via canvas would flatten them to one
+      // frame, so leave those (and non-images) alone.
+      fileToBase64(file).then(base64 => resolve({ base64, mimeType })).catch(reject);
+      return;
+    }
+    const img = new window.Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { fileToBase64(file).then(base64 => resolve({ base64, mimeType })).catch(reject); return; }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      resolve({ base64: dataUrl.split(",")[1], mimeType: "image/jpeg" });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      // Fall back to the original file untouched rather than failing outright
+      fileToBase64(file).then(base64 => resolve({ base64, mimeType })).catch(reject);
+    };
+    img.src = objectUrl;
+  });
+
   const sendPendingFilesWithPrompt = async (userPrompt: string) => {
     if (pendingFiles.length === 0) return;
     const filesToSend = [...pendingFiles];
@@ -616,32 +672,39 @@ export default function Chat() {
     const fileNames = filesToSend.map(f => f.file.name).join(", ");
     toast({ title: `Analyzing ${filesToSend.length} file${filesToSend.length > 1 ? "s" : ""}...`, description: fileNames });
     try {
-      const results = await Promise.all(filesToSend.map(async ({ file }) => {
-        try {
-          const base64 = await fileToBase64(file);
-          const extToMime: Record<string, string> = {
-            jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
-            gif: "image/gif", heic: "image/heic", heif: "image/heif", pdf: "application/pdf",
-          };
-          const ext = file.name.split(".").pop()?.toLowerCase() || "";
-          const mimeType = file.type || extToMime[ext] || "image/jpeg";
-          const res = await Promise.race([
-            apiRequest("POST", "/api/chat/analyze-vision", {
-              base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
-            }),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 45000)),
-          ]);
-          if (!res.ok) {
-            let errMsg = `Could not analyze ${file.name}`;
-            try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
-            return { file, ok: false, error: errMsg };
+      // Previously all files were analyzed in parallel (Promise.all) — each a
+      // separate multi-MB upload racing the same 45s timeout on the same
+      // mobile connection, so sending 2+ photos together reliably timed out
+      // ALL of them at once (this is exactly what the "took too long" /
+      // "Failed to analyze" errors for two files together were). Now
+      // processed with limited concurrency (2 at a time) so files aren't
+      // fighting each other for the same bandwidth.
+      const CONCURRENCY = 2;
+      const results: Array<{ file: File; ok: boolean; analysis?: string; error?: string }> = [];
+      for (let i = 0; i < filesToSend.length; i += CONCURRENCY) {
+        const batch = filesToSend.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.all(batch.map(async ({ file }) => {
+          try {
+            const { base64, mimeType } = await cleanImageFile(file);
+            const res = await Promise.race([
+              apiRequest("POST", "/api/chat/analyze-vision", {
+                base64, mimeType, fileName: file.name, prompt: promptToUse, sessionId: currentSessionId,
+              }),
+              new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000)),
+            ]);
+            if (!res.ok) {
+              let errMsg = `Could not analyze ${file.name}`;
+              try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
+              return { file, ok: false, error: errMsg };
+            }
+            const data = await res.json();
+            return { file, ok: true, analysis: data.analysis || `(No analysis returned for ${file.name})` };
+          } catch (e) {
+            return { file, ok: false, error: e instanceof Error && e.message === "timeout" ? `${file.name} took too long to analyze` : `Failed to analyze ${file.name}` };
           }
-          const data = await res.json();
-          return { file, ok: true, analysis: data.analysis || `(No analysis returned for ${file.name})` };
-        } catch (e) {
-          return { file, ok: false, error: e instanceof Error && e.message === "timeout" ? `${file.name} took too long to analyze` : `Failed to analyze ${file.name}` };
-        }
-      }));
+        }));
+        results.push(...batchResults);
+      }
 
       const analyses = results.filter(r => r.ok).map(r => `**${r.file.name}:**\n${(r as any).analysis}`);
       const failures = results.filter(r => !r.ok);
@@ -1150,6 +1213,17 @@ export default function Chat() {
     }
     return null;
   };
+
+  // Sets the model selector to what a user on this tier would actually use,
+  // the first time we know their real tier — never overrides a manual pick.
+  // Free → Vision (Ultra/Fast are locked). Pro → Fast (Ultra is locked, but
+  // Fast is their real "main" model, not a fallback). Premium/admin → Ultra.
+  useEffect(() => {
+    if (authLoading || userPickedModelRef.current) return;
+    const defaultId = userPlan === "premium" || isAdmin ? "lenory-ultra" : userPlan === "pro" ? "lenory-fast" : "lenory-vision";
+    const match = AI_MODELS.find(m => m.id === defaultId);
+    if (match && match.id !== selectedModel.id) setSelectedModel(match);
+  }, [authLoading, userPlan, isAdmin]);
 
   const quickSuggestions = [
     { icon: Code, label: "Code", prompt: "Help me write code for " },
@@ -1682,6 +1756,7 @@ export default function Chat() {
                               if (lockMsg) {
                                 toast({ title: `${model.label} locked`, description: `${lockMsg} to use this model.`, variant: "destructive" });
                               } else {
+                                userPickedModelRef.current = true;
                                 setSelectedModel(model);
                               }
                             }}
