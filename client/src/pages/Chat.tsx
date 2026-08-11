@@ -164,6 +164,7 @@ function CodeBlock({ children, className }: { children: string; className?: stri
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 function LenoryMarkdown({ content }: { content: string }) {
+  if (!content) return null;
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none
       prose-p:my-2 prose-p:leading-relaxed
@@ -744,20 +745,28 @@ export default function Chat() {
   };
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
-  const { data: sessions = [] } = useQuery<ChatSession[]>({
+  const { data: sessionsRaw = [] } = useQuery<ChatSession[]>({
     queryKey: ["/api/chat/sessions"],
     enabled: !!user,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/chat/sessions");
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
   });
+  const sessions = Array.isArray(sessionsRaw) ? sessionsRaw : [];
 
-  const { data: messages = [], refetch: refetchMessages } = useQuery<ChatMessageWithAttachments[]>({
+  const { data: messagesRaw = [], refetch: refetchMessages } = useQuery<ChatMessageWithAttachments[]>({
     queryKey: ["/api/chat/messages", currentSessionId],
     enabled: !!user && !!currentSessionId,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/chat/messages?sessionId=${currentSessionId}`);
       const data = await res.json();
+      if (!Array.isArray(data)) return [];
       return data.sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
     },
   });
+  const messages = Array.isArray(messagesRaw) ? messagesRaw : [];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1486,7 +1495,7 @@ export default function Chat() {
                               <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-64 object-cover rounded-lg" loading="lazy" />
                             </div>
                           ))}
-                          <LenoryMarkdown content={msg.content} />
+                          <LenoryMarkdown content={msg.content || ""} />
                           {/* Message actions */}
                           <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
