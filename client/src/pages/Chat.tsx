@@ -1184,6 +1184,24 @@ export default function Chat() {
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  // ─── Values needed before the auth guard below (userPlan is needed by the
+  // model-default effect, which itself must run before any early return —
+  // ALL hooks must be called unconditionally on every render, never after a
+  // conditional return, or React throws and unmounts the whole page) ────────
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
+  const userPlan: "free" | "pro" | "premium" = isAdmin ? "premium" : ((user as any)?.subscriptionTier || "free");
+
+  // Sets the model selector to what a user on this tier would actually use,
+  // the first time we know their real tier — never overrides a manual pick.
+  // Free → Vision (Ultra/Fast are locked). Pro → Fast (Ultra is locked, but
+  // Fast is their real "main" model, not a fallback). Premium/admin → Ultra.
+  useEffect(() => {
+    if (authLoading || userPickedModelRef.current) return;
+    const defaultId = userPlan === "premium" || isAdmin ? "lenory-ultra" : userPlan === "pro" ? "lenory-fast" : "lenory-vision";
+    const match = AI_MODELS.find(m => m.id === defaultId);
+    if (match && match.id !== selectedModel.id) setSelectedModel(match);
+  }, [authLoading, userPlan, isAdmin]);
+
   // ─── Auth guard ───────────────────────────────────────────────────────────
   if (authLoading || !user) {
     return (
@@ -1199,9 +1217,7 @@ export default function Chat() {
   }
 
   const userName = (user as any)?.firstName || (user as any)?.email?.split("@")[0] || "there";
-  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const credits = creditsData?.credits ?? 20;
-  const userPlan: "free" | "pro" | "premium" = isAdmin ? "premium" : ((user as any)?.subscriptionTier || "free");
 
   const getModelLock = (modelId: string): string | null => {
     if (isAdmin || userPlan === "premium") return null;
@@ -1211,17 +1227,6 @@ export default function Chat() {
     }
     return null;
   };
-
-  // Sets the model selector to what a user on this tier would actually use,
-  // the first time we know their real tier — never overrides a manual pick.
-  // Free → Vision (Ultra/Fast are locked). Pro → Fast (Ultra is locked, but
-  // Fast is their real "main" model, not a fallback). Premium/admin → Ultra.
-  useEffect(() => {
-    if (authLoading || userPickedModelRef.current) return;
-    const defaultId = userPlan === "premium" || isAdmin ? "lenory-ultra" : userPlan === "pro" ? "lenory-fast" : "lenory-vision";
-    const match = AI_MODELS.find(m => m.id === defaultId);
-    if (match && match.id !== selectedModel.id) setSelectedModel(match);
-  }, [authLoading, userPlan, isAdmin]);
 
   const quickSuggestions = [
     { icon: Code, label: "Code", prompt: "Help me write code for " },
