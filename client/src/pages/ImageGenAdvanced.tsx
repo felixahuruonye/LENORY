@@ -96,7 +96,9 @@ export default function ImageGenAdvanced() {
       setReferenceImageBase64(null);
     },
     onError: (err: any) => {
-      toast({ title: "Generation failed", description: err?.message || "Could not generate image", variant: "destructive" });
+      let msg = "Could not generate image";
+      try { msg = JSON.parse(String(err?.message || "").replace(/^\d+:\s*/, ""))?.message || msg; } catch {}
+      toast({ title: "Generation failed", description: msg, variant: "destructive" });
     },
   });
 
@@ -164,7 +166,7 @@ export default function ImageGenAdvanced() {
   }
 
   return (
-    <div className="min-h-screen studio-bg">
+    <div className="min-h-screen studio-bg overflow-x-hidden">
       <header className="sticky top-0 z-50 backdrop-blur-xl bg-background/60 border-b border-violet-500/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -274,7 +276,7 @@ export default function ImageGenAdvanced() {
                         Generating...
                       </>
                     ) : (
-                      <><Wand2 className="h-4 w-4 mr-2" />Generate (2 credits)</>
+                      <><Wand2 className="h-4 w-4 mr-2" />Generate ({referenceImageBase64 ? 6 : 5} credits)</>
                     )}
                   </Button>
                   <input

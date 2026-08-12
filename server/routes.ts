@@ -2143,8 +2143,16 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       const user = await storage.getUser(userId);
       const tier = user?.subscriptionTier || 'free';
       const isAdmin = user?.email === REAL_ADMIN_EMAIL;
+      // Cost accepted from the image-gen spec: standard generate = 5
+      // credits, editing (a reference image supplied) = 6 — drawn from the
+      // same shared credit balance every other feature already uses, not a
+      // separate image-only pool, for consistency with how Website Builder/
+      // chat/TTS/etc. are already billed.
+      const cost = referenceImageBase64 ? 6 : 5;
       if (!isAdmin) {
-        const MONTHLY_IMAGE_LIMITS: Record<string, number> = { free: 5, pro: 50, premium: Infinity };
+        // Monthly image-count caps, also from the accepted spec (was
+        // free:5/pro:50/premium:unlimited — now free:5/pro:30/premium:70).
+        const MONTHLY_IMAGE_LIMITS: Record<string, number> = { free: 5, pro: 30, premium: 70 };
         const limit = MONTHLY_IMAGE_LIMITS[tier] ?? 5;
         if (isFinite(limit)) {
           const allImages = await storage.getGeneratedImagesByUser(userId);
@@ -2156,7 +2164,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           if (monthlyCount >= limit) return res.status(403).json({ message: `Image generation limit reached (${limit}/month on ${tier} plan).`, limit, used: monthlyCount, tier });
         }
         const credits = await getOrCreateCredits(userId, tier);
-        if (credits.balance < 2) return res.status(403).json({ message: "Insufficient credits. You need at least 2 credits.", balance: credits.balance });
+        if (credits.balance < cost) return res.status(403).json({ message: `Insufficient credits. You need at least ${cost} credits.`, balance: credits.balance });
       }
       const styleHints: Record<string, string> = {
         illustrated: "illustrated, vector art, flat design",
@@ -2178,13 +2186,22 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
       const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });
       if (!isAdmin) {
-        const newBalance = await deductCredits(userId, 2);
-        console.log(`💰 Deducted 2 credits for image — user ${userId}, new balance: ${newBalance}`);
+        const newBalance = await deductCredits(userId, cost);
+        console.log(`💰 Deducted ${cost} credits for image — user ${userId}, new balance: ${newBalance}`);
       }
       res.json(stored);
     } catch (error) {
-      console.error("Error generating image:", error);
-      res.status(500).json({ message: "Failed to generate image" });
+      // Previously a generic "Failed to generate image" no matter what
+      // actually went wrong — generateImageWithLENORY now throws a
+      // specific, real reason (bad API key, quota, timeout, etc.) instead
+      // of silently substituting a broken placeholder, so surface that
+      // reason to the client instead of masking it.
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Error generating image:", msg);
+      const isTimeout = msg.includes("OVERALL_TIMEOUT") || msg.toLowerCase().includes("timed out");
+      res.status(isTimeout ? 408 : 500).json({
+        message: isTimeout ? "Image generation is taking too long — please try again." : (msg.startsWith("Image generation failed:") ? msg : "Failed to generate image. Please try again."),
+      });
     }
   });
 

@@ -596,62 +596,65 @@ interface ImageGenerationResult {
 }
 
 export async function generateImageWithLENORY(prompt: string, referenceImageBase64?: string): Promise<ImageGenerationResult> {
-  try {
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
-    console.log("🎨 LENORY: Generating image for:", prompt);
-    // Skip the separate prompt-enhancement call — it was a second full Gemini
-    // round trip before image generation even started, pushing total time
-    // close to (or past) Render's request timeout and causing truncated
-    // responses ("Unexpected end of JSON input"). Nano Banana handles a
-    // plain descriptive prompt well on its own.
-    const enhancedPrompt = prompt;
-
-    // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
-    let imageUrl = "";
-    try {
-      // 30s (up from 15s): generateImageWithNanoBanana now tries the current
-      // model (gemini-3.1-flash-image-preview) and, if that fails, falls
-      // back to the previous one (gemini-2.5-flash-image) within the SAME
-      // call — two sequential model attempts need more room than one did.
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 30000));
-      imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
-      console.log("✅ Image generated with Gemini Nano Banana");
-    } catch (nanoBananaError) {
-      console.warn("Nano Banana generation failed:", nanoBananaError);
-      // Stability AI is currently confirmed broken (invalid/expired key returning 401)
-      // — skip it rather than waste more time on a guaranteed-to-fail fallback.
-      imageUrl = generatePlaceholderImage(prompt);
-    }
-
-    // Convert the data URL into a real Storage URL — embedding multi-MB base64
-    // directly in JSON responses caused truncated responses ("Unexpected end
-    // of JSON input") and bloated the database with megabytes of text per row.
-    if (imageUrl.startsWith("data:")) {
-      try {
-        // 15s (up from 5s) — 5s was tight enough that a normal-speed Supabase
-        // Storage upload could legitimately miss it, silently falling back to
-        // embedding the raw (often multi-MB) data URL in the DB/response
-        // instead of a real storage URL, every time.
-        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 15000));
-        imageUrl = await Promise.race([uploadImageToStorage(imageUrl), uploadTimeout]);
-      } catch (uploadErr) {
-        console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
-        // Keep the data URL as a last resort — better a possibly-large response than none at all
-      }
-    }
-
-    return {
-      url: imageUrl,
-      prompt: enhancedPrompt
-    };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error("Error generating image with Gemini:", errorMsg);
-    throw error;
+  if (!apiKey) {
+    throw new Error("Gemini API key not configured");
   }
+
+  console.log("🎨 LENORY: Generating image for:", prompt);
+  const enhancedPrompt = prompt;
+
+  // Previously, if Nano Banana failed for ANY reason (bad key, quota, model
+  // unavailable, network), the code silently substituted a "placeholder"
+  // image and returned it as if generation had SUCCEEDED — the caller had
+  // no way to tell a real image from a failure. Worse, that placeholder was
+  // via.placeholder.com, which has been dead/decommissioned throughout 2026
+  // — so every single failure was guaranteed to show as a broken image with
+  // zero diagnostic information about what actually went wrong. Now: a real
+  // failure THROWS with the actual underlying error message, so it surfaces
+  // as a real, specific error the user (and logs) can act on, instead of a
+  // fake "success" with a permanently-broken image.
+  let imageUrl: string;
+  try {
+    // 30s: generateImageWithNanoBanana tries the current model
+    // (gemini-3.1-flash-image-preview) and, if that fails, falls back to
+    // the previous one (gemini-2.5-flash-image) within the SAME call — two
+    // sequential model attempts need more room than one did.
+    const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 30000));
+    imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
+    console.log("✅ Image generated with Gemini Nano Banana");
+  } catch (nanoBananaError) {
+    const reason = nanoBananaError instanceof Error ? nanoBananaError.message : String(nanoBananaError);
+    console.error("❌ Image generation failed (both models):", reason);
+    throw new Error(
+      reason.includes("NANO_BANANA_TIMEOUT")
+        ? "Image generation timed out — please try again."
+        : `Image generation failed: ${reason}`
+    );
+  }
+
+  // Convert the data URL into a real Storage URL — embedding multi-MB base64
+  // directly in JSON responses caused truncated responses ("Unexpected end
+  // of JSON input") and bloated the database with megabytes of text per row.
+  if (imageUrl.startsWith("data:")) {
+    try {
+      // 15s (up from 5s) — 5s was tight enough that a normal-speed Supabase
+      // Storage upload could legitimately miss it, silently falling back to
+      // embedding the raw (often multi-MB) data URL in the DB/response
+      // instead of a real storage URL, every time.
+      const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 15000));
+      imageUrl = await Promise.race([uploadImageToStorage(imageUrl), uploadTimeout]);
+    } catch (uploadErr) {
+      console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
+      // Keep the data URL as a last resort — a real (if large) generated
+      // image the model actually made, not a fake placeholder. This is a
+      // genuine image and WILL render, just not via Storage.
+    }
+  }
+
+  return {
+    url: imageUrl,
+    prompt: enhancedPrompt
+  };
 }
 
 // Bucket public-ness was previously only ever set reactively, the ONE time
@@ -821,12 +824,29 @@ async function generateImageWithStabilityAI(prompt: string): Promise<string> {
   }
 }
 
+// Self-contained fallback — a data: URI SVG built entirely in-process, with
+// zero external network dependency, so it can never go down the way
+// via.placeholder.com did (that service has been dead/decommissioned
+// throughout 2026 and was the previous implementation here — every
+// generation failure was guaranteed to show a broken image with it). Not
+// currently called anywhere (generateImageWithLENORY now throws a real error
+// on failure instead of masking it with a placeholder) — kept available for
+// any future case where a guaranteed-renderable placeholder is genuinely
+// wanted instead of surfacing the failure.
 function generatePlaceholderImage(prompt: string): string {
   const colors = generateColorPaletteFromPrompt(prompt);
-  const bgColor = colors[0].replace('#', '');
-  const accentColor = colors[1].replace('#', '');
-  const shortPrompt = prompt.substring(0, 25).replace(/\s+/g, '+');
-  return `https://via.placeholder.com/1024x1024/${bgColor}/${accentColor}.png?text=${encodeURIComponent(shortPrompt)}`;
+  const shortPrompt = prompt.substring(0, 40);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+    <defs>
+      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${colors[0]}"/>
+        <stop offset="100%" stop-color="${colors[1]}"/>
+      </linearGradient>
+    </defs>
+    <rect width="1024" height="1024" fill="url(#g)"/>
+    <text x="50%" y="50%" font-family="sans-serif" font-size="36" fill="white" text-anchor="middle" dominant-baseline="middle">${shortPrompt.replace(/[<>&]/g, "")}</text>
+  </svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
 function generateColorPaletteFromPrompt(prompt: string): [string, string, string] {
