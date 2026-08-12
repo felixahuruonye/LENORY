@@ -670,21 +670,31 @@ export class DatabaseStorage implements IStorage {
   // Generated image operations
   async createGeneratedImage(image: InsertGeneratedImage): Promise<GeneratedImage> {
     const now = new Date().toISOString();
-    const row = {
+    const row: Record<string, any> = {
       id: (image as any).id || nanoid(),
       user_id: image.userId,
       prompt: image.prompt,
       image_url: image.imageUrl,
       related_topic: (image as any).relatedTopic || null,
       tags: (image as any).tags || null,
+      provider: (image as any).provider || null,
       created_at: now,
     };
     if (supabaseDb) {
-      const { data, error } = await supabaseDb.from('generated_images').insert(row).select().single();
+      let { data, error } = await supabaseDb.from('generated_images').insert(row).select().single();
+      if (error && /column .*provider.* does not exist/i.test(error.message || "")) {
+        // The `provider` column requires a one-time migration (see the
+        // comment on generatedImages in shared/schema.ts for the SQL) — if
+        // it hasn't been run yet, don't let that break image saving
+        // entirely. Retry once without it.
+        console.warn("generated_images.provider column missing — insert retried without it. Run the ALTER TABLE from shared/schema.ts to enable it.");
+        const { provider, ...rowWithoutProvider } = row;
+        ({ data, error } = await supabaseDb.from('generated_images').insert(rowWithoutProvider).select().single());
+      }
       if (error) { console.error('createGeneratedImage error:', error); throw new Error(`Failed to save generated image: ${error.message}`); }
-      return { id: data.id, userId: data.user_id, prompt: data.prompt, imageUrl: data.image_url, relatedTopic: data.related_topic, tags: data.tags, createdAt: data.created_at } as GeneratedImage;
+      return { id: data.id, userId: data.user_id, prompt: data.prompt, imageUrl: data.image_url, relatedTopic: data.related_topic, tags: data.tags, provider: data.provider, createdAt: data.created_at } as GeneratedImage;
     }
-    return { id: row.id, userId: image.userId, prompt: image.prompt, imageUrl: image.imageUrl, relatedTopic: (image as any).relatedTopic || null, tags: (image as any).tags || null, createdAt: new Date() } as unknown as GeneratedImage;
+    return { id: row.id, userId: image.userId, prompt: image.prompt, imageUrl: image.imageUrl, relatedTopic: (image as any).relatedTopic || null, tags: (image as any).tags || null, provider: (image as any).provider || null, createdAt: new Date() } as unknown as GeneratedImage;
   }
 
   async getGeneratedImagesByUser(userId: string): Promise<GeneratedImage[]> {

@@ -626,7 +626,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         try {
           const imagePrompt = `Create a visual representation for: ${aiResponse.substring(0, 200)}`;
           const image = await generateImageWithLENORY(imagePrompt);
-          await storage.createGeneratedImage({ userId, prompt: imagePrompt, imageUrl: image.url, relatedTopic: content.substring(0, 100) });
+          await storage.createGeneratedImage({ userId, prompt: imagePrompt, imageUrl: image.url, relatedTopic: content.substring(0, 100), provider: image.provider } as any);
           attachments = { images: [{ url: image.url, title: "Visual Explanation" }] };
         } catch (imgErr) {}
       }
@@ -2122,9 +2122,25 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       if (existing) return res.json(existing);
       const explanation = await explainTopicWithLENORY(subject, topic, difficulty);
       const imagePrompt = `${subject} - ${topic}`;
-      const image = await generateImageWithLENORY(imagePrompt);
+      // Previously not wrapped: an image-generation failure here would have
+      // killed the whole response even though the explanation itself
+      // already succeeded. Image generation now throws real errors instead
+      // of silently masking failures with a fake placeholder — making this
+      // gap more likely to actually surface — so it's now a soft failure,
+      // matching the existing pattern used for auto-illustration in chat.
+      let imageUrl: string | null = null;
+      let imageProvider: string | undefined;
+      try {
+        const image = await generateImageWithLENORY(imagePrompt);
+        imageUrl = image.url;
+        imageProvider = image.provider;
+      } catch (imgErr) {
+        console.warn("Topic explanation image generation failed (non-fatal):", imgErr instanceof Error ? imgErr.message : imgErr);
+      }
       const stored = await storage.createTopicExplanation({ userId, subject, topic, explanation: explanation.explanation, examples: explanation.examples, relatedTopics: explanation.relatedTopics });
-      await storage.createGeneratedImage({ userId, prompt: imagePrompt, imageUrl: image.url, relatedTopic: topic });
+      if (imageUrl) {
+        await storage.createGeneratedImage({ userId, prompt: imagePrompt, imageUrl, relatedTopic: topic, provider: imageProvider } as any);
+      }
       await storage.createLearningHistory({ userId, subject, topic });
       res.json(stored);
     } catch (error) {
@@ -2176,41 +2192,45 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       };
       const styleTag = styleHints[style] || "";
       const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
-      // 22s was too tight: generateImageWithLENORY's own internal budget is
-      // now up to 30s (generation, with a fallback-model retry) + 15s
-      // (storage upload) = 45s in the worst case, so the outer timeout has
-      // to allow for that or it kills the request before the inner ones even
-      // get a chance to finish. 55s leaves a small margin above that.
-      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 55000));
+      // generateImageWithLENORY's own internal budget, worst case, is now:
+      // Gemini ~30s (2 model attempts) + NexaAPI ~25s + Pollinations ~25s
+      // (only reached if the earlier ones actually fail slow rather than
+      // fast — most failures, per production logs, are near-instant 429s,
+      // not hangs) + 15s storage upload = up to 95s. The outer timeout has
+      // to allow for the full fallback chain to actually get a chance to
+      // run, or it defeats the purpose of having fallbacks at all. 110s
+      // leaves a safety margin above that worst case.
+      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 110000));
       const image = await Promise.race([generateImageWithLENORY(effectivePrompt, referenceImageBase64), overallTimeout]);
-      logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
-      const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });
+      logApiUsage(`image-gen-${image.provider}`, userId, "/api/generate-image");
+      const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic, provider: image.provider } as any);
       if (!isAdmin) {
         const newBalance = await deductCredits(userId, cost);
-        console.log(`💰 Deducted ${cost} credits for image — user ${userId}, new balance: ${newBalance}`);
+        console.log(`💰 Deducted ${cost} credits for image (${image.provider}) — user ${userId}, new balance: ${newBalance}`);
       }
       res.json(stored);
     } catch (error) {
       // Previously a generic "Failed to generate image" no matter what
-      // actually went wrong; then (one commit ago) the raw underlying
-      // error — which fixed the "no idea why it failed" problem for
-      // debugging, but a wall of raw Google JSON in a user-facing toast is
-      // bad UX for anyone who isn't debugging it. Full detail still goes to
-      // the server log either way — only the CLIENT-facing message is
-      // cleaned up here, classified by what actually went wrong.
+      // actually went wrong; then the raw underlying error — fixed the "no
+      // idea why it failed" problem for debugging, but a wall of raw JSON
+      // in a user-facing toast is bad UX. Full detail still goes to the
+      // server log either way. Now that generateImageWithLENORY tries 3
+      // providers (Gemini -> NexaAPI -> Pollinations) before ever reaching
+      // here, this only fires when ALL THREE failed — genuinely rare — so
+      // the messaging reflects that instead of blaming one provider.
       const msg = error instanceof Error ? error.message : String(error);
-      console.error("Error generating image:", msg);
+      console.error("Error generating image (all providers exhausted):", msg);
       const isTimeout = msg.includes("OVERALL_TIMEOUT") || msg.toLowerCase().includes("timed out");
       const isQuota = msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429") || /quota/i.test(msg);
       const isAuth = msg.includes("API key") || msg.includes("PERMISSION_DENIED") || msg.includes("401") || msg.includes("403");
       let status = 500;
-      let clientMessage = "Failed to generate image. Please try again.";
+      let clientMessage = "All image providers are unavailable right now. Please try again later.";
       if (isTimeout) {
         status = 408;
         clientMessage = "Image generation is taking too long — please try again.";
       } else if (isQuota) {
         status = 503;
-        clientMessage = "Image generation is temporarily unavailable (provider quota reached). Please try again in a few minutes, or contact support if this continues.";
+        clientMessage = "All image providers hit their usage limits. Please try again in a few minutes, or contact support if this continues.";
       } else if (isAuth) {
         status = 503;
         clientMessage = "Image generation isn't configured correctly right now. Please contact support.";

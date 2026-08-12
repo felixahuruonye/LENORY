@@ -447,6 +447,14 @@ export type InsertLearningHistory = z.infer<typeof insertLearningHistorySchema>;
 export type LearningHistory = typeof learningHistory.$inferSelect;
 
 // Generated Images
+// REQUIRES a one-time migration to add the `provider` column below to an
+// existing generated_images table (new tables created via db:push already
+// include it). Until this runs, image saving still works — createGeneratedImage
+// in storage.ts detects the missing column and retries without it — the
+// provider just won't be recorded. Run once in the Supabase SQL editor:
+//
+//   ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS provider VARCHAR(32);
+//
 export const generatedImages = pgTable("generated_images", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -454,6 +462,11 @@ export const generatedImages = pgTable("generated_images", {
   imageUrl: text("image_url").notNull(),
   relatedTopic: varchar("related_topic", { length: 255 }),
   tags: text("tags").array(),
+  // Which provider actually generated this image — 'gemini', 'nexaapi', or
+  // 'pollinations' — set by the fallback chain in generateImageWithLENORY.
+  // Nullable so existing rows (generated before this column existed) don't
+  // need a backfill; the app treats a missing value as unknown/legacy.
+  provider: varchar("provider", { length: 32 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

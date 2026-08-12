@@ -1,6 +1,7 @@
 // Gemini AI integration blueprint reference: javascript_gemini
 import { GoogleGenAI } from "@google/genai";
 import { supabaseDb } from "./db";
+import { generateWithNexaAPI, generateWithPollinations } from "./imageProviders";
 
 // Use GOOGLE_API_KEY as the primary key (user's new valid key)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "";
@@ -590,51 +591,99 @@ Format: {"explanation": "...", "examples": ["ex1", "ex2"], "relatedTopics": ["to
   }
 }
 
-interface ImageGenerationResult {
+export interface ImageGenerationResult {
   url: string;
   prompt: string;
+  provider: "gemini" | "nexaapi" | "pollinations";
 }
 
-export async function generateImageWithLENORY(prompt: string, referenceImageBase64?: string): Promise<ImageGenerationResult> {
+// Gemini-only path (Nano Banana, tries 2 models sequentially — see
+// generateImageWithNanoBanana). Kept separate from the fallback orchestrator
+// below so each provider's logic stays independently readable/testable.
+async function generateImageWithGeminiOnly(prompt: string, referenceImageBase64?: string): Promise<string> {
   if (!apiKey) {
     throw new Error("Gemini API key not configured");
   }
+  // 30s: generateImageWithNanoBanana tries the current model
+  // (gemini-3.1-flash-image-preview) and, if that fails, falls back to
+  // the previous one (gemini-2.5-flash-image) within the SAME call — two
+  // sequential model attempts need more room than one did.
+  const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 30000));
+  return Promise.race([generateImageWithNanoBanana(prompt, referenceImageBase64), timeoutPromise]);
+}
 
+// Fallback chain: Gemini (2 models internally) -> NexaAPI -> Pollinations.AI.
+// Each provider is tried once (no retries within a provider beyond what
+// Gemini's own 2-model attempt already does) — kept deliberately simple.
+// Previously, if Nano Banana failed for ANY reason (bad key, quota, model
+// unavailable, network), the code silently substituted a "placeholder"
+// image and returned it as if generation had SUCCEEDED — the caller had no
+// way to tell a real image from a failure. Worse, that placeholder was
+// via.placeholder.com, which has been dead/decommissioned throughout 2026 —
+// so every failure was guaranteed to show as a broken image with zero
+// diagnostic info. Now: only a real, successful image (from any of the 3
+// providers) is ever returned; if ALL THREE fail, this throws a specific,
+// real error instead of masking it.
+export async function generateImageWithLENORY(prompt: string, referenceImageBase64?: string): Promise<ImageGenerationResult> {
   console.log("🎨 LENORY: Generating image for:", prompt);
   const enhancedPrompt = prompt;
+  const failures: string[] = [];
+  let imageUrl = "";
+  let provider: ImageGenerationResult["provider"] = "gemini";
 
-  // Previously, if Nano Banana failed for ANY reason (bad key, quota, model
-  // unavailable, network), the code silently substituted a "placeholder"
-  // image and returned it as if generation had SUCCEEDED — the caller had
-  // no way to tell a real image from a failure. Worse, that placeholder was
-  // via.placeholder.com, which has been dead/decommissioned throughout 2026
-  // — so every single failure was guaranteed to show as a broken image with
-  // zero diagnostic information about what actually went wrong. Now: a real
-  // failure THROWS with the actual underlying error message, so it surfaces
-  // as a real, specific error the user (and logs) can act on, instead of a
-  // fake "success" with a permanently-broken image.
-  let imageUrl: string;
   try {
-    // 30s: generateImageWithNanoBanana tries the current model
-    // (gemini-3.1-flash-image-preview) and, if that fails, falls back to
-    // the previous one (gemini-2.5-flash-image) within the SAME call — two
-    // sequential model attempts need more room than one did.
-    const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 30000));
-    imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
+    imageUrl = await generateImageWithGeminiOnly(enhancedPrompt, referenceImageBase64);
+    provider = "gemini";
     console.log("✅ Image generated with Gemini Nano Banana");
-  } catch (nanoBananaError) {
-    const reason = nanoBananaError instanceof Error ? nanoBananaError.message : String(nanoBananaError);
-    console.error("❌ Image generation failed (both models):", reason);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    console.warn("Gemini image generation failed, trying NexaAPI:", reason.slice(0, 300));
+    failures.push(`gemini: ${reason}`);
+  }
+
+  if (!imageUrl) {
+    try {
+      const result = await generateWithNexaAPI(enhancedPrompt, referenceImageBase64);
+      imageUrl = result.dataUrl;
+      provider = "nexaapi";
+      console.log("✅ Image generated with NexaAPI");
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.warn("NexaAPI image generation failed, trying Pollinations:", reason.slice(0, 300));
+      failures.push(`nexaapi: ${reason}`);
+    }
+  }
+
+  if (!imageUrl) {
+    try {
+      const result = await generateWithPollinations(enhancedPrompt);
+      imageUrl = result.dataUrl;
+      provider = "pollinations";
+      console.log("✅ Image generated with Pollinations");
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.error("Pollinations image generation failed — all 3 providers exhausted:", reason.slice(0, 300));
+      failures.push(`pollinations: ${reason}`);
+    }
+  }
+
+  if (!imageUrl) {
+    const summary = failures.join(" | ");
+    console.error("❌ Image generation failed on all providers:", summary);
     throw new Error(
-      reason.includes("NANO_BANANA_TIMEOUT")
+      summary.includes("NANO_BANANA_TIMEOUT") && failures.length === 1
         ? "Image generation timed out — please try again."
-        : `Image generation failed: ${reason}`
+        : `All image providers are unavailable right now. Please try again later. (${summary.slice(0, 400)})`
     );
   }
 
   // Convert the data URL into a real Storage URL — embedding multi-MB base64
   // directly in JSON responses caused truncated responses ("Unexpected end
   // of JSON input") and bloated the database with megabytes of text per row.
+  // Also matters more now than before: a fallback provider's own hosted URL
+  // (if it ever returns one instead of base64) is never trusted to stay up
+  // long-term either — this is exactly the lesson from via.placeholder.com
+  // dying, so every provider's output gets re-hosted on our own Storage.
   if (imageUrl.startsWith("data:")) {
     try {
       // 15s (up from 5s) — 5s was tight enough that a normal-speed Supabase
@@ -653,7 +702,8 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
 
   return {
     url: imageUrl,
-    prompt: enhancedPrompt
+    prompt: enhancedPrompt,
+    provider,
   };
 }
 
