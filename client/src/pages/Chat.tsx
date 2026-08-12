@@ -1521,7 +1521,7 @@ export default function Chat() {
                         </div>
                       </div>
                     )}
-                    <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1"}`} data-testid={`card-message-${msg.id}`}>
+                    <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1 min-w-0"}`} data-testid={`card-message-${msg.id}`}>
                       {msg.role === "user" ? (
                         <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-3 text-sm">
                           {msg.attachments?.images?.map((img: any, idx: number) => (
