@@ -166,14 +166,14 @@ function CodeBlock({ children, className }: { children: string; className?: stri
 function LenoryMarkdown({ content }: { content: string }) {
   if (!content) return null;
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none
+    <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-hidden
       prose-p:my-2 prose-p:leading-relaxed
       prose-headings:my-3 prose-headings:font-semibold
       prose-ul:my-2 prose-ol:my-2 prose-li:my-1
       prose-blockquote:border-l-primary prose-blockquote:bg-primary/5 prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r-lg prose-blockquote:not-italic
       prose-strong:text-foreground prose-strong:font-semibold
       prose-em:text-muted-foreground
-      prose-table:my-3
+      prose-table:my-0
       prose-th:bg-muted/50 prose-th:px-3 prose-th:py-2
       prose-td:px-3 prose-td:py-2 prose-td:border-border
     ">
@@ -191,6 +191,17 @@ function LenoryMarkdown({ content }: { content: string }) {
               <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary" {...props}>
                 {children}
               </code>
+            );
+          },
+          // Tables can legitimately be wider than the screen (many columns of
+          // data) — that's the ONE place horizontal scroll should exist. This
+          // wraps just the <table> in its own scrollable box so swiping is
+          // contained to that table, never the rest of the page.
+          table({ children }) {
+            return (
+              <div className="overflow-x-auto my-3 -mx-1 px-1">
+                <table>{children}</table>
+              </div>
             );
           },
           a({ href, children }) {
@@ -663,20 +674,22 @@ export default function Chat() {
       // which gives the model all of them at once so it can relate/compare/
       // treat multiple photos as one continuous document, and it's always a
       // single round-trip no matter how many files were selected.
-      // Video is capped here: a raw phone video can be 50-200MB+, which is
-      // both a real upload-time cost on mobile data and well past what any
-      // vision model reads inline in a reasonable time — that's a hard
-      // physical limit, not something client-side compression can fix
-      // without full video re-encoding (which browsers can't do quickly
-      // either). Oversized videos are rejected up front with a clear reason
-      // instead of silently stalling toward a timeout.
-      const MAX_VIDEO_BYTES = 15 * 1024 * 1024; // 15MB
+      // Video is capped here: a raw phone video can be 100-500MB+, and even
+      // with Gemini's inline limit raised to 100MB total per request (as of
+      // Jan 2026 — up from 20MB), a single video eats most or all of that
+      // budget on its own, leaving no room for anything else in the same
+      // batch. 60MB leaves headroom for other files + the prompt text in the
+      // same request. True support for bigger video (hundreds of MB) needs
+      // Gemini's separate Files-API upload flow (upload once, get a URI,
+      // reference it — good for up to 2GB) rather than sending raw bytes
+      // inline; that's a real, separate feature, not implemented here yet.
+      const MAX_VIDEO_BYTES = 60 * 1024 * 1024; // 60MB
       const tooLargeVideos = filesToSend.filter(({ file }) => file.type.startsWith("video/") && file.size > MAX_VIDEO_BYTES);
       const sendable = filesToSend.filter(f => !tooLargeVideos.includes(f));
 
       if (sendable.length === 0) {
         setPendingFiles([]);
-        toast({ title: "Video too large", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} — please trim to under 15MB or share a shorter clip.`, variant: "destructive" });
+        toast({ title: "Video too large", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} — please trim to under 60MB or share a shorter clip.`, variant: "destructive" });
         setIsLoading(false);
         return;
       }
@@ -685,6 +698,20 @@ export default function Chat() {
         const { base64, mimeType } = await cleanImageFile(file);
         return { base64, mimeType, fileName: file.name };
       }));
+
+      // Check the REAL final payload size (after image compression) against
+      // Gemini's actual inline budget before sending — catches an oversized
+      // batch (e.g. several large PDFs, or a video plus other files) up
+      // front with a clear message, instead of a slow failed upload over
+      // mobile data followed by a vague server error.
+      const totalBase64Bytes = cleaned.reduce((sum, f) => sum + f.base64.length, 0);
+      const GEMINI_INLINE_BUDGET_BYTES = 95 * 1024 * 1024; // ~95MB of the real ~100MB cap, leaving room for prompt/instruction text
+      if (totalBase64Bytes > GEMINI_INLINE_BUDGET_BYTES) {
+        setPendingFiles([]);
+        toast({ title: "Batch too large", description: "These files together are too large for one request. Try sending fewer files, or a smaller video, at a time.", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
 
       let analysis = "";
       let failed = false;
@@ -712,7 +739,7 @@ export default function Chat() {
       setPendingFiles([]);
 
       if (tooLargeVideos.length > 0) {
-        toast({ title: "Some videos skipped", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} exceeded 15MB and weren't sent.`, variant: "destructive" });
+        toast({ title: "Some videos skipped", description: `${tooLargeVideos.map(f => f.file.name).join(", ")} exceeded 60MB and weren't sent.`, variant: "destructive" });
       }
       if (failed) {
         toast({ title: "Analysis failed", description: failMsg, variant: "destructive" });
@@ -722,7 +749,7 @@ export default function Chat() {
       const userChatContent = userPrompt.trim() ? `${userPrompt.trim()}\n\n[Attached: ${fileNames}]` : userLabel;
 
       if (!failed && analysis) {
-        const skippedNote = tooLargeVideos.length > 0 ? `\n\n*(${tooLargeVideos.map(f => f.file.name).join(", ")} skipped — over 15MB)*` : "";
+        const skippedNote = tooLargeVideos.length > 0 ? `\n\n*(${tooLargeVideos.map(f => f.file.name).join(", ")} skipped — over 60MB)*` : "";
         await handleSendMessageWithContent(userChatContent, analysis + skippedNote);
       } else {
         await handleSendMessageWithContent(
@@ -1395,7 +1422,7 @@ export default function Chat() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto" onScroll={handleMessagesScroll} onClick={() => setHeaderIconsVisible(true)}>
+        <div className="flex-1 overflow-y-auto overflow-x-hidden" onScroll={handleMessagesScroll} onClick={() => setHeaderIconsVisible(true)}>
           <div className="max-w-3xl mx-auto px-4 py-6 min-h-full flex flex-col">
 
             {/* Empty state — Claude-like */}

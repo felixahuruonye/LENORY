@@ -13,12 +13,21 @@ declare module 'http' {
   }
 }
 app.use(express.json({
-  limit: "50mb",
+  // Gemini's own generateContent API caps total inline request size (all
+  // files + text combined, base64-encoded) at 100MB — anything larger has to
+  // go through a separate Files-API upload flow, which this app doesn't use
+  // yet. 140mb here isn't arbitrary: it's Gemini's 100MB budget plus base64's
+  // ~33% inflation plus JSON/multi-file overhead, so a request that's
+  // actually valid for Gemini never gets rejected by Express first — but a
+  // request that's already too big for Gemini to accept still fails fast
+  // here instead of uploading for minutes on mobile data only to be rejected
+  // anyway.
+  limit: "140mb",
   verify: (req, _res, buf) => {
     req.rawBody = buf;
   }
 }));
-app.use(express.urlencoded({ extended: false, limit: "50mb" }));
+app.use(express.urlencoded({ extended: false, limit: "140mb" }));
 
 app.use((req, res, next) => {
   const start = Date.now();

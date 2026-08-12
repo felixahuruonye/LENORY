@@ -55,6 +55,40 @@ import axios from 'axios';
 // ── Multer setup ONCE at the top ────────────────────────────────────────────
 const uploadMulter = multer({ storage: multer.memoryStorage() });
 
+// ── EXAM BOOKLET MODE ────────────────────────────────────────────────────────
+// Added on top of the existing RESPONSE RULES / MATH FORMATTING sections
+// above (not a replacement) — supplied by Felix to make solved answers
+// exam-marking-scheme-compliant and copy-ready, across every subject, on
+// every chat/vision endpoint.
+const EXAM_BOOKLET_MODE_PROMPT = `## 📝 EXAM BOOKLET MODE
+
+You are also an Expert Academic Exam & Practical Assessment Specialist. When solving academic questions (text or image), tailor the output to score maximum marks on standard marking schemes — dynamically switch between two modes:
+
+### MODE A: EXAM BOOKLET MODE (default whenever the user says "solve", "answer this", "what should I write", attaches an image with minimal text, or is clearly filling out an answer booklet/lab report)
+1. Skip long conversational intros, pleasantries, or lectures.
+2. Follow standard marking scheme conventions (key formula, line-by-line substitution, boxed final answer with units).
+3. Match sub-question numbering exactly as shown on the question paper (a, b, c or i, ii, iii).
+4. Use standard practical exam conventions — e.g. for practical graphs, use slope triangle values $S = \\frac{\\Delta y}{\\Delta x}$ rather than statistical linear regression; keep decimal places uniform and readable for standard graph paper.
+5. Structure the response so the student can copy it line-by-line straight into their booklet:
+
+# [Subject / Question Number] Answer Booklet Draft
+## Question [X] Solutions
+### [Sub-question letter/number]
+[Direct, clean working or answer text ready for copying]
+
+### MODE B: EDUCATIONAL / EXPLANATION MODE (only when the user explicitly asks "explain", "teach me", "why is this", "break this down", or requests conceptual understanding)
+Provide a thorough, step-by-step conceptual breakdown, theoretical background, and detailed calculations.
+
+### Image/vision-specific rules
+1. Transcribe key values, variables, tables, and instructions accurately from the image.
+2. Verify all numbers and units before calculating.
+3. If handwriting is smudged or ambiguous, state the assumed value clearly in brackets before solving.
+
+### Subject-specific formatting
+- **Practical sciences** (Physics/Chemistry/Biology practicals): consistent decimal precision for plotting; graph questions state axis scales, coordinates, slope equation, and intercepts; show linear transformations explicitly ($y = mx + c$) then compare to deduce constants; list precautions as concise active-verb bullets (e.g. "Ensured angle of oscillation was small ($\\theta < 10°$)").
+- **Math & engineering**: Given parameters → standard formula → step-by-step substitution → final answer with units, boxed.
+- **Theory/essay questions**: clear headings, bulleted points, bolded keywords examiners look for; answer the command word directly ("State", "Define", "Differentiate", "Outline").`;
+
 // ─── NEW: GOOGLE OAUTH CONFIG ────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -470,7 +504,9 @@ You have FULL access to the system. You can:
 - Wrap ALL math in LaTeX dollar-sign delimiters so it renders properly: inline math as $x^2 + 2x$, standalone equations/steps as their own $$...$$ block on their own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac, \\text{} in plain parentheses or as bare text — outside $ or $$ delimiters they show up as literal unreadable code to the user, not a formatted equation.
 - Solve step-by-step exactly the way a student would write it out by hand in a workbook: one step per line, showing what you did to get from one line to the next (e.g. "Subtract 3 from both sides:" then the resulting equation on its own $$...$$ line) — not a single dense paragraph.
 - Put the final answer in a boxed $$\\boxed{...}$$ on its own line so it's visually unmistakable.
-- This applies to every subject involving calculation — math, physics, chemistry, statistics, accounting, etc. — not just algebra.`;
+- This applies to every subject involving calculation — math, physics, chemistry, statistics, accounting, etc. — not just algebra.
+
+${EXAM_BOOKLET_MODE_PROMPT}`;
 
       let searchSources: { title: string; link: string; snippet: string; rawContent?: string }[] = [];
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
@@ -722,6 +758,8 @@ You have FULL access to the system. You can:
 ## 🧮 MATH & CALCULATIONS FORMATTING (mandatory):
 - Wrap ALL math in LaTeX dollar-sign delimiters: inline as $x^2 + 2x$, standalone equations as their own $$...$$ block on its own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac in plain parentheses or bare text — outside $ delimiters they render as unreadable literal text, not a formatted equation.
 - Solve step-by-step exactly as a student would write it by hand in a workbook: one step per line, showing what changed between lines. Put the final answer in a boxed $$\\boxed{...}$$ on its own line. Applies to every subject involving calculation, not just algebra.
+
+${EXAM_BOOKLET_MODE_PROMPT}
 
 ## 🎭 PERSONALITY:
 - Warm, direct, and genuinely helpful — like a trusted Nigerian mentor
@@ -3298,8 +3336,8 @@ You have FULL access to the system. You can:
         } catch {}
       }
       const textInstruction = prompt
-        ? `${noteContextInstruction}${prompt}\n\nIf this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`
-        : `${noteContextInstruction}Extract and describe all content from this file. If it is an image, describe what you see in detail. If it is a document or PDF, extract the full text. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`;
+        ? `${noteContextInstruction}${prompt}\n\nIf this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.\n\n${EXAM_BOOKLET_MODE_PROMPT}`
+        : `${noteContextInstruction}Extract and describe all content from this file. If it is an image, describe what you see in detail. If it is a document or PDF, extract the full text. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.\n\n${EXAM_BOOKLET_MODE_PROMPT}`;
       const { GoogleGenAI } = await import('@google/genai');
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
       if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
@@ -3346,6 +3384,16 @@ You have FULL access to the system. You can:
       const { files, prompt, sessionId } = req.body as { files: { base64: string; mimeType: string; fileName?: string }[]; prompt?: string; sessionId?: string };
       if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: "No files provided" });
       if (files.length > 20) return res.status(400).json({ error: "Too many files — please send 20 or fewer at once" });
+      // Server-side backstop matching the client-side pre-check: Gemini's own
+      // inline request cap is ~100MB total (base64-encoded, all files + text
+      // combined) as of Jan 2026. The client already checks this before
+      // sending, but a direct API call (or a client that skipped the check)
+      // still needs to fail with a clear message here rather than a vague
+      // 500 from Gemini after using real API time.
+      const totalBase64Bytes = files.reduce((sum, f) => sum + (f.base64?.length || 0), 0);
+      if (totalBase64Bytes > 95 * 1024 * 1024) {
+        return res.status(413).json({ error: "These files together are too large for one request (Gemini's own limit is ~100MB per request). Send fewer or smaller files at a time." });
+      }
       for (const f of files) {
         if (!f.base64 || !f.mimeType) return res.status(400).json({ error: "Each file needs base64 and mimeType" });
       }
@@ -3377,7 +3425,7 @@ You have FULL access to the system. You can:
       }
 
       const fileList = files.map((f, i) => `${i + 1}. ${f.fileName || `file ${i + 1}`}`).join("\n");
-      const batchInstruction = `${noteContextInstruction}You have been given ${files.length} file${files.length > 1 ? "s" : ""} together in this one request:\n${fileList}\n\n${prompt?.trim() || "Analyze all of these together as one set — extract text, describe content, solve any problems shown, and answer any questions."}\n\nIf the files are multiple pages/photos of the same document or problem set, treat them as one continuous piece of work in the order given, not separate unrelated items. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.`;
+      const batchInstruction = `${noteContextInstruction}You have been given ${files.length} file${files.length > 1 ? "s" : ""} together in this one request:\n${fileList}\n\n${prompt?.trim() || "Analyze all of these together as one set — extract text, describe content, solve any problems shown, and answer any questions."}\n\nIf the files are multiple pages/photos of the same document or problem set, treat them as one continuous piece of work in the order given, not separate unrelated items. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.\n\n${EXAM_BOOKLET_MODE_PROMPT}`;
 
       const { GoogleGenAI } = await import('@google/genai');
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
