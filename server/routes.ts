@@ -2192,16 +2192,30 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       res.json(stored);
     } catch (error) {
       // Previously a generic "Failed to generate image" no matter what
-      // actually went wrong — generateImageWithLENORY now throws a
-      // specific, real reason (bad API key, quota, timeout, etc.) instead
-      // of silently substituting a broken placeholder, so surface that
-      // reason to the client instead of masking it.
+      // actually went wrong; then (one commit ago) the raw underlying
+      // error — which fixed the "no idea why it failed" problem for
+      // debugging, but a wall of raw Google JSON in a user-facing toast is
+      // bad UX for anyone who isn't debugging it. Full detail still goes to
+      // the server log either way — only the CLIENT-facing message is
+      // cleaned up here, classified by what actually went wrong.
       const msg = error instanceof Error ? error.message : String(error);
       console.error("Error generating image:", msg);
       const isTimeout = msg.includes("OVERALL_TIMEOUT") || msg.toLowerCase().includes("timed out");
-      res.status(isTimeout ? 408 : 500).json({
-        message: isTimeout ? "Image generation is taking too long — please try again." : (msg.startsWith("Image generation failed:") ? msg : "Failed to generate image. Please try again."),
-      });
+      const isQuota = msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429") || /quota/i.test(msg);
+      const isAuth = msg.includes("API key") || msg.includes("PERMISSION_DENIED") || msg.includes("401") || msg.includes("403");
+      let status = 500;
+      let clientMessage = "Failed to generate image. Please try again.";
+      if (isTimeout) {
+        status = 408;
+        clientMessage = "Image generation is taking too long — please try again.";
+      } else if (isQuota) {
+        status = 503;
+        clientMessage = "Image generation is temporarily unavailable (provider quota reached). Please try again in a few minutes, or contact support if this continues.";
+      } else if (isAuth) {
+        status = 503;
+        clientMessage = "Image generation isn't configured correctly right now. Please contact support.";
+      }
+      res.status(status).json({ message: clientMessage });
     }
   });
 
