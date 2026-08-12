@@ -2168,7 +2168,12 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       };
       const styleTag = styleHints[style] || "";
       const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
-      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 22000));
+      // 22s was too tight: generateImageWithLENORY's own internal budget is
+      // now up to 30s (generation, with a fallback-model retry) + 15s
+      // (storage upload) = 45s in the worst case, so the outer timeout has
+      // to allow for that or it kills the request before the inner ones even
+      // get a chance to finish. 55s leaves a small margin above that.
+      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 55000));
       const image = await Promise.race([generateImageWithLENORY(effectivePrompt, referenceImageBase64), overallTimeout]);
       logApiUsage("gemini-nano-banana", userId, "/api/generate-image");
       const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic });

@@ -484,6 +484,7 @@ export default function Chat() {
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
+  const [imageGenMode, setImageGenMode] = useState(false);
   const [advancedMode, setAdvancedMode] = useState(false);
   const [showVapiPanel, setShowVapiPanel] = useState(false);
   const [showCreditAlert, setShowCreditAlert] = useState(false);
@@ -1054,6 +1055,54 @@ export default function Chat() {
   const handleSendMessage = async () => {
     if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
 
+    // Image Gen mode — toggled from the + menu. Reuses the same
+    // /api/generate-image endpoint and credit gate as the standalone
+    // /image-gen page (2 credits, tier-based monthly limits) rather than a
+    // separate scheme, then saves the result into this chat session via the
+    // same overrideResponse pattern videoMode already uses below.
+    if (imageGenMode) {
+      const prompt = message.trim();
+      if (!prompt) { toast({ title: "Describe the image", description: "Type what you'd like generated." }); return; }
+      setIsLoading(true);
+      const attachedImage = pendingFiles.find(f => f.file.type.startsWith("image/"));
+      resetInput();
+      setPendingFiles([]);
+      try {
+        let referenceImageBase64: string | undefined;
+        if (attachedImage) referenceImageBase64 = "data:" + attachedImage.file.type + ";base64," + await fileToBase64(attachedImage.file);
+        const res = await apiRequest("POST", "/api/generate-image", { prompt, referenceImageBase64 });
+        if (!res.ok) {
+          let errMsg = "Could not generate image.";
+          try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
+          toast({ title: "Image generation failed", description: errMsg, variant: "destructive" });
+          setIsLoading(false);
+          return;
+        }
+        const data = await res.json();
+        let sessionId = currentSessionId;
+        if (!sessionId) {
+          const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
+          const sData = await sRes.json();
+          sessionId = sData.id;
+          switchToSession(sData.id);
+          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+        }
+        const userLabel = attachedImage ? `${prompt}\n\n[Attached image for editing]` : prompt;
+        await apiRequest("POST", "/api/chat/send", {
+          content: userLabel, sessionId, autoLearn: false, skipAi: false,
+          overrideResponse: data?.imageUrl
+            ? `![${prompt.replace(/[[\]]/g, "")}](${data.imageUrl})`
+            : `Sorry, the image could not be generated right now. Please try again.`,
+        });
+        await refetchMessages();
+      } catch {
+        toast({ title: "Image error", description: "Failed to generate image.", variant: "destructive" });
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     // Files attached — send them with whatever prompt (or default) is typed
     if (pendingFiles.length > 0) {
       const userPrompt = message.trim();
@@ -1062,8 +1111,31 @@ export default function Chat() {
       return;
     }
 
-    // Feature navigation
+    // Feature navigation — special-cased for image generation: previously
+    // this hard-redirected straight off the chat page the moment someone
+    // typed something like "create an image", which is exactly the "chat
+    // page has a broken relationship with the image feature" complaint.
+    // Now: nudge them to turn on Image Gen mode (or open the studio) via a
+    // normal assistant chat message instead of yanking them away.
     const featureRoute = detectFeatureOpen(message);
+    if (featureRoute === "/image-gen" && !imageGenMode) {
+      const prompt = message.trim();
+      resetInput();
+      let sessionId = currentSessionId;
+      if (!sessionId) {
+        const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
+        const sData = await sRes.json();
+        sessionId = sData.id;
+        switchToSession(sData.id);
+        queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+      }
+      await apiRequest("POST", "/api/chat/send", {
+        content: prompt, sessionId, autoLearn: false, skipAi: false,
+        overrideResponse: `To generate images right here in chat, tap **+** and turn on **Image Gen** — then just describe what you want.\n\nOr for more options (styles, editing, history), open the [Image Studio](/image-gen).`,
+      });
+      await refetchMessages();
+      return;
+    }
     if (featureRoute) { window.location.href = featureRoute; return; }
 
     // Video mode
@@ -1633,7 +1705,14 @@ export default function Chat() {
                     { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
                     { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
                     { icon: BookOpen, label: "My Notes", color: "text-purple-300 bg-purple-400/10", action: () => { setShowPlusMenu(false); setLocation("/notes"); } },
-                    { icon: Sparkles, label: "Image Gen", color: "text-pink-400 bg-pink-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/image-gen"; } },
+                    { icon: Sparkles, label: imageGenMode ? "Image Gen: ON" : "Image Gen", color: imageGenMode ? "text-pink-400 bg-pink-500/20" : "text-pink-400 bg-pink-500/10", action: () => {
+                      setShowPlusMenu(false);
+                      setImageGenMode(v => {
+                        const next = !v;
+                        toast({ title: next ? "Image Gen ON" : "Image Gen OFF", description: next ? "Type a prompt to generate an image, or attach one to edit it." : undefined });
+                        return next;
+                      });
+                    } },
                     { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
                   ].map(item => (
                     <button key={item.label} onClick={item.action}
@@ -1741,11 +1820,17 @@ export default function Chat() {
             <div className={`rounded-2xl border transition-all ${
               isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
               videoMode ? "border-purple-500/40 bg-purple-500/5" :
+              imageGenMode ? "border-pink-500/40 bg-pink-500/5" :
               "border-border bg-card shadow-sm hover:shadow-md"
             }`}>
 
               {/* Textarea */}
               <div className="px-4 pt-4 pb-2">
+                {imageGenMode && (
+                  <div className="flex items-center gap-1.5 text-xs text-pink-400 font-medium mb-1.5">
+                    <span>🎨</span><span>Image Gen mode — {pendingFiles.length > 0 ? "editing attached image" : "type what to generate"}</span>
+                  </div>
+                )}
                 <textarea
                   ref={textareaRef}
                   value={message}
@@ -1755,6 +1840,7 @@ export default function Chat() {
                   placeholder={
                     isListening ? "Listening..." :
                     videoMode ? "Describe your video..." :
+                    imageGenMode ? "Describe the image you want..." :
                     pendingFiles.length > 0 ? "Add a prompt for these files (optional)..." :
                     "How can I help you today?"
                   }

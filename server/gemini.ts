@@ -612,7 +612,11 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
     // Try Gemini's own image model (Nano Banana) first — cheaper, no separate key needed, supports editing
     let imageUrl = "";
     try {
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 15000));
+      // 30s (up from 15s): generateImageWithNanoBanana now tries the current
+      // model (gemini-3.1-flash-image-preview) and, if that fails, falls
+      // back to the previous one (gemini-2.5-flash-image) within the SAME
+      // call — two sequential model attempts need more room than one did.
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("NANO_BANANA_TIMEOUT")), 30000));
       imageUrl = await Promise.race([generateImageWithNanoBanana(enhancedPrompt, referenceImageBase64), timeoutPromise]);
       console.log("✅ Image generated with Gemini Nano Banana");
     } catch (nanoBananaError) {
@@ -627,7 +631,11 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
     // of JSON input") and bloated the database with megabytes of text per row.
     if (imageUrl.startsWith("data:")) {
       try {
-        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 5000));
+        // 15s (up from 5s) — 5s was tight enough that a normal-speed Supabase
+        // Storage upload could legitimately miss it, silently falling back to
+        // embedding the raw (often multi-MB) data URL in the DB/response
+        // instead of a real storage URL, every time.
+        const uploadTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UPLOAD_TIMEOUT")), 15000));
         imageUrl = await Promise.race([uploadImageToStorage(imageUrl), uploadTimeout]);
       } catch (uploadErr) {
         console.error("Image storage upload failed, falling back to inline data URL:", uploadErr);
@@ -646,6 +654,40 @@ export async function generateImageWithLENORY(prompt: string, referenceImageBase
   }
 }
 
+// Bucket public-ness was previously only ever set reactively, the ONE time
+// the bucket didn't exist yet ("bucket not found" -> createBucket({public:
+// true})). If the bucket already existed as PRIVATE for any reason (created
+// manually, created before this logic existed, or Supabase project defaults
+// changed), every upload since would silently succeed — the DB row and the
+// API response both look correct — while the actual file sits behind a
+// private ACL, so the "public" URL the app hands the browser 403s. That
+// matches exactly "images generate but fail to render" and "old images not
+// showing": the files are there, they're just not public. This proactively
+// (re-)asserts public on every cold start of this module, cached so it only
+// runs once per server process rather than on every single upload.
+let bucketPublicEnsured = false;
+async function ensurePublicBucket(BUCKET: string) {
+  if (bucketPublicEnsured || !supabaseDb) return;
+  try {
+    const { error: createErr } = await supabaseDb.storage.createBucket(BUCKET, { public: true });
+    if (createErr && !/already exists/i.test(createErr.message)) {
+      console.warn(`[image storage] createBucket(${BUCKET}) error (may be harmless if it already exists):`, createErr.message);
+    }
+    // Whether it was just created or already existed (possibly as private),
+    // explicitly force it public.
+    const { error: updateErr } = await (supabaseDb.storage as any).updateBucket(BUCKET, { public: true });
+    if (updateErr) {
+      console.error(`[image storage] Could not set bucket '${BUCKET}' to public — generated images may fail to load:`, updateErr.message);
+    } else {
+      console.log(`[image storage] Bucket '${BUCKET}' confirmed public`);
+    }
+  } catch (e) {
+    console.error(`[image storage] ensurePublicBucket(${BUCKET}) threw:`, e);
+  } finally {
+    bucketPublicEnsured = true; // don't retry every request even if it failed — logs above make failure visible
+  }
+}
+
 async function uploadImageToStorage(dataUrl: string): Promise<string> {
   if (!supabaseDb) throw new Error("Supabase not configured");
   const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
@@ -656,9 +698,12 @@ async function uploadImageToStorage(dataUrl: string): Promise<string> {
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const BUCKET = "generated-images";
 
+  await ensurePublicBucket(BUCKET);
+
   let { error } = await supabaseDb.storage.from(BUCKET).upload(fileName, buffer, { contentType: mimeType, upsert: false });
   if (error && /bucket not found/i.test(error.message)) {
-    await supabaseDb.storage.createBucket(BUCKET, { public: true });
+    bucketPublicEnsured = false;
+    await ensurePublicBucket(BUCKET);
     ({ error } = await supabaseDb.storage.from(BUCKET).upload(fileName, buffer, { contentType: mimeType, upsert: false }));
   }
   if (error) throw new Error(`Storage upload failed: ${error.message}`);
@@ -675,18 +720,33 @@ async function generateImageWithNanoBanana(prompt: string, referenceImageBase64?
     if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
   }
   parts.push({ text: prompt });
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-image",
-    contents: [{ parts }] as any,
-  });
-  const responseParts = (response as any)?.candidates?.[0]?.content?.parts || [];
-  for (const part of responseParts) {
-    if (part.inlineData?.data) {
-      const mimeType = part.inlineData.mimeType || "image/png";
-      return `data:${mimeType};base64,${part.inlineData.data}`;
+  // gemini-2.5-flash-image ("Nano Banana") is officially deprecated and shuts
+  // down Oct 2, 2026. Google's replacement, live since Feb 2026, is
+  // gemini-3.1-flash-image-preview ("Nano Banana 2") — try that first, and
+  // fall back to the old model only if the new one errors (still an option
+  // during this migration window, not after Oct 2).
+  const MODELS = ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"];
+  let lastError: any = null;
+  for (const model of MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts }] as any,
+      });
+      const responseParts = (response as any)?.candidates?.[0]?.content?.parts || [];
+      for (const part of responseParts) {
+        if (part.inlineData?.data) {
+          const mimeType = part.inlineData.mimeType || "image/png";
+          return `data:${mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+      lastError = new Error(`${model} returned no image data`);
+    } catch (e) {
+      lastError = e;
+      console.warn(`Nano Banana model ${model} failed, ${model === MODELS[0] ? "trying fallback" : "no more fallbacks"}:`, e instanceof Error ? e.message : e);
     }
   }
-  throw new Error("Nano Banana returned no image data");
+  throw lastError || new Error("Nano Banana returned no image data");
 }
 
 async function generateImageWithStabilityAI(prompt: string): Promise<string> {
