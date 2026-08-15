@@ -3459,6 +3459,171 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     }
   });
 
+  // Streaming version of the batch endpoint below — same validation, credit
+  // gate, and context-building, but sends the model's response token-by-
+  // token over SSE as it's generated, instead of making the client wait for
+  // the entire response before showing anything. This is the actual reason
+  // Claude "starts writing immediately" on an uploaded file: it's not that
+  // the model itself is faster, it's that you're watching it stream instead
+  // of staring at a spinner then getting a wall of text all at once.
+  app.post('/api/chat/analyze-vision-stream', supabaseAuth, async (req: any, res: Response) => {
+    const userId = req.userId;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    const send = (event: any) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+    try {
+      const { files, prompt, sessionId } = req.body as { files: { base64: string; mimeType: string; fileName?: string }[]; prompt?: string; sessionId?: string };
+      if (!Array.isArray(files) || files.length === 0) { send({ type: "error", message: "No files provided" }); return res.end(); }
+      if (files.length > 20) { send({ type: "error", message: "Too many files — please send 20 or fewer at once" }); return res.end(); }
+      const totalBase64Bytes = files.reduce((sum, f) => sum + (f.base64?.length || 0), 0);
+      if (totalBase64Bytes > 95 * 1024 * 1024) {
+        send({ type: "error", message: "These files together are too large for one request. Send fewer or smaller files at a time." });
+        return res.end();
+      }
+      for (const f of files) {
+        if (!f.base64 || !f.mimeType) { send({ type: "error", message: "Each file needs base64 and mimeType" }); return res.end(); }
+      }
+
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const cost = Math.min(files.length, 10);
+      const gate = await checkCreditGate(userId, user?.email, tier, cost, "Analyze files");
+      if (!gate.allowed) { send({ type: "error", message: gate.message, error: gate.error, balance: gate.balance }); return res.end(); }
+
+      send({ type: "status", status: "thinking" });
+
+      let noteContextInstruction = "";
+      if (sessionId) {
+        try {
+          const session = await storage.getChatSession(sessionId);
+          if (session?.summary?.startsWith("__NOTE_CONTEXT__")) {
+            const noteContent = session.summary.substring("__NOTE_CONTEXT__".length);
+            noteContextInstruction = `You are helping a student practise using their own uploaded notes. Answer using ONLY the note content below — if the note doesn't cover the question, say so clearly.\n\nSTUDENT'S NOTE:\n${noteContent}\n\n`;
+          } else if (session?.summary?.startsWith("KBFOLDER:")) {
+            const folderId = session.summary.substring("KBFOLDER:".length).split(":")[0];
+            const kbFiles = await storage.getKBFiles(folderId);
+            const materials = kbFiles.map((f: any) => `--- ${f.name} ---\n${(f.extracted_text || "").substring(0, 3000)}`).join("\n\n").substring(0, 12000);
+            if (materials) noteContextInstruction = `You are helping the student study material from their Knowledge Base folder. Consider this context alongside the files being analyzed:\n\n${materials}\n\n`;
+          }
+        } catch {}
+      }
+
+      const fileList = files.map((f, i) => `${i + 1}. ${f.fileName || `file ${i + 1}`}`).join("\n");
+      const batchInstruction = `${noteContextInstruction}You have been given ${files.length} file${files.length > 1 ? "s" : ""} together in this one request:\n${fileList}\n\n${prompt?.trim() || "Analyze all of these together as one set — extract text, describe content, solve any problems shown, and answer any questions."}\n\nIf the files are multiple pages/photos of the same document or problem set, treat them as one continuous piece of work in the order given, not separate unrelated items. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.\n\n${EXAM_BOOKLET_MODE_PROMPT}`;
+
+      let fullText = "";
+      let streamedAny = false;
+      let usedProvider = "gemini";
+      const failures: string[] = [];
+
+      // Try Gemini streaming first. Only fall back to OpenRouter if Gemini
+      // fails BEFORE producing any real content — once real tokens have
+      // started reaching the client, switching providers mid-stream would
+      // just produce garbled mixed output, so a mid-stream failure ends the
+      // stream with whatever was generated rather than attempting a messy
+      // recovery.
+      const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+      if (geminiKey) {
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
+          parts.push({ text: batchInstruction });
+          const streamGen = await ai.models.generateContentStream({
+            model: "gemini-2.5-flash",
+            contents: [{ parts }] as any,
+          });
+          send({ type: "status", status: "writing" });
+          for await (const chunk of streamGen) {
+            const chunkText = (chunk as any).text;
+            if (chunkText) {
+              fullText += chunkText;
+              streamedAny = true;
+              send({ type: "token", token: chunkText });
+            }
+          }
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn("Gemini vision stream failed:", reason.slice(0, 300));
+          failures.push(`gemini: ${reason}`);
+        }
+      } else {
+        failures.push("gemini: GEMINI_API_KEY not configured");
+      }
+
+      if (!streamedAny) {
+        const apiKey = process.env.OPENROUTER_API_KEY;
+        if (!apiKey) {
+          failures.push("openrouter: OPENROUTER_API_KEY not configured");
+        } else {
+          try {
+            const content: any[] = [{ type: "text", text: batchInstruction }];
+            for (const f of files) content.push({ type: "image_url", image_url: { url: `data:${f.mimeType};base64,${f.base64}` } });
+            const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" },
+              body: JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content }], max_tokens: 4096, stream: true }),
+              signal: AbortSignal.timeout(60000),
+            });
+            if (!orResponse.ok || !orResponse.body) {
+              const errText = await orResponse.text().catch(() => "");
+              throw new Error(`OpenRouter error (${orResponse.status}): ${errText.slice(0, 300)}`);
+            }
+            send({ type: "status", status: "writing" });
+            const reader = orResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                const payload = line.slice(6).trim();
+                if (payload === "[DONE]") continue;
+                try {
+                  const json = JSON.parse(payload);
+                  const delta = json?.choices?.[0]?.delta?.content;
+                  if (delta) {
+                    fullText += delta;
+                    streamedAny = true;
+                    send({ type: "token", token: delta });
+                  }
+                } catch {}
+              }
+            }
+            usedProvider = "openrouter";
+          } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            console.error("OpenRouter vision stream also failed:", reason.slice(0, 300));
+            failures.push(`openrouter: ${reason}`);
+          }
+        }
+      }
+
+      if (!streamedAny) {
+        const summary = failures.join(" | ");
+        console.error("Vision stream error (all providers):", summary);
+        send({ type: "error", message: "Both analysis providers are unavailable right now. Please try again shortly.", detail: summary });
+        return res.end();
+      }
+
+      console.log(`✅ Streamed vision analysis complete via ${usedProvider} for ${files.length} files (${fullText.length} chars)`);
+      if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, cost);
+      send({ type: "done", analysis: fullText });
+      res.end();
+    } catch (error: any) {
+      const msg: string = error?.message || String(error);
+      console.error("Vision stream error:", msg);
+      try { send({ type: "error", message: "Failed to analyze files", detail: msg }); } catch {}
+      res.end();
+    }
+  });
+
   // Previously, selecting multiple files fired N completely separate,
   // isolated Gemini calls — one full network round-trip per file, each with
   // zero awareness of the others — then the client just concatenated the

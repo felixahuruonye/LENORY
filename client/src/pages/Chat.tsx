@@ -86,6 +86,7 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   thinking: { label: "LENORY is thinking...", icon: Brain },
   searching: { label: "Searching the web...", icon: Search },
   writing: { label: "Writing response...", icon: PenLine },
+  reading_file: { label: "Reading your file...", icon: Brain },
 };
 
 function TypingIndicator({ action }: { action?: string | null }) {
@@ -539,6 +540,13 @@ export default function Chat() {
     }
   };
   const [isLoading, setIsLoading] = useState(false);
+  // Live text for an in-progress streamed file/image analysis — rendered as
+  // its own bubble while tokens are still arriving, then handed off to the
+  // normal persisted message list once the stream finishes and the result
+  // is saved. This is what makes uploaded-file analysis "start writing
+  // immediately" instead of showing a spinner then dumping the whole
+  // response at once.
+  const [streamingAnalysis, setStreamingAnalysis] = useState<string | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -717,32 +725,50 @@ export default function Chat() {
       let analysis = "";
       let failed = false;
       let failMsg = "";
+      setStreamingAnalysis("");
       try {
-        const res = await Promise.race([
-          apiRequest("POST", "/api/chat/analyze-vision-batch", {
-            files: cleaned, prompt: promptToUse, sessionId: currentSessionId,
-          }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 90000)),
-        ]);
-        // apiRequest throws on any non-2xx response (see throwIfResNotOk in
-        // queryClient.ts) — it never actually returns a !res.ok Response, so
-        // that used to be dead code here and the real failure always landed
-        // in the catch block below with no detail at all. All error
-        // handling now happens in the catch block, parsing the real reason
-        // out of the thrown error instead of showing a generic message.
-        const data = await res.json();
-        analysis = data.analysis || "(No analysis returned)";
+        const authHeaders = await getAuthHeaders();
+        const response = await fetch("/api/chat/analyze-vision-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          credentials: "include",
+          body: JSON.stringify({ files: cleaned, prompt: promptToUse, sessionId: currentSessionId }),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!response.ok || !response.body) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.message || errData.error || `HTTP ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            let event: any;
+            try { event = JSON.parse(line.slice(6)); } catch { continue; }
+            if (event.type === "token" && event.token) {
+              analysis += event.token;
+              setStreamingAnalysis(analysis);
+            } else if (event.type === "done") {
+              analysis = event.analysis || analysis;
+            } else if (event.type === "error") {
+              failed = true;
+              failMsg = event.message || "Analysis failed";
+            }
+          }
+        }
+        if (!analysis && !failed) { failed = true; failMsg = "No analysis returned"; }
       } catch (e) {
         failed = true;
-        if (e instanceof Error && e.message === "timeout") {
-          failMsg = "Analysis took too long — try fewer or smaller files at once.";
-        } else {
-          failMsg = "Failed to analyze files";
-          try {
-            const parsed = JSON.parse(String((e as Error)?.message || "").replace(/^\d+:\s*/, ""));
-            failMsg = parsed?.error || parsed?.message || failMsg;
-          } catch {}
-        }
+        failMsg = e instanceof Error && e.name === "TimeoutError" ? "Analysis took too long — try fewer or smaller files at once." : (e instanceof Error ? e.message : "Failed to analyze files");
+      } finally {
+        setStreamingAnalysis(null);
       }
 
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
@@ -1679,8 +1705,23 @@ export default function Chat() {
                   </div>
                 )}
 
+                {/* Live streaming file-analysis bubble — matches the normal
+                    assistant message styling, but shows text as it arrives */}
+                {streamingAnalysis !== null && (
+                  <div className="flex gap-3 justify-start" data-testid="message-streaming-analysis">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Brain className="w-4 h-4 text-primary" />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {streamingAnalysis ? <LenoryMarkdown content={streamingAnalysis} /> : <TypingIndicator action="reading_file" />}
+                    </div>
+                  </div>
+                )}
+
                 {/* Writing / typing indicator */}
-                {isLoading && <TypingIndicator action={chatAction} />}
+                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} />}
 
                 <div ref={messagesEndRef} />
               </div>
