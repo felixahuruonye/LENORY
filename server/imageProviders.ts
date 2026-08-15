@@ -92,3 +92,56 @@ export async function generateWithPollinations(prompt: string): Promise<ImagePro
   if (buffer.byteLength < 500) throw new Error("Pollinations returned an empty/invalid image");
   return { dataUrl: `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`, provider: "pollinations" };
 }
+
+// Vision/file analysis fallback — used when Gemini's text+vision model
+// (gemini-2.5-flash) fails, most likely for the same reason image
+// generation was failing: the Gemini API key's project has zero free-tier
+// quota. Unlike NexaAPI, this needs no new key from Felix — OPENROUTER_API_KEY
+// is already configured and used elsewhere (Ultra-tier chat), so this is
+// ready to work immediately.
+export async function analyzeFilesWithOpenRouterVision(
+  files: { base64: string; mimeType: string; fileName?: string }[],
+  instruction: string
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
+
+  const content: any[] = [{ type: "text", text: instruction }];
+  for (const f of files) {
+    // OpenRouter's chat/completions is OpenAI-compatible: images go in as
+    // image_url content blocks with a data: URL, not Gemini's inlineData
+    // shape — files here already carry a bare base64 string (no data:
+    // prefix, matching how the rest of this codebase stores them), so it
+    // has to be added back.
+    content.push({ type: "image_url", image_url: { url: `data:${f.mimeType};base64,${f.base64}` } });
+  }
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://lenory.app",
+      "X-Title": "LENORY AI",
+    },
+    body: JSON.stringify({
+      // gpt-4o-mini: reliable, cheap, genuinely vision-capable, broadly
+      // available on OpenRouter — a different provider and quota bucket
+      // entirely from Gemini, which is the whole point of this fallback.
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content }],
+      max_tokens: 4096,
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`OpenRouter vision error (${res.status}): ${errText.slice(0, 300)}`);
+  }
+
+  const data: any = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter vision returned no content");
+  return text;
+}

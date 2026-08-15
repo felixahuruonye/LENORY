@@ -724,16 +724,25 @@ export default function Chat() {
           }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 90000)),
         ]);
-        if (!res.ok) {
-          failed = true;
-          try { const errData = await res.json(); failMsg = errData.message || errData.error || "Analysis failed"; } catch { failMsg = "Analysis failed"; }
-        } else {
-          const data = await res.json();
-          analysis = data.analysis || "(No analysis returned)";
-        }
+        // apiRequest throws on any non-2xx response (see throwIfResNotOk in
+        // queryClient.ts) — it never actually returns a !res.ok Response, so
+        // that used to be dead code here and the real failure always landed
+        // in the catch block below with no detail at all. All error
+        // handling now happens in the catch block, parsing the real reason
+        // out of the thrown error instead of showing a generic message.
+        const data = await res.json();
+        analysis = data.analysis || "(No analysis returned)";
       } catch (e) {
         failed = true;
-        failMsg = e instanceof Error && e.message === "timeout" ? "Analysis took too long — try fewer or smaller files at once." : "Failed to analyze files";
+        if (e instanceof Error && e.message === "timeout") {
+          failMsg = "Analysis took too long — try fewer or smaller files at once.";
+        } else {
+          failMsg = "Failed to analyze files";
+          try {
+            const parsed = JSON.parse(String((e as Error)?.message || "").replace(/^\d+:\s*/, ""));
+            failMsg = parsed?.error || parsed?.message || failMsg;
+          } catch {}
+        }
       }
 
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });

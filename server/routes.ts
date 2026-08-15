@@ -41,6 +41,7 @@ import {
   generateQuestionsWithLENORY,
   chatWithGemini,
 } from "./gemini";
+import { analyzeFilesWithOpenRouterVision } from "./imageProviders";
 import { nanoid } from "nanoid";
 import { learnFromUserMessage, mergePreferences } from "./memoryLearner";
 import { initializePayment, verifyPayment, convertNairaToKobo } from "./paystack";
@@ -3396,30 +3397,64 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         : `${noteContextInstruction}Extract and describe all content from this file. If it is an image, describe what you see in detail. If it is a document or PDF, extract the full text. If this involves math, physics, chemistry, or any calculation: wrap ALL math in LaTeX dollar-sign delimiters (inline $x^2$, block $$...$$ on its own line) — never write LaTeX commands like \\displaystyle, \\boxed, \\frac as bare text outside $ delimiters. Solve step-by-step exactly as a student would write it by hand in a workbook, one step per line, and box the final answer with $$\\boxed{...}$$. Double-check every calculation before presenting it.\n\n${EXAM_BOOKLET_MODE_PROMPT}`;
       const { GoogleGenAI } = await import('@google/genai');
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-      if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
-      );
-      const analysisPromise = ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{
-          parts: [
-            { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
-            { text: textInstruction },
-          ],
-        }] as any,
-      });
-      const response = await Promise.race([analysisPromise, timeoutPromise]);
-      const analysis = (response as any).text || "I could not extract content from this file.";
+      // Same Gemini -> OpenRouter fallback as the batch endpoint (see there
+      // for the full rationale) — not currently called by the chat UI
+      // (which always uses /api/chat/analyze-vision-batch, even for 1 file)
+      // but kept consistent since this is still a live, directly-callable
+      // endpoint.
+      let analysis = "";
+      const failures: string[] = [];
+      if (geminiKey) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
+          );
+          const analysisPromise = ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{
+              parts: [
+                { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
+                { text: textInstruction },
+              ],
+            }] as any,
+          });
+          const response = await Promise.race([analysisPromise, timeoutPromise]);
+          analysis = (response as any).text || "";
+          if (!analysis) throw new Error("Gemini returned no content");
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn("Gemini vision analysis failed, trying OpenRouter fallback:", reason.slice(0, 300));
+          failures.push(`gemini: ${reason}`);
+        }
+      } else {
+        failures.push("gemini: GEMINI_API_KEY not configured");
+      }
+
+      if (!analysis) {
+        try {
+          analysis = await analyzeFilesWithOpenRouterVision([{ base64, mimeType, fileName }], textInstruction);
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.error("OpenRouter vision fallback also failed:", reason.slice(0, 300));
+          failures.push(`openrouter: ${reason}`);
+        }
+      }
+
+      if (!analysis) {
+        const summary = failures.join(" | ");
+        const isTimeout = summary.includes("GEMINI_TIMEOUT") || /timed out/i.test(summary);
+        return res.status(isTimeout ? 408 : 502).json({
+          error: isTimeout ? "File analysis timed out — try a smaller or simpler file." : "Both analysis providers are unavailable right now. Please try again shortly.",
+          detail: summary,
+        });
+      }
+
       console.log(`✅ Vision analysis complete for ${fileName || 'file'} (${analysis.length} chars)`);
       res.json({ analysis });
     } catch (error: any) {
       const msg: string = error?.message || String(error);
       console.error("Vision analyze error:", msg);
-      if (msg.includes("GEMINI_TIMEOUT")) {
-        return res.status(408).json({ error: "File analysis timed out — try a smaller or simpler file.", detail: "TIMEOUT" });
-      }
       res.status(500).json({ error: "Failed to analyze file", detail: msg });
     }
   });
@@ -3485,32 +3520,77 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
       const { GoogleGenAI } = await import('@google/genai');
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-      if (!geminiKey) return res.status(500).json({ error: "Gemini API key not configured" });
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      // More content to read than a single-file request, so a bit more
-      // headroom than the 50s single-file timeout — still one round-trip,
-      // not N, so this is still faster overall than the old per-file loop
-      // for anything more than 1 file.
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 75000)
-      );
-      const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
-      parts.push({ text: batchInstruction });
-      const analysisPromise = ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{ parts }] as any,
-      });
-      const response = await Promise.race([analysisPromise, timeoutPromise]);
-      const analysis = (response as any).text || "I could not extract content from these files.";
-      console.log(`✅ Batch vision analysis complete for ${files.length} files (${analysis.length} chars)`);
+      // Previously this only ever tried Gemini — if the API key's project
+      // has zero free-tier quota (the same root cause that was blocking
+      // image generation), EVERY file analysis failed with no fallback at
+      // all, generic error, and the real reason ('detail' in the response)
+      // was already being computed here but the client wasn't displaying
+      // it. Now: try Gemini first, and if it fails for ANY reason, fall
+      // back to OpenRouter (gpt-4o-mini, vision-capable) — a completely
+      // different provider and quota bucket, using the OPENROUTER_API_KEY
+      // that's already configured for Ultra-tier chat, so this works
+      // immediately with no new setup needed.
+      let analysis = "";
+      let usedProvider = "gemini";
+      const failures: string[] = [];
+      if (geminiKey) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          // More content to read than a single-file request, so a bit more
+          // headroom than the 50s single-file timeout — still one round-trip,
+          // not N, so this is still faster overall than the old per-file loop
+          // for anything more than 1 file.
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 75000)
+          );
+          const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
+          parts.push({ text: batchInstruction });
+          const analysisPromise = ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{ parts }] as any,
+          });
+          const response = await Promise.race([analysisPromise, timeoutPromise]);
+          analysis = (response as any).text || "";
+          if (!analysis) throw new Error("Gemini returned no content");
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn("Gemini vision analysis failed, trying OpenRouter fallback:", reason.slice(0, 300));
+          failures.push(`gemini: ${reason}`);
+        }
+      } else {
+        failures.push("gemini: GEMINI_API_KEY not configured");
+      }
+
+      if (!analysis) {
+        try {
+          analysis = await analyzeFilesWithOpenRouterVision(files, batchInstruction);
+          usedProvider = "openrouter";
+          console.log("✅ Batch vision analysis completed via OpenRouter fallback");
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.error("OpenRouter vision fallback also failed:", reason.slice(0, 300));
+          failures.push(`openrouter: ${reason}`);
+        }
+      }
+
+      if (!analysis) {
+        const summary = failures.join(" | ");
+        console.error("Batch vision analyze error (all providers):", summary);
+        const isTimeout = summary.includes("GEMINI_TIMEOUT") || /timed out/i.test(summary);
+        return res.status(isTimeout ? 408 : 502).json({
+          error: isTimeout
+            ? "Analysis timed out — try fewer files or smaller files at once."
+            : "Both analysis providers are unavailable right now. Please try again shortly.",
+          detail: summary,
+        });
+      }
+
+      console.log(`✅ Batch vision analysis complete via ${usedProvider} for ${files.length} files (${analysis.length} chars)`);
       if (user?.email !== REAL_ADMIN_EMAIL) await deductCredits(userId, cost);
       res.json({ analysis });
     } catch (error: any) {
       const msg: string = error?.message || String(error);
       console.error("Batch vision analyze error:", msg);
-      if (msg.includes("GEMINI_TIMEOUT")) {
-        return res.status(408).json({ error: "Analysis timed out — try fewer files or smaller files at once.", detail: "TIMEOUT" });
-      }
       res.status(500).json({ error: "Failed to analyze files", detail: msg });
     }
   });
