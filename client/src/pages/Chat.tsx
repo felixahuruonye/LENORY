@@ -1764,11 +1764,27 @@ export default function Chat() {
                       starting the call (or does nothing if one's already
                       active — ending is handled by the persistent VoiceOrb). */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       setShowPlusMenu(false);
                       if (voiceCall.status !== "idle") return;
                       const history = messages?.map((m: any) => `${m.role}: ${m.content}`).join("\n") || "";
-                      voiceCall.startVoiceCall({ sessionId: currentSessionId, userId: (user as any)?.id, chatHistory: history });
+                      // Previously passed currentSessionId straight through
+                      // even when it was null (a brand-new chat with no
+                      // session created yet) — the transcript-save endpoint
+                      // silently does nothing without a sessionId, which is
+                      // exactly why the transcript never showed up in the
+                      // chat page for a call started from a fresh session.
+                      let sid = currentSessionId;
+                      if (!sid) {
+                        try {
+                          const sRes = await apiRequest("POST", "/api/chat/sessions", { title: "Voice Call", mode: "chat" });
+                          const sData = await sRes.json();
+                          sid = sData.id;
+                          switchToSession(sData.id);
+                          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+                        } catch {}
+                      }
+                      voiceCall.startVoiceCall({ sessionId: sid, userId: (user as any)?.id, chatHistory: history });
                     }}
                     className={`p-2 rounded-xl transition-all ${voiceCall.status !== "idle" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                     title="Live Voice AI"

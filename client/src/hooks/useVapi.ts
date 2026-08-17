@@ -70,6 +70,15 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
 
   const vapiRef = useRef<VapiSDK | null>(null);
   const onMessageRef = useRef<((msg: VapiMessage) => void) | null>(null);
+  const lastEventAtRef = useRef<number>(Date.now());
+  // The watchdog/offline-drop handlers below are registered once (their
+  // effect only depends on `publicKey`), so they'd otherwise close over the
+  // isCallActive/isConnecting values from that first render forever — refs
+  // keep them reading the real current value instead of a stale one.
+  const isCallActiveRef = useRef(false);
+  const isConnectingRef = useRef(false);
+  useEffect(() => { isCallActiveRef.current = isCallActive; }, [isCallActive]);
+  useEffect(() => { isConnectingRef.current = isConnecting; }, [isConnecting]);
   useEffect(() => {
     onMessageRef.current = onMessageCallback || null;
   }, [onMessageCallback]);
@@ -85,6 +94,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
       }
       try {
         setIsConnecting(true);
+        lastEventAtRef.current = Date.now();
         await vapiRef.current.start(options);
         setIsCallActive(true);
         setError(null);
@@ -153,6 +163,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
         setMessages([]);
         setCallDurationSeconds(0);
         setHasGreeted(false);
+        lastEventAtRef.current = Date.now();
         if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
         durationIntervalRef.current = setInterval(() => setCallDurationSeconds((s) => s + 1), 1000);
       });
@@ -162,21 +173,35 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
         setIsCallActive(false);
         setIsSpeaking(false);
         setHasGreeted(false);
+        setIsConnecting(false);
         if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
       });
 
       // ─── EVENT: speech-start / speech-end (assistant is talking) ──
-      vapi.on("speech-start", () => { setIsSpeaking(true); setHasGreeted(true); });
-      vapi.on("speech-end", () => setIsSpeaking(false));
+      vapi.on("speech-start", () => { setIsSpeaking(true); setHasGreeted(true); lastEventAtRef.current = Date.now(); });
+      vapi.on("speech-end", () => { setIsSpeaking(false); lastEventAtRef.current = Date.now(); });
 
       // ─── EVENT: error ──────────────────────────────────────
       vapi.on("error", (err: any) => {
+        // Previously this only set `error` and left isCallActive exactly
+        // as it was. If the error came from a dead/dropped connection
+        // (network drop, WebRTC failure) rather than a clean call-end, the
+        // UI was left thinking a call might still be active while the
+        // underlying connection was already gone — end/toggle actions on a
+        // truly dead connection don't reliably fire call-end back, so the
+        // app could get stuck needing a page refresh to recover. An error
+        // now always resets to a clean, known state.
         setError(err.message || "Vapi error occurred");
+        setIsCallActive(false);
+        setIsSpeaking(false);
+        setIsConnecting(false);
+        if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
         console.error("Vapi error:", err);
       });
 
       // ─── EVENT: message (FIXED) ────────────────────────────
       vapi.on("message", (msg: VapiMessage) => {
+        lastEventAtRef.current = Date.now();
         // 1. Transcript handling
         const transcriptText = msg.transcript || msg.transcriptText || msg.text || "";
         const isFinal = msg.transcriptType === "final" || (msg.type === "transcript" && msg.role);
@@ -221,8 +246,44 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
       console.error("Vapi init error:", err);
     }
 
+    // ─── WATCHDOG: detect a call that's silently dead ──────────
+    // Previously nothing checked whether the connection was actually still
+    // alive — if Vapi's SDK failed to fire call-end or error on a real
+    // disconnect (which does happen on some network-drop scenarios), the
+    // app was stuck believing a call was active forever, with a mic that
+    // no longer did anything — exactly "freezes, need to refresh the
+    // site". This doesn't try to reconnect (Vapi's SDK doesn't expose a
+    // resume API) but it DOES reliably detect and clear a dead call so the
+    // person can immediately start a new one instead of being stuck.
+    const watchdog = setInterval(() => {
+      if (isCallActiveRef.current && Date.now() - lastEventAtRef.current > 90_000) {
+        console.warn("Vapi watchdog: no events for 90s on an active call — treating as disconnected");
+        setError("Call disconnected (no response for a while) — please start a new call.");
+        setIsCallActive(false);
+        setIsSpeaking(false);
+        if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
+        try { vapiRef.current?.stop(); } catch {}
+      }
+    }, 15_000);
+
+    // ─── NETWORK DROP: end cleanly instead of leaving a dead call hanging ──
+    const handleOffline = () => {
+      if (isCallActiveRef.current || isConnectingRef.current) {
+        console.warn("Network went offline during an active/connecting call");
+        setError("Your network connection dropped — the call ended. Please reconnect once you're back online.");
+        setIsCallActive(false);
+        setIsConnecting(false);
+        setIsSpeaking(false);
+        if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
+        try { vapiRef.current?.stop(); } catch {}
+      }
+    };
+    window.addEventListener("offline", handleOffline);
+
     // ─── CLEANUP ──────────────────────────────────────────────
     return () => {
+      clearInterval(watchdog);
+      window.removeEventListener("offline", handleOffline);
       if (vapiRef.current) {
         try {
           vapiRef.current.stop();

@@ -174,7 +174,18 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         // the file, unused for now, ready to re-add carefully.
       },
       voice: getVapiVoiceForCall(),
-      transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
+      // Vapi's own default silence timeout is much shorter than a real
+      // study conversation needs (a student thinking through a problem, or
+      // reading something before responding, can easily go quiet for a
+      // minute) — previously unset, meaning Vapi's short default likely
+      // explains "when I don't talk for a while it doesn't work again":
+      // the call had already been auto-ended by Vapi, silently, while the
+      // UI gave no indication that had happened.
+      silenceTimeoutSeconds: 600,
+      // nova-3 (up from nova-2): Deepgram's more recent, more accurate
+      // model — directly targets "sometimes when you say a word it spells
+      // it wrong."
+      transcriber: { provider: "deepgram", model: "nova-3", language: "en", smartFormat: true },
       startSpeakingPlan: {
         waitSeconds: 0.2,
         smartEndpointingPlan: { provider: "livekit", waitFunction: "2000 / (1 + exp(-10 * (x - 0.5)))" },
