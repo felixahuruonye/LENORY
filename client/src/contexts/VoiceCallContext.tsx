@@ -164,10 +164,14 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
             content: `${VOICE_SYSTEM_PROMPT_BASE}${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
           },
         ],
-        tools: VOICE_TOOLS,
-      },
-      server: {
-        url: `${window.location.origin}/api/vapi/tool-call`,
+        // tools + server temporarily removed — the call connected but the
+        // assistant produced no speech at all right after these were added,
+        // meaning the model call itself was very likely failing once `tools`
+        // reached OpenAI (Vapi doesn't surface that failure to the client,
+        // it just goes silent). Reverting to restore actual voice function
+        // rather than keep guessing at Vapi's exact tool schema without
+        // real call logs to check against. See VOICE_TOOLS below — kept in
+        // the file, unused for now, ready to re-add carefully.
       },
       voice: getVapiVoiceForCall(),
       transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
