@@ -4,6 +4,8 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { VoiceCallProvider } from "@/contexts/VoiceCallContext";
+import VoiceOrb from "@/components/VoiceOrb";
 import { useAuth } from "@/hooks/useAuth";
 import HeyLenoryButton from "@/components/HeyLenoryButton";
 import Landing from "@/pages/Landing";
@@ -171,9 +173,16 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          <Toaster />
-          <Router />
-          <GlobalVoiceButton />
+          {/* VoiceCallProvider sits ABOVE the router — mounted once, never
+              torn down by route changes, so a live voice call now genuinely
+              survives navigating to a different chat session or page,
+              instead of dying when the page that started it unmounts. */}
+          <VoiceCallProvider>
+            <Toaster />
+            <Router />
+            <GlobalVoiceButton />
+            <VoiceOrb />
+          </VoiceCallProvider>
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

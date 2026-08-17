@@ -34,6 +34,7 @@ export interface UseVapiReturn {
   clearMessages: () => void;
   startCall: (options?: any) => Promise<void>;
   stopCall: () => void;
+  send: (data: any) => void;
 }
 
 // Vapi SDK types (simplified)
@@ -52,6 +53,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
   const publicKey = typeof options === "string" ? options : options?.publicKey;
   const onMessageCallback = typeof options === "object" ? options?.onMessage : undefined;
   const [isCallActive, setIsCallActive] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   // Tracks whether the assistant has spoken at least once this call. Before
   // this existed, the UI showed "Listening..." the instant the call
@@ -82,6 +84,7 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
         return;
       }
       try {
+        setIsConnecting(true);
         await vapiRef.current.start(options);
         setIsCallActive(true);
         setError(null);
@@ -89,6 +92,8 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
       } catch (err: any) {
         setError(err.message || "Failed to start call");
         console.error("Vapi start error:", err);
+      } finally {
+        setIsConnecting(false);
       }
     },
     []
@@ -231,9 +236,19 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
   }, [publicKey]);
 
   // ============================================================
+  // SEND — inject a message into the live call (used to hand the assistant
+  // context from a file uploaded mid-call, without ending the call)
+  // ============================================================
+  const send = useCallback((data: any) => {
+    if (vapiRef.current) {
+      try { vapiRef.current.send(data); } catch (e) { console.error("Vapi send error:", e); }
+    }
+  }, []);
+
+  // ============================================================
   // RETURN
   // ============================================================
-  const status: "idle" | "connecting" | "active" | "error" = error ? "error" : isCallActive ? "active" : "idle";
+  const status: "idle" | "connecting" | "active" | "error" = error ? "error" : isCallActive ? "active" : isConnecting ? "connecting" : "idle";
 
   return {
     isCallActive,
@@ -251,5 +266,6 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
     clearMessages,
     startCall: start,
     stopCall: stop,
+    send,
   };
 }

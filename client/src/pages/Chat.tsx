@@ -69,7 +69,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVoice, getVapiVoiceForCall } from "@/lib/useVoice";
-import { useVapi } from "@/hooks/useVapi";
+import { useVoiceCall } from "@/contexts/VoiceCallContext";
 import { detectFeatureOpen } from "@/lib/featureRegistry";
 import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shared/schema";
 
@@ -267,209 +267,6 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
   );
 }
 
-// ─── VAPI Voice Panel ─────────────────────────────────────────────────────────
-function VapiPanel({ onClose, chatMessages, sessionId }: { onClose: () => void; chatMessages?: { role: string; content: string }[]; sessionId?: string | null }) {
-  const { status, isSpeaking, hasGreeted, transcript, messages, callDurationSeconds, startCall, stopCall, error } = useVapi();
-  const prevStatusRef = useRef<string>(status);
-  const [creditError, setCreditError] = useState<string | null>(null);
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Bill the call in real time (20cr/min, ticked every 10s) instead of only
-  // at the end — and hang up with a warning the moment credits run low,
-  // instead of letting the call run for free once the balance is gone.
-  useEffect(() => {
-    if (status === "active") {
-      heartbeatRef.current = setInterval(async () => {
-        try {
-          const res = await apiRequest("POST", "/api/voice/heartbeat", {});
-          const data = await res.json();
-          if (data?.lowCredits) {
-            setCreditError("You're running low on credits — top up or upgrade your plan to keep using LENORY Voice AI. Ending call.");
-            setTimeout(() => stopCall(), 3000);
-          }
-        } catch (e: any) {
-          if (String(e?.message || "").startsWith("402")) {
-            setCreditError("Insufficient credits — please top up or upgrade your plan.");
-            stopCall();
-          }
-        }
-      }, 10000);
-    } else if (heartbeatRef.current) {
-      clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
-    }
-    return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); };
-  }, [status, stopCall]);
-
-  // When the call actually ends (was active/connecting, now idle), save a
-  // Groq-cleaned transcript into this chat session and deduct real credits
-  // for the call — previously nothing happened here at all.
-  useEffect(() => {
-    const wasLive = prevStatusRef.current === "active" || prevStatusRef.current === "connecting";
-    if (wasLive && status === "idle" && messages.length > 0) {
-      apiRequest("POST", "/api/vapi/end-call", {
-        sessionId,
-        messages: messages.filter((m) => m.role === "user" || m.role === "assistant"),
-        durationSeconds: callDurationSeconds,
-      })
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sessionId] }))
-        .catch(() => {});
-    }
-    prevStatusRef.current = status;
-  }, [status, messages, sessionId, callDurationSeconds]);
-
-  const formatDuration = (secs: number) => {
-    const m = Math.floor(secs / 60).toString().padStart(2, "0");
-    const s = (secs % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
-  };
-
-  return (
-    <div className="mx-auto max-w-2xl my-3">
-      <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 via-background to-primary/5 p-5 backdrop-blur-sm">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Radio className="w-5 h-5 text-primary" />
-            <span className="font-semibold">Live Voice Session</span>
-            {status === "active" && (
-              <span className="text-xs text-muted-foreground font-mono bg-muted/50 px-2 py-0.5 rounded-full">
-                {formatDuration(callDurationSeconds)} · 20cr/min
-              </span>
-            )}
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground" data-testid="button-close-vapi">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {(error || creditError) && (
-          <div className="mb-3 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">
-            {creditError || error}
-          </div>
-        )}
-
-        {chatMessages && chatMessages.length > 0 && status === "idle" && (
-          <div className="mb-3 p-3 rounded-lg bg-primary/5 border border-primary/15 text-xs text-muted-foreground">
-            LENORY remembers this whole conversation ({chatMessages.length} message{chatMessages.length === 1 ? "" : "s"}).
-          </div>
-        )}
-
-        <div className="flex flex-col items-center gap-4 py-4">
-          {/* Animated orb */}
-          <div className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
-            status === "active" ? "bg-primary/20 shadow-lg shadow-primary/30" : "bg-muted/30"
-          }`}>
-            {isSpeaking && (
-              <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
-            )}
-            <div className="absolute inset-0 rounded-full overflow-hidden flex items-center justify-center">
-              {status === "active" && (
-                <div className="flex items-end gap-0.5 h-8">
-                  {[...Array(7)].map((_, i) => (
-                    <div
-                      key={i}
-                      className="w-1 bg-primary rounded-full"
-                      style={{
-                        height: isSpeaking ? `${20 + Math.random() * 20}px` : "4px",
-                        transition: "height 0.1s ease",
-                        animationDelay: `${i * 50}ms`,
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-              {status !== "active" && <Mic className={`w-8 h-8 ${status === "connecting" ? "text-primary animate-pulse" : "text-muted-foreground"}`} />}
-            </div>
-          </div>
-
-          <div className="text-center">
-            <p className="font-medium">
-              {status === "idle" && "Ready to talk"}
-              {status === "connecting" && "Connecting..."}
-              {status === "active" && (isSpeaking ? "LENORY is speaking..." : hasGreeted ? "Listening..." : "Getting ready...")}
-              {status === "error" && "Connection failed"}
-            </p>
-            {transcript && <p className="text-sm text-muted-foreground mt-1 italic">"{transcript}"</p>}
-          </div>
-
-          <div className="flex gap-3">
-            {(status === "idle" || status === "error") && (
-              <Button
-                onClick={async () => {
-                  setCreditError(null);
-                  try {
-                    await apiRequest("POST", "/api/live-ai/voice-start", {});
-                  } catch (e: any) {
-                    let msg = "You need at least 20 credits to start a voice session. Please top up.";
-                    try {
-                      const jsonPart = String(e?.message || "").replace(/^\d+:\s*/, "");
-                      const parsed = JSON.parse(jsonPart);
-                      if (parsed?.message) msg = parsed.message;
-                    } catch {}
-                    setCreditError(msg);
-                    return;
-                  }
-                  const history = chatMessages?.map((m) => `${m.role}: ${m.content}`).join("\n") || "";
-                  startCall({
-                    name: "LENORY Live Tutor",
-                    firstMessage: "Hey, I'm here! Keep going, or something new?",
-                    firstMessageMode: "assistant-speaks-first",
-                    model: {
-                      // Reverted from Groq back to OpenAI gpt-4o-mini — the
-                      // Groq attempt broke call setup (Render logs showed
-                      // voice-start firing repeatedly with the call ending
-                      // within ~1s each time, UI stuck on "Getting
-                      // ready..."). Couldn't verify Vapi/Groq's exact
-                      // accepted config from this environment, so reverting
-                      // to the proven-working model rather than keep
-                      // guessing on a live product.
-                      provider: "openai",
-                      model: "gpt-4o-mini",
-                      messages: [
-                        {
-                          role: "system",
-                          content: `You are LENORY, a warm AI study companion continuing a voice conversation with a student. This is a spoken call — keep responses short, natural, and conversational, no markdown or lists. ${history ? `Here is the recent chat history for context:\n${history}` : ""}\n\nVOICE & SPEAKING STYLE:\n- Speak in a calm, clear, and SLOW pace – like a patient tutor explaining to a beginner.\n- Enunciate each word clearly – avoid mumbling or rushing.\n- When asked to spell a word, spell it letter by letter slowly, with a pause between each letter (e.g., "C-A-T").\n- Use natural, conversational Nigerian English – warm, friendly, and encouraging.\n- Pause briefly between sentences to give the student time to process.\n- If the student seems confused, rephrase your explanation in simpler terms.\n- Match the student's energy – if they speak fast, you can speed up slightly, but always stay clear.\n\nSPELLING INSTRUCTIONS:\nWhen the user says "spell", "how do you spell", or similar, respond with:\n- The word clearly spelled out, letter by letter, with about 1 second pause between letters.\n- Example: "The word is C-A-T. That's C for Charlie, A for Alpha, T for Tango."\n- Always offer to use the word in a sentence for context.\n\nPRONUNCIATION HELP:\n- If the user asks how to pronounce a word, break it into syllables and say each part slowly.\n- Use Nigerian examples and references to make it relatable.`,
-                        },
-                      ],
-                    },
-                    // NOTE: Vapi's docs say provider-level "speed" control is
-                    // currently only honored for PlayHT voices, not OpenAI —
-                    // adding it here risked either being silently ignored or
-                    // rejected by assistant validation. Slower pacing is
-                    // instead handled entirely through the system prompt
-                    // above. If you want a literal speed dial, PlayHT is the
-                    // one Vapi voice provider that actually supports it.
-                    voice: getVapiVoiceForCall(),
-                    transcriber: { provider: "deepgram", model: "nova-2", language: "en", smartFormat: true },
-                    // smartEndpointingEnabled was not a real Vapi field — smart
-                    // endpointing was silently never active. This is the real
-                    // field name, using Vapi's documented "aggressive" preset.
-                    startSpeakingPlan: {
-                      waitSeconds: 0.2,
-                      smartEndpointingPlan: { provider: "livekit", waitFunction: "2000 / (1 + exp(-10 * (x - 0.5)))" },
-                    },
-                    stopSpeakingPlan: { numWords: 0, voiceSeconds: 0.15, backoffSeconds: 0.8 },
-                  });
-                }}
-                className="bg-primary"
-                data-testid="button-start-voice-call"
-              >
-                <Phone className="w-4 h-4 mr-2" />
-                Start Voice Call
-              </Button>
-            )}
-            {(status === "active" || status === "connecting") && (
-              <Button onClick={stopCall} variant="destructive" data-testid="button-end-voice-call">
-                <PhoneOff className="w-4 h-4 mr-2" />
-                End Call
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 
 // ─── Main Chat component ──────────────────────────────────────────────────────
@@ -487,7 +284,7 @@ export default function Chat() {
   const [videoMode, setVideoMode] = useState(false);
   const [imageGenMode, setImageGenMode] = useState(false);
   const [advancedMode, setAdvancedMode] = useState(false);
-  const [showVapiPanel, setShowVapiPanel] = useState(false);
+  const voiceCall = useVoiceCall();
   const [showCreditAlert, setShowCreditAlert] = useState(false);
   const [creditAlertShown, setCreditAlertShown] = useState(false);
   const [historyTab, setHistoryTab] = useState("all");
@@ -787,6 +584,15 @@ export default function Chat() {
       if (!failed && analysis) {
         const skippedNote = tooLargeVideos.length > 0 ? `\n\n*(${tooLargeVideos.map(f => f.file.name).join(", ")} skipped — over 60MB)*` : "";
         await handleSendMessageWithContent(userChatContent, analysis + skippedNote);
+        // If a voice call is active on this same session, hand the
+        // assistant the analysis directly instead of making the student
+        // read it out loud or re-describe it — "even while talking you can
+        // upload a file, it uses it to see and guide the user."
+        if (voiceCall.status === "active" && voiceCall.activeSessionId === currentSessionId) {
+          voiceCall.sendMidCallContext(
+            `The student just shared ${sendable.length > 1 ? "these files" : "a file"} (${sendable.map(f => f.file.name).join(", ")}) during this call. Here's what's in ${sendable.length > 1 ? "them" : "it"}:\n\n${analysis}\n\nBriefly acknowledge you can see it, then continue helping based on this — don't ask the student to describe it.`
+          );
+        }
       } else {
         await handleSendMessageWithContent(
           userChatContent,
@@ -1607,14 +1413,9 @@ export default function Chat() {
               />
             )}
 
-            {/* VAPI panel in chat */}
-            {showVapiPanel && (
-              <VapiPanel
-                onClose={() => setShowVapiPanel(false)}
-                chatMessages={messages?.map((m: any) => ({ role: m.role, content: m.content }))}
-                sessionId={currentSessionId}
-              />
-            )}
+            {/* Live voice call UI is now global (VoiceOrb, rendered at the
+                app root) so it survives navigating between chat sessions —
+                see VoiceCallContext. Nothing rendered here anymore. */}
 
             {/* Messages */}
             {messages.length > 0 && (
@@ -1957,10 +1758,19 @@ export default function Chat() {
                 </div>
 
                 <div className="flex items-center gap-1">
-                  {/* Live AI / VAPI wave button */}
+                  {/* Live AI / VAPI wave button — previously toggled an
+                      idle "Ready to talk" card requiring a second tap to
+                      actually start the call. Now taps straight into
+                      starting the call (or does nothing if one's already
+                      active — ending is handled by the persistent VoiceOrb). */}
                   <button
-                    onClick={() => { setShowVapiPanel(!showVapiPanel); setShowPlusMenu(false); }}
-                    className={`p-2 rounded-xl transition-all ${showVapiPanel ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    onClick={() => {
+                      setShowPlusMenu(false);
+                      if (voiceCall.status !== "idle") return;
+                      const history = messages?.map((m: any) => `${m.role}: ${m.content}`).join("\n") || "";
+                      voiceCall.startVoiceCall({ sessionId: currentSessionId, userId: (user as any)?.id, chatHistory: history });
+                    }}
+                    className={`p-2 rounded-xl transition-all ${voiceCall.status !== "idle" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                     title="Live Voice AI"
                     data-testid="button-live-ai"
                   >

@@ -3836,6 +3836,88 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     res.json({ logged: true });
   });
 
+  // Vapi calls this DIRECTLY (its own servers, not the browser) whenever the
+  // live voice assistant wants to invoke a tool — no Supabase bearer token
+  // is available here, since the browser isn't the caller. The user is
+  // identified from `metadata.userId`, which is set on the assistant config
+  // when the call starts (see VapiPanel in Chat.tsx) and echoed back by
+  // Vapi on every webhook call for that call. If VAPI_SERVER_SECRET is set,
+  // requests are verified against it — set the same value in the
+  // assistant's `server.secret` field to enable this.
+  app.post('/api/vapi/tool-call', async (req: any, res: Response) => {
+    try {
+      const expectedSecret = process.env.VAPI_SERVER_SECRET;
+      if (expectedSecret && req.headers['x-vapi-secret'] !== expectedSecret) {
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+
+      const message = req.body?.message;
+      const toolCalls: any[] = message?.toolCallList || message?.toolCalls || [];
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+        return res.json({ results: [] });
+      }
+
+      // Defensive: the exact nesting of metadata in Vapi's webhook payload
+      // isn't independently verifiable without a live call to test against,
+      // so check several plausible paths rather than assume one.
+      const userId =
+        message?.call?.metadata?.userId ||
+        message?.call?.assistant?.metadata?.userId ||
+        message?.assistant?.metadata?.userId ||
+        message?.metadata?.userId ||
+        null;
+
+      const results = await Promise.all(toolCalls.map(async (tc: any) => {
+        const toolCallId = tc.id;
+        const name = tc.function?.name;
+        let args = tc.function?.arguments;
+        if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = {}; } }
+        args = args || {};
+
+        try {
+          if (name === "search_web") {
+            const query = String(args.query || "").trim();
+            if (!query) return { toolCallId, result: "No search query provided." };
+            const { searchInternetWithGemini } = await import('./gemini');
+            const searchData = await searchInternetWithGemini(query);
+            const summary = (searchData as any)?.summary || (searchData as any)?.answer || JSON.stringify(searchData).slice(0, 800);
+            return { toolCallId, result: `Web search results for "${query}": ${summary}` };
+          }
+
+          if (name === "search_past_chats") {
+            if (!userId) return { toolCallId, result: "Couldn't identify the user to search their past chats." };
+            const query = String(args.query || "").trim().toLowerCase();
+            if (!query) return { toolCallId, result: "No search query provided." };
+            const sessions = (await storage.getChatSessionsByUser(userId)).slice(0, 25);
+            const matches: string[] = [];
+            for (const session of sessions) {
+              if (matches.length >= 5) break;
+              const msgs = await storage.getChatMessagesBySession(session.id).catch(() => []);
+              for (const m of msgs.slice(0, 60)) {
+                if ((m.content || "").toLowerCase().includes(query)) {
+                  matches.push(`From "${session.title || "a past chat"}" (${new Date(session.createdAt as any).toLocaleDateString()}): ${(m.content || "").slice(0, 300)}`);
+                  break;
+                }
+              }
+            }
+            return { toolCallId, result: matches.length > 0 ? `Found ${matches.length} relevant past conversation(s):\n\n${matches.join("\n\n")}` : `No past conversations found mentioning "${query}".` };
+          }
+
+          return { toolCallId, result: `Unknown tool: ${name}` };
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.error(`Vapi tool-call '${name}' failed:`, reason.slice(0, 300));
+          return { toolCallId, result: `Sorry, I couldn't complete that (${name}) right now.` };
+        }
+      }));
+
+      res.json({ results });
+    } catch (error) {
+      console.error("Vapi tool-call webhook error:", error);
+      res.json({ results: [] });
+    }
+  });
+
   // Called when a Live AI voice call ends: Groq cleans up the raw message
   // list into a readable transcript, saves it into the chat session it
   // belongs to, and deducts real credits for the call (20 credits/minute,
