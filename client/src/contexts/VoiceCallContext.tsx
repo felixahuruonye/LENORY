@@ -90,6 +90,13 @@ const VOICE_TOOLS = [
   },
 ];
 
+// STAGE 1 of re-adding tool-calling after it silently broke voice once
+// already: only search_web goes live first, alone, so if anything breaks
+// again there's exactly one new thing to suspect instead of several at
+// once. search_past_chats (defined above, ready) gets added in a follow-up
+// once this is confirmed working on a real call.
+const ACTIVE_VOICE_TOOLS = [VOICE_TOOLS[0]];
+
 interface VoiceCallContextValue {
   status: "idle" | "connecting" | "active" | "error";
   isSpeaking: boolean;
@@ -155,6 +162,20 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       firstMessage: "Hey, I'm here! Keep going, or something new?",
       firstMessageMode: "assistant-speaks-first",
       metadata: { userId: opts.userId, sessionId: opts.sessionId },
+      // Re-adding tool-calling carefully after it silently broke voice
+      // entirely once already (call connected, assistant never spoke a
+      // word — Vapi doesn't surface that failure to the client). Only
+      // search_web is live this time (see ACTIVE_VOICE_TOOLS above) so a
+      // second failure is isolated to one thing, not several stacked
+      // changes. Setting BOTH serverUrl (flat string — the field name used
+      // in Vapi's "Default Tools"/"Introduction to Tools" docs) and
+      // server.url (nested object — used elsewhere in their docs) since
+      // which one this API version actually expects isn't independently
+      // confirmable without a live test call to check against; an unknown
+      // extra field being ignored is a normal, safe outcome, so providing
+      // both costs nothing if only one is real.
+      serverUrl: `${window.location.origin}/api/vapi/tool-call`,
+      server: { url: `${window.location.origin}/api/vapi/tool-call` },
       model: {
         provider: "openai",
         model: "gpt-4o-mini",
@@ -164,14 +185,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
             content: `${VOICE_SYSTEM_PROMPT_BASE}${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
           },
         ],
-        // tools + server temporarily removed — the call connected but the
-        // assistant produced no speech at all right after these were added,
-        // meaning the model call itself was very likely failing once `tools`
-        // reached OpenAI (Vapi doesn't surface that failure to the client,
-        // it just goes silent). Reverting to restore actual voice function
-        // rather than keep guessing at Vapi's exact tool schema without
-        // real call logs to check against. See VOICE_TOOLS below — kept in
-        // the file, unused for now, ready to re-add carefully.
+        tools: ACTIVE_VOICE_TOOLS,
       },
       voice: getVapiVoiceForCall(),
       // Vapi's own default silence timeout is much shorter than a real
@@ -217,6 +231,25 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       hasPlayedConnectSound.current = false;
     }
   }, [vapi.status, playConnectChime]);
+
+  // Safety net for the exact failure mode that happened once already:
+  // call connects, assistant never produces any speech, with zero
+  // indication anything's wrong. If the call is active but hasGreeted
+  // never flips true within 12s, something's broken — surface it clearly
+  // and end the call, rather than leave the student sitting in silence
+  // wondering if it's their fault.
+  const greetWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (vapi.status === "active" && !vapi.hasGreeted) {
+      greetWatchdogRef.current = setTimeout(() => {
+        if (!vapi.hasGreeted) {
+          toast({ title: "LENORY isn't responding", description: "Something went wrong connecting — please try again. If it keeps happening, let support know.", variant: "destructive" });
+          vapi.stopCall();
+        }
+      }, 12000);
+    }
+    return () => { if (greetWatchdogRef.current) clearTimeout(greetWatchdogRef.current); };
+  }, [vapi.status, vapi.hasGreeted, vapi.stopCall, toast]);
 
   // Real-time billing (20cr/min, ticked every 10s) + auto-hangup on low
   // credits. Moved here from Chat.tsx's VapiPanel — that component's effect
