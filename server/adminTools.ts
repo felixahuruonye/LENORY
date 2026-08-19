@@ -642,6 +642,31 @@ export async function getUserCohorts() {
   return { buckets, directory, totalUsers: users.length };
 }
 
+// Real, per-user credit list — pulled directly from Supabase, every field
+// a live query result. Built because the admin AI (both chat and voice)
+// had NO real source for this specific kind of request — "list all user
+// credit balances" — and would fabricate a plausible-looking table
+// (obviously-fake user1@example.com style emails) rather than say it
+// didn't have the data. Capped at 50 users to keep this small enough to
+// safely inject into a prompt; if there are more, the AI is told to point
+// to the Admin Dashboard for the full list rather than silently truncate
+// without saying so.
+export async function getAllUserCredits(limit = 50): Promise<{ users: { email: string; firstName: string | null; tier: string; balance: number }[]; totalCount: number; truncated: boolean }> {
+  const allUsers = await storage.getUsers();
+  const totalCount = allUsers.length;
+  const slice = allUsers.slice(0, limit);
+  const withCredits = await Promise.all(slice.map(async (u: any) => {
+    const c = await getUserCredits(u.id);
+    return {
+      email: u.email || "(no email)",
+      firstName: u.firstName || null,
+      tier: u.subscriptionTier || "free",
+      balance: typeof c.balance === "number" ? c.balance : 0,
+    };
+  }));
+  return { users: withCredits, totalCount, truncated: totalCount > limit };
+}
+
 export async function getAdminOverview() {
   const users = await storage.getUsers();
 
@@ -703,15 +728,19 @@ export async function buildAdminContextBlock(): Promise<string> {
     const usage = await getApiUsageSummary();
     const stability = await getStabilityBalance();
     const openrouter = await getOpenRouterBalance();
+    const userCredits = await getAllUserCredits(50);
 
     const usageLine = usage.available
       ? usage.byProvider.map((p) => `${p.provider}: ${p.last24h}/24h, ${p.last7d}/7d`).join(" | ") || "no calls logged yet"
       : `unavailable (${usage.reason})`;
     const stabilityLine = stability.available ? `${stability.credits} credits remaining` : `unavailable (${stability.error})`;
     const openrouterLine = openrouter.error ? `unavailable (${openrouter.error})` : `${openrouter.credits} credits remaining`;
+    const creditsTable = userCredits.users.length > 0
+      ? userCredits.users.map(u => `${u.email} (${u.firstName || "no name"}, ${u.tier}): ${u.balance} credits`).join(" | ")
+      : "no users found";
 
     const block = `
-## VERIFIED SYSTEM DATA (fetched live just now — use ONLY these numbers, never invent others):
+## VERIFIED SYSTEM DATA (fetched live from Supabase just now — this is the ONLY data you may report as fact; every number/email below is real):
 - Total users: ${overview.totalUsers}
 - Signups today: ${overview.signupsToday}
 - Signups this week: ${overview.signupsThisWeek}
@@ -722,8 +751,12 @@ export async function buildAdminContextBlock(): Promise<string> {
 - API call volume: ${usageLine}
 - Stability AI credit balance: ${stabilityLine}
 - OpenRouter credit balance: ${openrouterLine}
-- Recent errors (last 5): ${errors.length === 0 ? "none logged" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
-(Data generated at ${overview.generatedAt}. If Felix asks for something not listed above — say you don't have that specific data rather than guessing.)`;
+- Recent errors (last 5): ${errors.length === 0 ? "none logged since the server last restarted — a restart clears this list, so 'none' does not necessarily mean no errors ever occurred" : errors.map((e) => `[${e.source}] ${e.message}`).join(" | ")}
+- Per-user credit balances (real, from the credits table${userCredits.truncated ? `, first ${userCredits.users.length} of ${userCredits.totalCount} users` : `, all ${userCredits.users.length} users`}): ${creditsTable}${userCredits.truncated ? `\n  (More than ${userCredits.users.length} users exist — for the complete list, direct Felix to the Admin Dashboard's Credits page rather than guessing at the rest.)` : ""}
+
+## CRITICAL — NEVER FABRICATE DATA
+This is real financial and account data. If Felix asks for something not explicitly listed above (a specific stat, a user not in the list, historical data, anything), say plainly that you don't have that data available right now and suggest where he could find it (Admin Dashboard, Supabase directly) — do NOT invent plausible-sounding numbers, emails (especially never placeholder-style emails like "user1@example.com" or "example.com" addresses), or records to fill the gap. A fabricated answer here is a serious integrity failure, not a helpful guess.
+(Data generated at ${overview.generatedAt}.)`;
 
     cachedAdminBlock = { value: block, expiresAt: Date.now() + ADMIN_BLOCK_CACHE_MS };
     return block;

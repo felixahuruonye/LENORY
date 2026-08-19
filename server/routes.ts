@@ -445,6 +445,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let systemMessage = `You are LENORY — a powerful AI learning system built in Nigeria by Alaoma Obinna Felix (MR.Felix). You are speaking with ${user?.firstName || userName || "Friend"}.`;
       if (isAdminUser && adminName) {
         systemMessage += `\n\n🔐 **ADMIN MODE ACTIVE** — You are speaking with your creator and admin, ${adminName} (${REAL_ADMIN_EMAIL}).`;
+        // This import existed but was never actually called anywhere in
+        // this file — meaning ADMIN MODE said "you're talking to the
+        // admin" but injected ZERO real data. Faced with a request like
+        // "pull all user credit balance" and nothing real to answer from,
+        // the model fabricated a plausible-looking table (obviously-fake
+        // user1@example.com style emails) instead of saying it didn't
+        // have the data — a serious problem for anything showing
+        // financial/account numbers. Now actually wired in.
+        try {
+          systemMessage += await buildAdminContextBlock();
+        } catch (e) {
+          console.error("Failed to build admin context block:", e);
+        }
       }
       systemMessage += `
 
@@ -718,6 +731,14 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       let systemMessage = `You are LENORY — a powerful AI learning system built in Nigeria by Alaoma Obinja Felix (MR.Felix). You are speaking with ${user?.firstName || userName || "Friend"}.`;
       if (isAdminUser) {
         systemMessage += `\n\n🔐 **ADMIN MODE ACTIVE** — You are speaking with your creator and admin, ${user?.firstName || "Felix"} (${REAL_ADMIN_EMAIL}).`;
+        // Same fix as /api/chat/send above — this was imported but never
+        // called here either, so this endpoint had the identical
+        // fabricated-data problem.
+        try {
+          systemMessage += await buildAdminContextBlock();
+        } catch (e) {
+          console.error("Failed to build admin context block:", e);
+        }
       }
       systemMessage += `
 
@@ -3927,7 +3948,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           // them when metadata.isAdmin was true at call start (see
           // VoiceCallContext) — but this is re-checked here server-side
           // too, since the client-side gate alone isn't trustworthy.
-          if (name === "get_admin_overview" || name === "adjust_user_credits") {
+          if (name === "get_admin_overview" || name === "adjust_user_credits" || name === "list_user_credits") {
             const caller = userId ? await storage.getUser(userId) : null;
             const isRealAdmin = caller?.email === REAL_ADMIN_EMAIL;
             if (!isRealAdmin) return { toolCallId, result: "This action is only available to the platform admin." };
@@ -3938,6 +3959,22 @@ ${EXAM_BOOKLET_MODE_PROMPT}
               return {
                 toolCallId,
                 result: `Platform overview: ${overview.totalUsers} total users (${overview.signupsToday} today, ${overview.signupsThisWeek} this week). By tier — free: ${overview.usersByTier.free}, pro: ${overview.usersByTier.pro}, premium: ${overview.usersByTier.premium}. Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}${overview.realRevenueNaira ? `, real Paystack revenue this period: ₦${overview.realRevenueNaira.toLocaleString()}` : ""}.`,
+              };
+            }
+
+            // Real per-user credit list, pulled live from Supabase — added
+            // because a text-chat request for exactly this ("pull all user
+            // credit balance") got fabricated data (fake user1@example.com
+            // style emails) instead of real numbers, since nothing existed
+            // to answer it with. Same underlying function powers both.
+            if (name === "list_user_credits") {
+              const { getAllUserCredits } = await import('./adminTools');
+              const data = await getAllUserCredits(50);
+              if (data.users.length === 0) return { toolCallId, result: "No users found." };
+              const lines = data.users.map(u => `${u.email} (${u.firstName || "no name"}, ${u.tier}): ${u.balance} credits`).join("; ");
+              return {
+                toolCallId,
+                result: `Real credit balances, ${data.truncated ? `first ${data.users.length} of ${data.totalCount}` : `all ${data.users.length}`} users: ${lines}.${data.truncated ? " There are more users than shown — check the Admin Dashboard for the complete list." : ""}`,
               };
             }
 

@@ -110,6 +110,14 @@ const ADMIN_VOICE_TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "list_user_credits",
+      description: "Read-only real list of users and their actual credit balances, pulled live from the database. Use this whenever the admin asks to see/list/pull credit balances for users — never estimate or make up this data.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "adjust_user_credits",
       description: "Add or deduct credits from a specific user's account. Identify the user by whichever the admin gives you — their email, their exact username/display name, or their account ID. Positive amount adds, negative deducts.",
       parameters: {
@@ -211,7 +219,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       ? `Hey${greetName}, good to hear from you. What do you need?`
       : `Hey${greetName}, I'm here! Keep going, or something new?`;
     const adminPromptAddition = opts.isAdmin
-      ? `\n\n## ADMIN MODE\nYou're speaking with Felix, LENORY's creator and admin. Recognize him as such. You have read access to platform-wide stats (get_admin_overview) and can adjust a specific user's credits (adjust_user_credits) by whichever identifier he gives you — email, username, or account ID — every other admin capability stays read-only in this voice mode; anything beyond those two tools, tell him to use the Admin Dashboard.`
+      ? `\n\n## ADMIN MODE\nYou're speaking with Felix, LENORY's creator and admin. Recognize him as such. You have read access to platform-wide stats (get_admin_overview), a real per-user credit list (list_user_credits), and can adjust a specific user's credits (adjust_user_credits) by whichever identifier he gives you — email, username, or account ID — every other admin capability stays read-only in this voice mode; anything beyond those tools, tell him to use the Admin Dashboard.\n\n## NEVER FABRICATE DATA\nThis is real financial/account data. If Felix asks for numbers, user lists, or stats you don't have a tool for, say plainly you don't have that data right now and point him to the Admin Dashboard — never invent plausible-sounding numbers, emails (especially never placeholder-style ones like "user1@example.com"), or records. Only report data that actually came back from a tool call.`
       : "";
     const creatorNote = `\n\nLENORY was built by Felix, a student founder in Nigeria, with this assistant (an AI coding agent) doing the engineering work under his direction. If asked who made you or who's on the team, answer honestly along those lines — don't claim a large company or team that doesn't exist.`;
 
