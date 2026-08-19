@@ -3903,6 +3903,60 @@ ${EXAM_BOOKLET_MODE_PROMPT}
             return { toolCallId, result: matches.length > 0 ? `Found ${matches.length} relevant past conversation(s):\n\n${matches.join("\n\n")}` : `No past conversations found mentioning "${query}".` };
           }
 
+          // Read-only account visibility — available to every user, about
+          // their OWN account only. "Full account visibility... it should
+          // know what's going on on the account."
+          if (name === "get_my_account_info") {
+            if (!userId) return { toolCallId, result: "Couldn't identify the user." };
+            const user = await storage.getUser(userId);
+            const tier = (user as any)?.subscriptionTier || 'free';
+            const credits = await getOrCreateCredits(userId, tier);
+            const limits = await getTierLimits(tier);
+            const images = await storage.getGeneratedImagesByUser(userId).catch(() => []);
+            const sessions = await storage.getChatSessionsByUser(userId).catch(() => []);
+            return {
+              toolCallId,
+              result: `Account info for ${(user as any)?.firstName || "this student"}: plan = ${tier}, credit balance = ${credits.balance} (monthly cap ${limits.maxBalance}), images generated = ${images.length}, chat sessions = ${sessions.length}, member since ${user?.createdAt ? new Date(user.createdAt as any).toLocaleDateString() : "unknown"}.`,
+            };
+          }
+
+          // Admin-only tools below — only usable when the call's userId is
+          // the platform admin (matches the same REAL_ADMIN_EMAIL check
+          // used everywhere else in this codebase). A non-admin caller
+          // simply can't trigger these since the assistant only offers
+          // them when metadata.isAdmin was true at call start (see
+          // VoiceCallContext) — but this is re-checked here server-side
+          // too, since the client-side gate alone isn't trustworthy.
+          if (name === "get_admin_overview" || name === "adjust_user_credits") {
+            const caller = userId ? await storage.getUser(userId) : null;
+            const isRealAdmin = caller?.email === REAL_ADMIN_EMAIL;
+            if (!isRealAdmin) return { toolCallId, result: "This action is only available to the platform admin." };
+
+            if (name === "get_admin_overview") {
+              const { getAdminOverview } = await import('./adminTools');
+              const overview = await getAdminOverview();
+              return {
+                toolCallId,
+                result: `Platform overview: ${overview.totalUsers} total users (${overview.signupsToday} today, ${overview.signupsThisWeek} this week). By tier — free: ${overview.usersByTier.free}, pro: ${overview.usersByTier.pro}, premium: ${overview.usersByTier.premium}. Estimated monthly revenue: ₦${overview.estimatedMonthlyRevenueNaira.toLocaleString()}${overview.realRevenueNaira ? `, real Paystack revenue this period: ₦${overview.realRevenueNaira.toLocaleString()}` : ""}.`,
+              };
+            }
+
+            if (name === "adjust_user_credits") {
+              const targetEmail = String(args.userEmail || "").trim();
+              const amount = Number(args.amount);
+              if (!targetEmail || !Number.isFinite(amount)) {
+                return { toolCallId, result: "I need both the user's email and a credit amount to adjust." };
+              }
+              const targetUser = await storage.getUserByEmail(targetEmail).catch(() => null);
+              if (!targetUser) return { toolCallId, result: `Couldn't find a user with email ${targetEmail}.` };
+              const targetTier = (targetUser as any)?.subscriptionTier || 'free';
+              const newBalance = amount >= 0
+                ? await addCredits(targetUser.id, amount, targetTier, true)
+                : await deductCredits(targetUser.id, Math.abs(amount));
+              return { toolCallId, result: `Done — ${targetEmail}'s balance is now ${newBalance} credits (${amount >= 0 ? "added" : "deducted"} ${Math.abs(amount)}).` };
+            }
+          }
+
           return { toolCallId, result: `Unknown tool: ${name}` };
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);

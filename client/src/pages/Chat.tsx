@@ -1784,7 +1784,13 @@ export default function Chat() {
                           queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
                         } catch {}
                       }
-                      voiceCall.startVoiceCall({ sessionId: sid, userId: (user as any)?.id, chatHistory: history });
+                      voiceCall.startVoiceCall({
+                        sessionId: sid,
+                        userId: (user as any)?.id,
+                        userName: (user as any)?.firstName || (user as any)?.email?.split("@")[0],
+                        isAdmin,
+                        chatHistory: history,
+                      });
                     }}
                     className={`p-2 rounded-xl transition-all ${voiceCall.status !== "idle" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                     title="Live Voice AI"

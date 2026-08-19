@@ -88,13 +88,48 @@ const VOICE_TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_my_account_info",
+      description: "Look up the student's own account info — plan, credit balance, number of images generated, number of chat sessions.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
 ];
 
-// STAGE 1 of re-adding tool-calling after it silently broke voice once
-// already: only search_web goes live first, alone, so if anything breaks
-// again there's exactly one new thing to suspect instead of several at
-// once. search_past_chats (defined above, ready) gets added in a follow-up
-// once this is confirmed working on a real call.
+const ADMIN_VOICE_TOOLS = [
+  {
+    type: "function" as const,
+    function: {
+      name: "get_admin_overview",
+      description: "Read-only platform-wide stats for the admin: total users, signups, users by tier, revenue estimates.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "adjust_user_credits",
+      description: "Add or deduct credits from a specific user's account by their email. Positive amount adds, negative deducts.",
+      parameters: {
+        type: "object",
+        properties: {
+          userEmail: { type: "string", description: "The target user's email address" },
+          amount: { type: "number", description: "Credits to add (positive) or deduct (negative)" },
+        },
+        required: ["userEmail", "amount"],
+      },
+    },
+  },
+];
+
+// Re-adding tool-calling in stages after it silently broke voice entirely
+// once already (call connected, assistant never spoke, no error surfaced).
+// Everything below is fully built and ready, but ACTIVE_VOICE_TOOLS still
+// only turns on search_web — the rest wait for confirmation that stage 1
+// actually works on a real call before going live, same reasoning as
+// before: one deliberate step at a time, not everything stacked at once.
 const ACTIVE_VOICE_TOOLS = [VOICE_TOOLS[0]];
 
 interface VoiceCallContextValue {
@@ -105,7 +140,7 @@ interface VoiceCallContextValue {
   callDurationSeconds: number;
   error: string | null;
   activeSessionId: string | null;
-  startVoiceCall: (opts: { sessionId?: string | null; userId?: string; chatHistory?: string; onCreditError?: (msg: string) => void }) => Promise<void>;
+  startVoiceCall: (opts: { sessionId?: string | null; userId?: string; userName?: string; isAdmin?: boolean; chatHistory?: string; onCreditError?: (msg: string) => void }) => Promise<void>;
   endVoiceCall: () => void;
   sendMidCallContext: (text: string) => void;
 }
@@ -140,7 +175,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []);
 
-  const startVoiceCall = useCallback(async (opts: { sessionId?: string | null; userId?: string; chatHistory?: string; onCreditError?: (msg: string) => void }) => {
+  const startVoiceCall = useCallback(async (opts: { sessionId?: string | null; userId?: string; userName?: string; isAdmin?: boolean; chatHistory?: string; onCreditError?: (msg: string) => void }) => {
     try {
       await apiRequest("POST", "/api/live-ai/voice-start", {});
     } catch (e: any) {
@@ -157,11 +192,25 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     setActiveSessionId(opts.sessionId || null);
     hasPlayedConnectSound.current = false;
 
+    // Admin gets a name-aware greeting and, once the admin tools are
+    // activated (see ADMIN_VOICE_TOOLS above — built, not yet live), read
+    // access to platform stats plus the ability to adjust a user's
+    // credits. Everyone else just gets a personalized greeting if we know
+    // their name.
+    const greetName = opts.userName ? `, ${opts.userName}` : "";
+    const firstMessage = opts.isAdmin
+      ? `Hey${greetName}, good to hear from you. What do you need?`
+      : `Hey${greetName}, I'm here! Keep going, or something new?`;
+    const adminPromptAddition = opts.isAdmin
+      ? `\n\n## ADMIN MODE\nYou're speaking with Felix, LENORY's creator and admin. Recognize him as such. You have read access to platform-wide stats (get_admin_overview) and can adjust a specific user's credits by email (adjust_user_credits) — every other admin capability stays read-only in this voice mode; anything beyond those two tools, tell him to use the Admin Dashboard.`
+      : "";
+    const creatorNote = `\n\nLENORY was built by Felix, a student founder in Nigeria, with this assistant (an AI coding agent) doing the engineering work under his direction. If asked who made you or who's on the team, answer honestly along those lines — don't claim a large company or team that doesn't exist.`;
+
     await vapi.startCall({
       name: "LENORY Live Tutor",
-      firstMessage: "Hey, I'm here! Keep going, or something new?",
+      firstMessage,
       firstMessageMode: "assistant-speaks-first",
-      metadata: { userId: opts.userId, sessionId: opts.sessionId },
+      metadata: { userId: opts.userId, sessionId: opts.sessionId, isAdmin: opts.isAdmin },
       // Re-adding tool-calling carefully after it silently broke voice
       // entirely once already (call connected, assistant never spoke a
       // word — Vapi doesn't surface that failure to the client). Only
@@ -182,7 +231,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         messages: [
           {
             role: "system",
-            content: `${VOICE_SYSTEM_PROMPT_BASE}${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
+            content: `${VOICE_SYSTEM_PROMPT_BASE}${creatorNote}${adminPromptAddition}${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
           },
         ],
         tools: ACTIVE_VOICE_TOOLS,

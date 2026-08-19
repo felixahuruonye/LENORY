@@ -64,6 +64,7 @@ export interface SyncedFile {
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   getUsers(): Promise<User[]>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUser(id: string, updates: any): Promise<User | undefined>;
@@ -298,6 +299,11 @@ export class DatabaseStorage implements IStorage {
   // User operations
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
   }
 
@@ -1729,6 +1735,16 @@ class SupabaseStorage extends DatabaseStorage {
       } catch {}
     }
     return super.getUser(id);
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    if (supabaseDb) {
+      try {
+        const { data, error } = await supabaseDb.from('users').select('*').eq('email', email).maybeSingle();
+        if (!error && data) return mapSupabaseUser(data);
+      } catch {}
+    }
+    return undefined;
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
