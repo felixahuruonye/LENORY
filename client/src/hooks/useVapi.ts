@@ -114,8 +114,18 @@ export function useVapi(options?: string | { publicKey?: string; onMessage?: (ms
   // ============================================================
   const stop = useCallback(() => {
     if (vapiRef.current) {
-      vapiRef.current.stop();
-      setIsCallActive(false);
+      try {
+        vapiRef.current.stop();
+      } catch (e) {
+        // A throw here previously meant setIsCallActive(false) below never
+        // ran, leaving the UI stuck believing a call was still active.
+        console.warn("vapiRef.stop() threw — resetting local state anyway:", e);
+      } finally {
+        setIsCallActive(false);
+        setIsSpeaking(false);
+        setIsConnecting(false);
+        if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
+      }
     }
   }, []);
 

@@ -111,18 +111,25 @@ const ADMIN_VOICE_TOOLS = [
     type: "function" as const,
     function: {
       name: "adjust_user_credits",
-      description: "Add or deduct credits from a specific user's account by their email. Positive amount adds, negative deducts.",
+      description: "Add or deduct credits from a specific user's account. Identify the user by whichever the admin gives you — their email, their exact username/display name, or their account ID. Positive amount adds, negative deducts.",
       parameters: {
         type: "object",
         properties: {
-          userEmail: { type: "string", description: "The target user's email address" },
+          identifier: { type: "string", description: "The target user's email, username/name, or account ID — whatever the admin said" },
           amount: { type: "number", description: "Credits to add (positive) or deduct (negative)" },
         },
-        required: ["userEmail", "amount"],
+        required: ["identifier", "amount"],
       },
     },
   },
 ];
+
+// endCall is one of Vapi's own built-in default tools (not a custom
+// function of ours) — Vapi's own infrastructure handles actually hanging
+// up the call when the assistant invokes it, which is far more reliable
+// than trying to bridge a server webhook back to the client's live WebRTC
+// session to force a hangup ourselves.
+const END_CALL_TOOL = { type: "endCall" as const };
 
 // Re-adding tool-calling in stages after it silently broke voice entirely
 // once already (call connected, assistant never spoke, no error surfaced).
@@ -130,7 +137,9 @@ const ADMIN_VOICE_TOOLS = [
 // only turns on search_web — the rest wait for confirmation that stage 1
 // actually works on a real call before going live, same reasoning as
 // before: one deliberate step at a time, not everything stacked at once.
-const ACTIVE_VOICE_TOOLS = [VOICE_TOOLS[0]];
+// Stage 1 (search_web) confirmed working on a real call — activating the
+// rest of the built tools now, plus admin tools conditionally per-call.
+const ACTIVE_VOICE_TOOLS = VOICE_TOOLS;
 
 interface VoiceCallContextValue {
   status: "idle" | "connecting" | "active" | "error";
@@ -202,7 +211,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       ? `Hey${greetName}, good to hear from you. What do you need?`
       : `Hey${greetName}, I'm here! Keep going, or something new?`;
     const adminPromptAddition = opts.isAdmin
-      ? `\n\n## ADMIN MODE\nYou're speaking with Felix, LENORY's creator and admin. Recognize him as such. You have read access to platform-wide stats (get_admin_overview) and can adjust a specific user's credits by email (adjust_user_credits) — every other admin capability stays read-only in this voice mode; anything beyond those two tools, tell him to use the Admin Dashboard.`
+      ? `\n\n## ADMIN MODE\nYou're speaking with Felix, LENORY's creator and admin. Recognize him as such. You have read access to platform-wide stats (get_admin_overview) and can adjust a specific user's credits (adjust_user_credits) by whichever identifier he gives you — email, username, or account ID — every other admin capability stays read-only in this voice mode; anything beyond those two tools, tell him to use the Admin Dashboard.`
       : "";
     const creatorNote = `\n\nLENORY was built by Felix, a student founder in Nigeria, with this assistant (an AI coding agent) doing the engineering work under his direction. If asked who made you or who's on the team, answer honestly along those lines — don't claim a large company or team that doesn't exist.`;
 
@@ -210,19 +219,23 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       name: "LENORY Live Tutor",
       firstMessage,
       firstMessageMode: "assistant-speaks-first",
+      // Said right before the assistant hangs up when the endCall tool is
+      // used (voice-triggered "end the call" / "hang up") — without this
+      // Vapi just cuts the audio silently, which feels abrupt.
+      endCallMessage: "Alright, talk soon!",
       metadata: { userId: opts.userId, sessionId: opts.sessionId, isAdmin: opts.isAdmin },
       // Re-adding tool-calling carefully after it silently broke voice
       // entirely once already (call connected, assistant never spoke a
-      // word — Vapi doesn't surface that failure to the client). Only
-      // search_web is live this time (see ACTIVE_VOICE_TOOLS above) so a
-      // second failure is isolated to one thing, not several stacked
-      // changes. Setting BOTH serverUrl (flat string — the field name used
-      // in Vapi's "Default Tools"/"Introduction to Tools" docs) and
-      // server.url (nested object — used elsewhere in their docs) since
-      // which one this API version actually expects isn't independently
-      // confirmable without a live test call to check against; an unknown
-      // extra field being ignored is a normal, safe outcome, so providing
-      // both costs nothing if only one is real.
+      // word — Vapi doesn't surface that failure to the client). Stage 1
+      // (search_web alone) confirmed working on a real call, so the rest
+      // of the built tools are active now too. Setting BOTH serverUrl
+      // (flat string — the field name used in Vapi's "Default
+      // Tools"/"Introduction to Tools" docs) and server.url (nested
+      // object — used elsewhere in their docs) since which one this API
+      // version actually expects isn't independently confirmable without
+      // a live test call; an unknown extra field being ignored is a
+      // normal, safe outcome, so providing both costs nothing if only one
+      // is real.
       serverUrl: `${window.location.origin}/api/vapi/tool-call`,
       server: { url: `${window.location.origin}/api/vapi/tool-call` },
       model: {
@@ -231,10 +244,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         messages: [
           {
             role: "system",
-            content: `${VOICE_SYSTEM_PROMPT_BASE}${creatorNote}${adminPromptAddition}${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
+            content: `${VOICE_SYSTEM_PROMPT_BASE}${creatorNote}${adminPromptAddition}\n\n## ENDING THE CALL\nOnly use the endCall action when the student unambiguously asks to hang up, end the call, or stop talking ("end the call", "hang up", "that's all, bye", "off the call") — never end it just because the conversation paused, a topic wrapped up, or the student seems finished with one question. When in doubt, keep the call going.${opts.chatHistory ? `\n\nRecent chat history for context:\n${opts.chatHistory}` : ""}`,
           },
         ],
-        tools: ACTIVE_VOICE_TOOLS,
+        tools: opts.isAdmin ? [...ACTIVE_VOICE_TOOLS, ...ADMIN_VOICE_TOOLS, END_CALL_TOOL] : [...ACTIVE_VOICE_TOOLS, END_CALL_TOOL],
       },
       voice: getVapiVoiceForCall(),
       // Vapi's own default silence timeout is much shorter than a real
@@ -258,8 +271,15 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   }, [vapi, toast]);
 
   const endVoiceCall = useCallback(() => {
+    // Previously cleared activeSessionId here, synchronously, in the same
+    // tick as vapi.stopCall() flips isCallActive to false — both updates
+    // land in the same React batch, so by the time the transcript-save
+    // effect below reacts to the status change, activeSessionId had
+    // already been wiped to null. The save endpoint silently does nothing
+    // without a sessionId, which is the actual reason the transcript never
+    // showed up after manually ending a call. It now only gets cleared
+    // once the save effect has actually used it.
     vapi.stopCall();
-    setActiveSessionId(null);
   }, [vapi]);
 
   // Injects context into an already-active call without ending it — used
@@ -338,13 +358,17 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const wasLive = prevStatusRef.current === "active" || prevStatusRef.current === "connecting";
     if (wasLive && vapi.status === "idle" && vapi.messages.length > 0) {
+      const sid = activeSessionId; // captured now, before it's cleared below
       apiRequest("POST", "/api/vapi/end-call", {
-        sessionId: activeSessionId,
+        sessionId: sid,
         messages: vapi.messages.filter((m) => m.role === "user" || m.role === "assistant"),
         durationSeconds: vapi.callDurationSeconds,
       })
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", activeSessionId] }))
-        .catch(() => {});
+        .then(() => { if (sid) queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sid] }); })
+        .catch(() => {})
+        .finally(() => setActiveSessionId(null));
+    } else if (wasLive && vapi.status === "idle") {
+      setActiveSessionId(null);
     }
     prevStatusRef.current = vapi.status;
   }, [vapi.status, vapi.messages, activeSessionId, vapi.callDurationSeconds]);

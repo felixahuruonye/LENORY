@@ -3942,18 +3942,37 @@ ${EXAM_BOOKLET_MODE_PROMPT}
             }
 
             if (name === "adjust_user_credits") {
-              const targetEmail = String(args.userEmail || "").trim();
+              const identifier = String(args.identifier || args.userEmail || "").trim();
               const amount = Number(args.amount);
-              if (!targetEmail || !Number.isFinite(amount)) {
-                return { toolCallId, result: "I need both the user's email and a credit amount to adjust." };
+              if (!identifier || !Number.isFinite(amount)) {
+                return { toolCallId, result: "I need both a way to identify the user (email, name, or ID) and a credit amount to adjust." };
               }
-              const targetUser = await storage.getUserByEmail(targetEmail).catch(() => null);
-              if (!targetUser) return { toolCallId, result: `Couldn't find a user with email ${targetEmail}.` };
+              // Flexible lookup: email -> exact match; looks like an
+              // account id -> direct lookup; otherwise treat as a name and
+              // search first names (case-insensitive). "Username" isn't a
+              // real field in this schema — firstName is the closest
+              // equivalent to what an admin would call someone by.
+              let targetUser: any = null;
+              if (identifier.includes("@")) {
+                targetUser = await storage.getUserByEmail(identifier).catch(() => null);
+              } else {
+                targetUser = await storage.getUser(identifier).catch(() => null);
+                if (!targetUser) {
+                  const allUsers = await storage.getUsers().catch(() => []);
+                  const lower = identifier.toLowerCase();
+                  const matches = allUsers.filter((u: any) => (u.firstName || "").toLowerCase().includes(lower) || (u.email || "").toLowerCase().includes(lower));
+                  if (matches.length === 1) targetUser = matches[0];
+                  else if (matches.length > 1) {
+                    return { toolCallId, result: `Found ${matches.length} users matching "${identifier}" — ${matches.slice(0, 5).map((u: any) => u.email).join(", ")}. Ask which email to use.` };
+                  }
+                }
+              }
+              if (!targetUser) return { toolCallId, result: `Couldn't find a user matching "${identifier}".` };
               const targetTier = (targetUser as any)?.subscriptionTier || 'free';
               const newBalance = amount >= 0
                 ? await addCredits(targetUser.id, amount, targetTier, true)
                 : await deductCredits(targetUser.id, Math.abs(amount));
-              return { toolCallId, result: `Done — ${targetEmail}'s balance is now ${newBalance} credits (${amount >= 0 ? "added" : "deducted"} ${Math.abs(amount)}).` };
+              return { toolCallId, result: `Done — ${targetUser.email || identifier}'s balance is now ${newBalance} credits (${amount >= 0 ? "added" : "deducted"} ${Math.abs(amount)}).` };
             }
           }
 
@@ -3989,8 +4008,18 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         await deductCredits(userId, minutes * 20);
       }
 
-      // Groq cleans up the raw turn-by-turn messages into a readable transcript
-      let cleanTranscript = messages.map((m: any) => `${m.role === "user" ? "Student" : "LENORY"}: ${m.content}`).join("\n");
+      // Groq cleans up the raw turn-by-turn messages into a readable
+      // transcript. Previously saved as ONE giant message blob — now
+      // parsed back into individual turns and saved as separate chat
+      // messages (matching real user/assistant roles), so it renders in
+      // the normal chat bubble UI instead of one dense wall of text, with
+      // bold speaker names as requested.
+      const rawTranscript = messages.map((m: any) => `${m.role === "user" ? "STUDENT" : "LENORY"}: ${m.content}`).join("\n");
+      let cleanedTurns: { role: "user" | "assistant"; content: string }[] = messages
+        .filter((m: any) => m.role === "user" || m.role === "assistant")
+        .map((m: any) => ({ role: m.role, content: String(m.content || "").trim() }))
+        .filter((m: any) => m.content);
+
       const groqKey = process.env.GROQ_API_KEY;
       if (groqKey) {
         try {
@@ -3999,25 +4028,56 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           const completion = await groq.chat.completions.create({
             model: "llama-3.3-70b-versatile",
             messages: [
-              { role: "system", content: "Clean up this raw voice call transcript into a clear, readable back-and-forth between Student and LENORY. Fix obvious transcription errors, remove filler words, keep it faithful to what was actually said. Output only the cleaned transcript, no extra commentary." },
-              { role: "user", content: cleanTranscript },
+              {
+                role: "system",
+                content: "You clean up a raw voice call transcript. Fix obvious speech-to-text errors, remove filler words (um, uh), keep it faithful to what was actually said — do not add or remove meaning. Output ONLY alternating lines, each starting with exactly \"STUDENT:\" or \"LENORY:\" (uppercase, one per line, no blank lines between, no extra commentary before or after) — the same number of turns as the input, in the same order.",
+              },
+              { role: "user", content: rawTranscript },
             ],
-            temperature: 0.3,
+            temperature: 0.2,
           });
-          cleanTranscript = completion.choices[0]?.message?.content || cleanTranscript;
+          const cleaned = completion.choices[0]?.message?.content || "";
+          const parsed = cleaned
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+              const m = line.match(/^(STUDENT|LENORY):\s*(.*)$/i);
+              if (!m) return null;
+              return { role: (m[1].toUpperCase() === "STUDENT" ? "user" : "assistant") as "user" | "assistant", content: m[2].trim() };
+            })
+            .filter((x): x is { role: "user" | "assistant"; content: string } => !!x && !!x.content);
+          // Only trust Groq's cleaned version if it actually parsed into a
+          // sane number of turns — otherwise silently keep the raw
+          // (already-perfectly-usable) turns rather than risk garbling the
+          // transcript with a malformed cleanup response.
+          if (parsed.length >= Math.max(1, cleanedTurns.length - 2)) {
+            cleanedTurns = parsed;
+          }
         } catch (e) {
           console.warn("Groq call-cleanup failed, saving raw transcript instead:", e);
         }
       }
 
-      if (sessionId) {
+      const studentName = (user as any)?.firstName || "You";
+      if (sessionId && cleanedTurns.length > 0) {
         await storage.createChatMessage({
-          userId, sessionId,
-          role: "assistant",
-          content: `🎙️ **Live Voice Call Summary**\n\n${cleanTranscript}`,
+          userId, sessionId, role: "assistant",
+          content: `🎙️ *Live voice call — ${Math.max(1, Math.round((durationSeconds || 60) / 60))} min*`,
           attachments: null,
-        });
+        } as any);
+        // Sequential (not Promise.all) so each message gets a genuinely
+        // later timestamp than the last, preserving conversation order.
+        for (const turn of cleanedTurns) {
+          await storage.createChatMessage({
+            userId, sessionId,
+            role: turn.role,
+            content: turn.role === "user" ? `**${studentName}:** ${turn.content}` : `**LENORY:** ${turn.content}`,
+            attachments: null,
+          } as any);
+        }
       }
+      const cleanTranscript = cleanedTurns.map(t => `${t.role === "user" ? "Student" : "LENORY"}: ${t.content}`).join("\n");
       res.json({ saved: !!sessionId, transcript: cleanTranscript });
     } catch (error) {
       console.error("End-call save error:", error);
