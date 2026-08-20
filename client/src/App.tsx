@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { VoiceCallProvider } from "@/contexts/VoiceCallContext";
 import VoiceOrb from "@/components/VoiceOrb";
+import UpdateAvailableBanner from "@/components/UpdateAvailableBanner";
 import { useAuth } from "@/hooks/useAuth";
 import HeyLenoryButton from "@/components/HeyLenoryButton";
 import Landing from "@/pages/Landing";
@@ -182,6 +183,7 @@ function App() {
             <Router />
             <GlobalVoiceButton />
             <VoiceOrb />
+            <UpdateAvailableBanner />
           </VoiceCallProvider>
         </TooltipProvider>
       </ThemeProvider>

@@ -50,30 +50,52 @@
           navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
               console.log('SW registered:', registration.scope);
-              
+
               registration.addEventListener('updatefound', () => {
                 const newWorker = registration.installing;
                 if (newWorker) {
                   newWorker.addEventListener('statechange', () => {
                     if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                      console.log('New SW available, reloading...');
-                      newWorker.postMessage({ type: 'SKIP_WAITING' });
-                      window.location.reload();
+                      // Previously this force-reloaded the page IMMEDIATELY
+                      // and unconditionally the moment a new deploy was
+                      // noticed — with zero regard for whether the person
+                      // was mid-typing a message, mid-send, or in the
+                      // middle of anything else. Given how often this app
+                      // gets redeployed, that reload could land at any
+                      // moment and silently destroy in-progress work —
+                      // exactly "typed a long message, hit send, the whole
+                      // page reloaded instead of answering." Now: just
+                      // remember the waiting worker and tell the app an
+                      // update is available; nothing reloads until the
+                      // person explicitly chooses to (see
+                      // UpdateAvailableBanner in App.tsx).
+                      console.log('New SW available — waiting for user to confirm before reloading');
+                      window.__lenoryWaitingWorker = newWorker;
+                      window.dispatchEvent(new CustomEvent('lenory:sw-update-available'));
                     }
                   });
                 }
               });
-              
+
               registration.update();
             })
             .catch((error) => {
               console.log('SW registration failed:', error);
             });
         });
-        
+
+        // Only reload on controllerchange if the person actually confirmed
+        // the update (see applyLenoryUpdate in App.tsx, which sets this
+        // flag right before telling the waiting worker to activate) — a
+        // controllerchange this app didn't ask for should never yank the
+        // page out from under someone.
         navigator.serviceWorker.addEventListener('controllerchange', () => {
-          console.log('SW controller changed, reloading...');
-          window.location.reload();
+          if (window.__lenoryUpdateConfirmed) {
+            console.log('SW controller changed after user-confirmed update, reloading...');
+            window.location.reload();
+          } else {
+            console.log('SW controller changed without user confirmation — not reloading');
+          }
         });
       }
     </script>
