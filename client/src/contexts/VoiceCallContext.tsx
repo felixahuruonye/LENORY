@@ -231,6 +231,14 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       // used (voice-triggered "end the call" / "hang up") — without this
       // Vapi just cuts the audio silently, which feels abrupt.
       endCallMessage: "Alright, talk soon!",
+      // Deterministic hangup — handled entirely by Vapi's own pipeline via
+      // literal phrase matching on what the STUDENT says, independent of
+      // whether the LLM correctly decides to invoke the endCall tool. Added
+      // because relying on the tool alone meant 'end the call' sometimes
+      // just got acknowledged in words without actually ending anything —
+      // this is a hard guarantee for the common phrasings, with the endCall
+      // tool below still covering less literal ways of asking.
+      endCallPhrases: ["end the call", "end call", "hang up", "please hang up", "stop the call", "that's all, bye", "goodbye, end the call"],
       metadata: { userId: opts.userId, sessionId: opts.sessionId, isAdmin: opts.isAdmin },
       // Re-adding tool-calling carefully after it silently broke voice
       // entirely once already (call connected, assistant never spoke a
@@ -365,7 +373,16 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const prevStatusRef = useRef(vapi.status);
   useEffect(() => {
     const wasLive = prevStatusRef.current === "active" || prevStatusRef.current === "connecting";
-    if (wasLive && vapi.status === "idle" && vapi.messages.length > 0) {
+    // Previously required vapi.status === "idle" exactly. But status is
+    // computed as error-takes-priority — if ANY transient error event fired
+    // at any point during the call (even a benign, non-fatal one that
+    // didn't actually end anything), status gets permanently stuck on
+    // "error" and NEVER reaches "idle" again, even after a completely
+    // normal call-end. That silently skipped the transcript save every
+    // time this happened. A call is genuinely over once it's no longer
+    // active/connecting, whether the final label is "idle" or "error".
+    const justEnded = wasLive && vapi.status !== "active" && vapi.status !== "connecting";
+    if (justEnded && vapi.messages.length > 0) {
       const sid = activeSessionId; // captured now, before it's cleared below
       apiRequest("POST", "/api/vapi/end-call", {
         sessionId: sid,
@@ -375,7 +392,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         .then(() => { if (sid) queryClient.invalidateQueries({ queryKey: ["/api/chat/messages", sid] }); })
         .catch(() => {})
         .finally(() => setActiveSessionId(null));
-    } else if (wasLive && vapi.status === "idle") {
+    } else if (justEnded) {
       setActiveSessionId(null);
     }
     prevStatusRef.current = vapi.status;
