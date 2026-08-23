@@ -62,7 +62,7 @@ import {
   Maximize2,
   Download,
 } from "lucide-react";
-import { FolderOpen, CheckCircle2, Layers, ChevronRight } from "lucide-react";
+import { FolderOpen, CheckCircle2, Layers, ChevronRight, Wrench, GitPullRequest, Check, X } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -278,6 +278,58 @@ export default function Chat() {
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // ─── Engineering Agent Integration ─────────────────────────────────────────
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
+  const [engineeringTasks, setEngineeringTasks] = useState<any[]>([]);
+  const [showEngineeringPanel, setShowEngineeringPanel] = useState(false);
+
+  const createEngineeringTask = useMutation({
+    mutationFn: async (request: string) => {
+      const res = await apiRequest("POST", "/api/engineering/tasks", { request });
+      return res.json();
+    },
+    onSuccess: (task) => {
+      setEngineeringTasks(prev => [...prev, task]);
+      toast({ title: "Engineering task created", description: `Task ${task.id} is now investigating.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to create task", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const approveEngineeringTask = useMutation({
+    mutationFn: async ({ taskId, approved }: { taskId: string; approved: boolean }) => {
+      const res = await apiRequest("POST", `/api/engineering/tasks/${taskId}/approve`, { approved });
+      return res.json();
+    },
+    onSuccess: (task) => {
+      setEngineeringTasks(prev => prev.map(t => t.id === task.id ? task : t));
+      toast({
+        title: task.status === "approved" ? "Task approved" : "Task rejected",
+        description: task.status === "approved" ? "Merging and deploying..." : "Task rejected.",
+      });
+    },
+  });
+
+  // Poll for engineering task updates
+  useEffect(() => {
+    if (!isAdmin || engineeringTasks.length === 0) return;
+    const interval = setInterval(async () => {
+      for (const task of engineeringTasks) {
+        if (["completed", "failed", "rejected", "rolled_back"].includes(task.status)) continue;
+        try {
+          const res = await fetch(`/api/engineering/tasks/${task.id}`, { headers: getAuthHeaders() });
+          if (res.ok) {
+            const updated = await res.json();
+            setEngineeringTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
+          }
+        } catch { /* ignore polling errors */ }
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [isAdmin, engineeringTasks.length]);
+
+
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
@@ -927,6 +979,17 @@ export default function Chat() {
   const folderActionPending = folderQuizMutation.isPending || folderFlashcardsMutation.isPending || folderSummaryMutation.isPending;
 
   const handleSendMessage = async () => {
+    // ─── Engineering Agent Detection ───────────────────────────────────────
+    if (isAdmin && input.trim().toLowerCase().startsWith("/engineering ")) {
+      const request = input.trim().slice(12).trim();
+      if (request) {
+        setInput("");
+        setShowEngineeringPanel(true);
+        createEngineeringTask.mutate(request);
+        return;
+      }
+    }
+
     if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
 
     // Image Gen mode — toggled from the + menu. Reuses the same
@@ -1339,9 +1402,70 @@ export default function Chat() {
               <Button variant="ghost" size="icon" data-testid="link-settings"><Settings className="w-4 h-4" /></Button>
             </Link>
             <ThemeToggle />
+            {isAdmin && (
+              <Button
+                variant={showEngineeringPanel ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setShowEngineeringPanel(!showEngineeringPanel)}
+                title="Engineering Agent"
+                className="gap-1"
+              >
+                <Wrench className="w-4 h-4" />
+                <span className="hidden sm:inline text-xs">Engineering</span>
+              </Button>
+            )}
           </div>
         </header>
 
+
+        {/* Engineering Task Panel */}
+        {isAdmin && showEngineeringPanel && engineeringTasks.length > 0 && (
+          <div className="flex-shrink-0 border-b border-border/40 bg-muted/30 px-4 py-2 space-y-2 max-h-[200px] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">Active Engineering Tasks</span>
+              <Button variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => setShowEngineeringPanel(false)}>
+                Hide
+              </Button>
+            </div>
+            {engineeringTasks.map((task) => (
+              <div key={task.id} className="flex items-center gap-2 p-2 rounded bg-background border text-xs">
+                <div className={`w-2 h-2 rounded-full ${
+                  task.status === "completed" ? "bg-green-500" :
+                  task.status === "failed" ? "bg-red-500" :
+                  task.status === "ready_for_approval" ? "bg-emerald-500" :
+                  "bg-blue-500"
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{task.request.slice(0, 60)}...</p>
+                  <p className="text-muted-foreground">{task.id} • {task.status.replace(/_/g, " ")}</p>
+                </div>
+                {task.status === "ready_for_approval" && (
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] px-2"
+                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: false })}
+                      disabled={approveEngineeringTask.isPending}
+                    >
+                      <X className="w-3 h-3 mr-0.5" /> Reject
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px] px-2"
+                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: true })}
+                      disabled={approveEngineeringTask.isPending}
+                    >
+                      <Check className="w-3 h-3 mr-0.5" /> Approve
+                    </Button>
+                  </div>
+                )}
+                {task.status === "completed" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                {task.status === "failed" && <AlertTriangle className="w-4 h-4 text-red-500" />}
+              </div>
+            ))}
+          </div>
+        )}
         {/* Messages */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden" onScroll={handleMessagesScroll} onClick={() => setHeaderIconsVisible(true)}>
           <div className="max-w-3xl mx-auto px-4 py-6 min-h-full flex flex-col">
@@ -1375,6 +1499,19 @@ export default function Chat() {
                     </button>
                   ))}
                 </div>
+
+                {isAdmin && (
+                  <div className="mt-4 p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-left max-w-md mx-auto">
+                    <p className="font-medium text-primary mb-1">🛠️ Engineering Agent</p>
+                    <p className="text-muted-foreground">Type <code className="bg-muted px-1 rounded">/engineering your request</code> to create an engineering task.</p>
+                    <p className="text-muted-foreground mt-1">Examples:</p>
+                    <ul className="list-disc list-inside text-muted-foreground mt-0.5 space-y-0.5">
+                      <li>/engineering Fix the login bug</li>
+                      <li>/engineering Add dark mode toggle</li>
+                      <li>/engineering Investigate CBT submission errors</li>
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1425,7 +1562,56 @@ export default function Chat() {
                 app root) so it survives navigating between chat sessions —
                 see VoiceCallContext. Nothing rendered here anymore. */}
 
-            {/* Messages */}
+    
+        {/* Engineering Task Panel */}
+        {isAdmin && showEngineeringPanel && engineeringTasks.length > 0 && (
+          <div className="flex-shrink-0 border-b border-border/40 bg-muted/30 px-4 py-2 space-y-2 max-h-[200px] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">Active Engineering Tasks</span>
+              <Button variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => setShowEngineeringPanel(false)}>
+                Hide
+              </Button>
+            </div>
+            {engineeringTasks.map((task) => (
+              <div key={task.id} className="flex items-center gap-2 p-2 rounded bg-background border text-xs">
+                <div className={`w-2 h-2 rounded-full ${
+                  task.status === "completed" ? "bg-green-500" :
+                  task.status === "failed" ? "bg-red-500" :
+                  task.status === "ready_for_approval" ? "bg-emerald-500" :
+                  "bg-blue-500"
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{task.request.slice(0, 60)}...</p>
+                  <p className="text-muted-foreground">{task.id} • {task.status.replace(/_/g, " ")}</p>
+                </div>
+                {task.status === "ready_for_approval" && (
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] px-2"
+                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: false })}
+                      disabled={approveEngineeringTask.isPending}
+                    >
+                      <X className="w-3 h-3 mr-0.5" /> Reject
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px] px-2"
+                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: true })}
+                      disabled={approveEngineeringTask.isPending}
+                    >
+                      <Check className="w-3 h-3 mr-0.5" /> Approve
+                    </Button>
+                  </div>
+                )}
+                {task.status === "completed" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                {task.status === "failed" && <AlertTriangle className="w-4 h-4 text-red-500" />}
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Messages */}
             {messages.length > 0 && (
               <div className="flex-1 space-y-6">
                 {messages.map(msg => (

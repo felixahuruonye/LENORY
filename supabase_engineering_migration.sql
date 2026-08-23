@@ -111,3 +111,24 @@ ALTER TABLE engineering_deployments ENABLE ROW LEVEL SECURITY;
 
 -- Note: Actual RLS policies should be added based on your auth setup
 -- Example: CREATE POLICY admin_only ON engineering_tasks FOR ALL TO authenticated USING (auth.email() = 'felixahuruonye@gmail.com');
+
+
+-- User Complaints table
+CREATE TABLE IF NOT EXISTS user_complaints (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  user_email TEXT NOT NULL,
+  message TEXT NOT NULL,
+  category TEXT DEFAULT 'general',
+  status TEXT DEFAULT 'open',
+  admin_notes TEXT,
+  engineering_task_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_complaints_status ON user_complaints(status);
+CREATE INDEX IF NOT EXISTS idx_user_complaints_user ON user_complaints(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_complaints_created ON user_complaints(created_at DESC);
+
+ALTER TABLE user_complaints ENABLE ROW LEVEL SECURITY;

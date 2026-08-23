@@ -54,6 +54,8 @@ import VoiceGallery from "@/pages/VoiceGallery";
 import LearnDashboard from "./pages/LearnDashboard";
 import LearnEditor from "./pages/LearnEditor";
 import EngineeringAgent from "@/pages/admin/EngineeringAgent";
+import ComplaintsPage from "@/pages/admin/ComplaintsPage";
+import HistoryPage from "@/pages/admin/HistoryPage";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
