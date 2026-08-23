@@ -17,7 +17,8 @@ self.addEventListener('install', (event) => {
       });
     })
   );
-  self.skipWaiting();
+  // REMOVED: self.skipWaiting() — now waits for user to click Refresh
+  // which sends SKIP_WAITING message before activating
 });
 
 self.addEventListener('activate', (event) => {
