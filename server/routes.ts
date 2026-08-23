@@ -52,6 +52,7 @@ import { handleGeminiLiveConnection, GEMINI_VOICES } from "./geminiLive";
 
 // ── NEW: IMPORT AXIOS FOR OAUTH ──────────────────────────────────────────────
 import axios from 'axios';
+import { registerEngineeringRoutes } from "./routes/engineering";
 
 // ── Multer setup ONCE at the top ────────────────────────────────────────────
 const uploadMulter = multer({ storage: multer.memoryStorage() });

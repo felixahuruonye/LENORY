@@ -53,6 +53,7 @@ import VoiceGallery from "@/pages/VoiceGallery";
 // ─── NEW IMPORTS FOR LEARN TO CODE ──────────────────────────────
 import LearnDashboard from "./pages/LearnDashboard";
 import LearnEditor from "./pages/LearnEditor";
+import EngineeringAgent from "@/pages/admin/EngineeringAgent";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
