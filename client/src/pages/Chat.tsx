@@ -62,7 +62,7 @@ import {
   Maximize2,
   Download,
 } from "lucide-react";
-import { FolderOpen, CheckCircle2, Layers, ChevronRight, Wrench, GitPullRequest, Check, X } from "lucide-react";
+import { FolderOpen, CheckCircle2, Layers, ChevronRight } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -271,7 +271,6 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 // ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
-  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { speak, stop, isPlaying } = useVoice();
@@ -279,58 +278,6 @@ export default function Chat() {
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  // ─── Engineering Agent Integration ─────────────────────────────────────────
-  const [engineeringTasks, setEngineeringTasks] = useState<any[]>([]);
-  const [showEngineeringPanel, setShowEngineeringPanel] = useState(false);
-
-  const createEngineeringTask = useMutation({
-    mutationFn: async (request: string) => {
-      const res = await apiRequest("POST", "/api/engineering/tasks", { request });
-      return res.json();
-    },
-    onSuccess: (task) => {
-      setEngineeringTasks(prev => [...prev, task]);
-      toast({ title: "Engineering task created", description: `Task ${task.id} is now investigating.` });
-    },
-    onError: (err: any) => {
-      toast({ title: "Failed to create task", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const approveEngineeringTask = useMutation({
-    mutationFn: async ({ taskId, approved }: { taskId: string; approved: boolean }) => {
-      const res = await apiRequest("POST", `/api/engineering/tasks/${taskId}/approve`, { approved });
-      return res.json();
-    },
-    onSuccess: (task) => {
-      setEngineeringTasks(prev => prev.map(t => t.id === task.id ? task : t));
-      toast({
-        title: task.status === "approved" ? "Task approved" : "Task rejected",
-        description: task.status === "approved" ? "Merging and deploying..." : "Task rejected.",
-      });
-    },
-  });
-
-  // Poll for engineering task updates
-  useEffect(() => {
-    if (!isAdmin || engineeringTasks.length === 0) return;
-    const interval = setInterval(async () => {
-      for (const task of engineeringTasks) {
-        if (["completed", "failed", "rejected", "rolled_back"].includes(task.status)) continue;
-        try {
-          const headers = await getAuthHeaders();
-          const res = await fetch(`/api/engineering/tasks/${task.id}`, { headers });
-          if (res.ok) {
-            const updated = await res.json();
-            setEngineeringTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
-          }
-        } catch { /* ignore polling errors */ }
-      }
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [isAdmin, engineeringTasks.length]);
-
-
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
@@ -980,17 +927,6 @@ export default function Chat() {
   const folderActionPending = folderQuizMutation.isPending || folderFlashcardsMutation.isPending || folderSummaryMutation.isPending;
 
   const handleSendMessage = async () => {
-    // ─── Engineering Agent Detection ───────────────────────────────────────
-    if (isAdmin && input.trim().toLowerCase().startsWith("/engineering ")) {
-      const request = input.trim().slice(12).trim();
-      if (request) {
-        setInput("");
-        setShowEngineeringPanel(true);
-        createEngineeringTask.mutate(request);
-        return;
-      }
-    }
-
     if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
 
     // Image Gen mode — toggled from the + menu. Reuses the same
@@ -1054,6 +990,7 @@ export default function Chat() {
     // Video mode
     if (videoMode) {
       const prompt = message.trim();
+      const userName = (user as any)?.firstName || "there";
       setIsLoading(true);
       resetInput();
       try {
@@ -1210,6 +1147,7 @@ export default function Chat() {
   // model-default effect, which itself must run before any early return —
   // ALL hooks must be called unconditionally on every render, never after a
   // conditional return, or React throws and unmounts the whole page) ────────
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const userPlan: "free" | "pro" | "premium" = isAdmin ? "premium" : ((user as any)?.subscriptionTier || "free");
 
   // Sets the model selector to what a user on this tier would actually use,
@@ -1401,70 +1339,9 @@ export default function Chat() {
               <Button variant="ghost" size="icon" data-testid="link-settings"><Settings className="w-4 h-4" /></Button>
             </Link>
             <ThemeToggle />
-            {isAdmin && (
-              <Button
-                variant={showEngineeringPanel ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setShowEngineeringPanel(!showEngineeringPanel)}
-                title="Engineering Agent"
-                className="gap-1"
-              >
-                <Wrench className="w-4 h-4" />
-                <span className="hidden sm:inline text-xs">Engineering</span>
-              </Button>
-            )}
           </div>
         </header>
 
-
-        {/* Engineering Task Panel */}
-        {isAdmin && showEngineeringPanel && engineeringTasks.length > 0 && (
-          <div className="flex-shrink-0 border-b border-border/40 bg-muted/30 px-4 py-2 space-y-2 max-h-[200px] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground">Active Engineering Tasks</span>
-              <Button variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => setShowEngineeringPanel(false)}>
-                Hide
-              </Button>
-            </div>
-            {engineeringTasks.map((task) => (
-              <div key={task.id} className="flex items-center gap-2 p-2 rounded bg-background border text-xs">
-                <div className={`w-2 h-2 rounded-full ${
-                  task.status === "completed" ? "bg-green-500" :
-                  task.status === "failed" ? "bg-red-500" :
-                  task.status === "ready_for_approval" ? "bg-emerald-500" :
-                  "bg-blue-500"
-                }`} />
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{task.request.slice(0, 60)}...</p>
-                  <p className="text-muted-foreground">{task.id} • {task.status.replace(/_/g, " ")}</p>
-                </div>
-                {task.status === "ready_for_approval" && (
-                  <div className="flex gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-6 text-[10px] px-2"
-                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: false })}
-                      disabled={approveEngineeringTask.isPending}
-                    >
-                      <X className="w-3 h-3 mr-0.5" /> Reject
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="h-6 text-[10px] px-2"
-                      onClick={() => approveEngineeringTask.mutate({ taskId: task.id, approved: true })}
-                      disabled={approveEngineeringTask.isPending}
-                    >
-                      <Check className="w-3 h-3 mr-0.5" /> Approve
-                    </Button>
-                  </div>
-                )}
-                {task.status === "completed" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                {task.status === "failed" && <AlertTriangle className="w-4 h-4 text-red-500" />}
-              </div>
-            ))}
-          </div>
-        )}
         {/* Messages */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden" onScroll={handleMessagesScroll} onClick={() => setHeaderIconsVisible(true)}>
           <div className="max-w-3xl mx-auto px-4 py-6 min-h-full flex flex-col">
@@ -1498,19 +1375,6 @@ export default function Chat() {
                     </button>
                   ))}
                 </div>
-
-                {isAdmin && (
-                  <div className="mt-4 p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-left max-w-md mx-auto">
-                    <p className="font-medium text-primary mb-1">🛠️ Engineering Agent</p>
-                    <p className="text-muted-foreground">Type <code className="bg-muted px-1 rounded">/engineering your request</code> to create an engineering task.</p>
-                    <p className="text-muted-foreground mt-1">Examples:</p>
-                    <ul className="list-disc list-inside text-muted-foreground mt-0.5 space-y-0.5">
-                      <li>/engineering Fix the login bug</li>
-                      <li>/engineering Add dark mode toggle</li>
-                      <li>/engineering Investigate CBT submission errors</li>
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1561,7 +1425,432 @@ export default function Chat() {
                 app root) so it survives navigating between chat sessions —
                 see VoiceCallContext. Nothing rendered here anymore. */}
 
-    
+            {/* Messages */}
+            {messages.length > 0 && (
+              <div className="flex-1 space-y-6">
+                {messages.map(msg => (
+                  <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`} data-testid={`message-${msg.role}-${msg.id}`}>
+                    {msg.role === "assistant" && (
+                      <div className="flex-shrink-0 mt-1">
+                        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                          <Brain className="w-4 h-4 text-primary" />
+                        </div>
+                      </div>
+                    )}
+                    <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1 min-w-0"}`} data-testid={`card-message-${msg.id}`}>
+                      {msg.role === "user" ? (
+                        <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-3 text-sm">
+                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                            <div key={idx} className="mb-3 rounded-lg overflow-hidden">
+                              <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-48 object-cover rounded-lg" loading="lazy" />
+                            </div>
+                          ))}
+                          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                        </div>
+                      ) : (
+                        <div className="text-sm">
+                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                            <div key={idx} className="mb-3 rounded-lg overflow-hidden">
+                              <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-64 object-cover rounded-lg" loading="lazy" />
+                            </div>
+                          ))}
+                          <LenoryMarkdown content={msg.content || ""} />
+                          {/* Message actions */}
+                          <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => copyMessage(msg.content, msg.id)}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-muted transition-colors"
+                              data-testid={`button-copy-msg-${msg.id}`}
+                            >
+                              {copiedMsgId === msg.id ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedMsgId === msg.id ? "Copied" : "Copy"}</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (playingMessageId === msg.id) { stop(); setPlayingMessageId(null); }
+                                else { if (playingMessageId) stop(); setPlayingMessageId(msg.id); speak(msg.content); }
+                              }}
+                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${
+                                playingMessageId === msg.id ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                              }`}
+                              data-testid={`button-speak-${msg.id}`}
+                            >
+                              {playingMessageId === msg.id ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                              <span>{playingMessageId === msg.id ? "Stop" : "Read"}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {msg.role === "user" && (
+                      <div className="flex-shrink-0 mt-1">
+                        <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center">
+                          <UserIcon className="w-4 h-4 text-primary-foreground" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Web search sources for the latest response */}
+                {latestSources && latestSources.length > 0 && !isLoading && (
+                  <div className="flex flex-wrap gap-2 pl-10 -mt-2">
+                    {latestSources.map((src, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setOpenSource(src)}
+                        className="flex items-center gap-1.5 text-xs bg-muted hover:bg-muted/70 rounded-full px-3 py-1.5 max-w-[220px]"
+                        data-testid={`search-source-${i}`}
+                      >
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${new URL(src.link).hostname}&sz=32`}
+                          className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                          alt=""
+                        />
+                        <span className="truncate">{src.title}</span>
+                        <ChevronRight className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Live streaming file-analysis bubble — matches the normal
+                    assistant message styling, but shows text as it arrives */}
+                {streamingAnalysis !== null && (
+                  <div className="flex gap-3 justify-start" data-testid="message-streaming-analysis">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Brain className="w-4 h-4 text-primary" />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {streamingAnalysis ? <LenoryMarkdown content={streamingAnalysis} /> : <TypingIndicator action="reading_file" />}
+                    </div>
+                  </div>
+                )}
+
+                {/* Writing / typing indicator */}
+                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} />}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+
+            {/* Loading when no messages yet */}
+            {messages.length === 0 && isLoading && (
+              <div className="flex-1 flex flex-col gap-6">
+                <TypingIndicator />
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Input Area ── */}
+        <div className="flex-shrink-0 px-4 pb-4 pt-2 bg-background/90 backdrop-blur-sm">
+          <div className="max-w-3xl mx-auto">
+
+            {/* Plus menu popup */}
+            {showPlusMenu && (
+              <div className="mb-3 p-4 bg-card rounded-2xl border border-border shadow-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold">Attach or Create</span>
+                  <button onClick={() => setShowPlusMenu(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => cameraInputRef.current?.click() },
+                    { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
+                    { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
+                    { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
+                    { icon: BookOpen, label: "My Notes", color: "text-purple-300 bg-purple-400/10", action: () => { setShowPlusMenu(false); setLocation("/notes"); } },
+                    { icon: Sparkles, label: imageGenMode ? "Image Gen: ON" : "Image Gen", color: imageGenMode ? "text-pink-400 bg-pink-500/20" : "text-pink-400 bg-pink-500/10", action: () => {
+                      setShowPlusMenu(false);
+                      setImageGenMode(v => {
+                        const next = !v;
+                        toast({ title: next ? "Image Gen ON" : "Image Gen OFF", description: next ? "Type a prompt to generate an image, or attach one to edit it." : undefined });
+                        return next;
+                      });
+                    } },
+                    { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
+                  ].map(item => (
+                    <button key={item.label} onClick={item.action}
+                      className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover-elevate transition-all"
+                      data-testid={`plus-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                    >
+                      <div className={`p-2.5 rounded-xl ${item.color}`}><item.icon className="w-5 h-5" /></div>
+                      <span className="text-xs text-muted-foreground font-medium leading-tight text-center">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Advanced mode indicator */}
+            {advancedMode && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl">
+                <Code className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                <span className="text-xs text-cyan-300 flex-1">Advanced mode — deep technical & coding responses with DeepSeek</span>
+                <button onClick={() => setAdvancedMode(false)} className="text-cyan-400 hover:text-cyan-200" data-testid="button-close-advanced-mode"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+
+            {/* Video mode indicator */}
+            {videoMode && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-purple-500/10 border border-purple-500/30 rounded-xl">
+                <Film className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                <span className="text-xs text-purple-300 flex-1">Video generation mode — describe what you want to see</span>
+                <button onClick={() => { setVideoMode(false); setMessage(""); }} className="text-purple-400 hover:text-purple-200"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+
+            {/* Attached files preview chips */}
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
+                {pendingFiles.map(pf => (
+                  <div key={pf.id} className="relative flex items-center gap-1.5 bg-background border border-border rounded-lg pl-1.5 pr-6 py-1" data-testid={`chip-file-${pf.id}`}>
+                    {pf.previewUrl ? (
+                      <img src={pf.previewUrl} alt={pf.file.name} className="w-6 h-6 rounded object-cover flex-shrink-0" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                    )}
+                    <span className="text-xs max-w-[100px] truncate">{pf.file.name}</span>
+                    <button
+                      onClick={() => removePendingFile(pf.id)}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      data-testid={`button-remove-file-${pf.id}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Long paste → file chip, Claude-style */}
+            {pastedFile && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-muted border border-border rounded-xl">
+                <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-xs flex-1 truncate">{pastedFile.name} — will be processed as an attachment (12 credits)</span>
+                <button onClick={() => setPastedFile(null)} className="text-muted-foreground hover:text-foreground" data-testid="button-remove-pasted-file"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+
+            {/* Folder-scoped chat: banner + beginner-friendly shortcut buttons */}
+            {activeFolder && (
+              <div className="mb-2">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2 px-1">
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  Chatting about <span className="font-medium text-foreground">{activeFolder.name}</span> — answers come only from this folder's files
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderQuizMutation.mutate()}
+                    data-testid="button-folder-quiz-shortcut"
+                  >
+                    {folderQuizMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    Quiz me
+                  </Button>
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderFlashcardsMutation.mutate()}
+                    data-testid="button-folder-flashcards-shortcut"
+                  >
+                    {folderFlashcardsMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
+                    Flashcards
+                  </Button>
+                  <Button
+                    size="sm" variant="outline" className="gap-1.5 flex-shrink-0 rounded-full"
+                    disabled={folderActionPending}
+                    onClick={() => folderSummaryMutation.mutate()}
+                    data-testid="button-folder-summary-shortcut"
+                  >
+                    {folderSummaryMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                    Summarize
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Main input card — Claude style */}
+            <div className={`rounded-2xl border transition-all ${
+              isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
+              videoMode ? "border-purple-500/40 bg-purple-500/5" :
+              imageGenMode ? "border-pink-500/40 bg-pink-500/5" :
+              "border-border bg-card shadow-sm hover:shadow-md"
+            }`}>
+
+              {/* Textarea */}
+              <div className="px-4 pt-4 pb-2">
+                {imageGenMode && (
+                  <div className="flex items-center gap-1.5 text-xs text-pink-400 font-medium mb-1.5">
+                    <span>🎨</span><span>Image Gen mode — {pendingFiles.length > 0 ? "editing attached image" : "type what to generate"}</span>
+                  </div>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={e => { setMessage(e.target.value); autoResize(); }}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  placeholder={
+                    isListening ? "Listening..." :
+                    videoMode ? "Describe your video..." :
+                    imageGenMode ? "Describe the image you want..." :
+                    pendingFiles.length > 0 ? "Add a prompt for these files (optional)..." :
+                    "How can I help you today?"
+                  }
+                  className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground/60 text-sm leading-relaxed outline-none border-none min-h-[44px] max-h-[220px] overflow-y-auto"
+                  rows={1}
+                  style={{ height: "44px" }}
+                  disabled={isLoading}
+                  data-testid="input-message"
+                />
+              </div>
+
+              {/* Bottom toolbar */}
+              <div className="flex items-center justify-between px-3 pb-3 pt-1">
+                <div className="flex items-center gap-1">
+                  {/* Plus button */}
+                  <button
+                    onClick={() => setShowPlusMenu(!showPlusMenu)}
+                    className={`p-2 rounded-xl transition-all ${showPlusMenu ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title="Attach or create"
+                    data-testid="button-plus-menu"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+
+                  {/* Model selector */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all" data-testid="button-model-selector">
+                        <span>{selectedModel.label}</span>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-60">
+                      {AI_MODELS.map(model => {
+                        const lockMsg = getModelLock(model.id);
+                        return (
+                          <DropdownMenuItem
+                            key={model.id}
+                            onClick={() => {
+                              if (lockMsg) {
+                                toast({ title: `${model.label} locked`, description: `${lockMsg} to use this model.`, variant: "destructive" });
+                              } else {
+                                userPickedModelRef.current = true;
+                                setSelectedModel(model);
+                              }
+                            }}
+                            className={`flex items-start gap-2 cursor-pointer ${selectedModel.id === model.id ? "bg-primary/10" : ""} ${lockMsg ? "opacity-60" : ""}`}
+                            data-testid={`model-option-${model.id}`}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <span className="font-medium text-sm block">{model.label}</span>
+                              <span className="text-xs text-muted-foreground block">{model.description}</span>
+                            </div>
+                            {lockMsg && <Lock className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
+                        {userPlan === "free" ? "Upgrade to Pro/Premium to unlock all models" : "Model controls AI capabilities"}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  {/* Live AI / VAPI wave button — previously toggled an
+                      idle "Ready to talk" card requiring a second tap to
+                      actually start the call. Now taps straight into
+                      starting the call (or does nothing if one's already
+                      active — ending is handled by the persistent VoiceOrb). */}
+                  <button
+                    onClick={async () => {
+                      setShowPlusMenu(false);
+                      if (voiceCall.status !== "idle") return;
+                      const history = messages?.map((m: any) => `${m.role}: ${m.content}`).join("\n") || "";
+                      // Previously passed currentSessionId straight through
+                      // even when it was null (a brand-new chat with no
+                      // session created yet) — the transcript-save endpoint
+                      // silently does nothing without a sessionId, which is
+                      // exactly why the transcript never showed up in the
+                      // chat page for a call started from a fresh session.
+                      let sid = currentSessionId;
+                      if (!sid) {
+                        try {
+                          const sRes = await apiRequest("POST", "/api/chat/sessions", { title: "Voice Call", mode: "chat" });
+                          const sData = await sRes.json();
+                          sid = sData.id;
+                          switchToSession(sData.id);
+                          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
+                        } catch {}
+                      }
+                      voiceCall.startVoiceCall({
+                        sessionId: sid,
+                        userId: (user as any)?.id,
+                        userName: (user as any)?.firstName || (user as any)?.email?.split("@")[0],
+                        isAdmin,
+                        chatHistory: history,
+                      });
+                    }}
+                    className={`p-2 rounded-xl transition-all ${voiceCall.status !== "idle" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title="Live Voice AI"
+                    data-testid="button-live-ai"
+                  >
+                    {/* Wave icon */}
+                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M2 12s2-4 4-4 4 8 4 8 2-8 4-8 4 4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+
+                  {/* Mic */}
+                  <button
+                    onClick={handleMicToggle}
+                    className={`p-2 rounded-xl transition-all ${isListening ? "bg-red-500 text-white animate-pulse" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                    title={isListening ? "Stop listening" : "Voice input"}
+                    data-testid="button-mic"
+                  >
+                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+
+                  {/* Send */}
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={(!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching}
+                    className={`p-2 rounded-xl transition-all ${
+                      (!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching
+                        ? "text-muted-foreground/30 cursor-not-allowed"
+                        : videoMode
+                          ? "bg-purple-600 text-white"
+                          : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+                    }`}
+                    data-testid="button-send"
+                  >
+                    {isLoading || isSearching ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : videoMode ? (
+                      <Film className="w-5 h-5" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground text-center mt-2">
+              LENORY AI · Advanced intelligence for everyone · Always verify critical information
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" data-testid="input-file-upload"
