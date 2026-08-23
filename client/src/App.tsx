@@ -151,6 +151,11 @@ function Router() {
       <Route path="/learn" component={LearnDashboard} />
       <Route path="/learn/path/:pathId" component={LearnEditor} />
 
+{/* ─── ADMIN ENGINEERING ROUTES ────────────────────────────── */}
+<Route path="/admin/engineering" component={EngineeringAgent} />
+<Route path="/admin/complaints" component={ComplaintsPage} />
+<Route path="/admin/history" component={HistoryPage} />
+
       {/* Catch-all redirect */}
       <Route>
         <Redirect to="/dashboard" />
