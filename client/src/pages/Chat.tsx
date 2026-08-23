@@ -523,50 +523,84 @@ export default function Chat() {
       let failed = false;
       let failMsg = "";
       setStreamingAnalysis("");
-      try {
-        const authHeaders = await getAuthHeaders();
-        const response = await fetch("/api/chat/analyze-vision-stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders },
-          credentials: "include",
-          body: JSON.stringify({ files: cleaned, prompt: promptToUse, sessionId: currentSessionId }),
-          signal: AbortSignal.timeout(120000),
-        });
-        if (!response.ok || !response.body) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.message || errData.error || `HTTP ${response.status}`);
-        }
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            let event: any;
-            try { event = JSON.parse(line.slice(6)); } catch { continue; }
-            if (event.type === "token" && event.token) {
-              analysis += event.token;
-              setStreamingAnalysis(analysis);
-            } else if (event.type === "done") {
-              analysis = event.analysis || analysis;
-            } else if (event.type === "error") {
-              failed = true;
-              failMsg = event.message || "Analysis failed";
+
+      // "BodyStreamBuffer was aborted" is what Chrome throws (not a
+      // TimeoutError, so checking only that name never caught it) when an
+      // AbortSignal fires WHILE the response stream is still being read —
+      // exactly what happens on a slow mobile connection uploading a large
+      // base64 image payload: the timeout budget runs out mid-stream
+      // instead of before the request even starts, and the raw, cryptic
+      // browser message leaked straight to the user instead of a real
+      // explanation. Detected here as a transient, retryable failure.
+      const isTransientNetworkError = (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        const name = e instanceof Error ? e.name : "";
+        return name === "TimeoutError" || name === "AbortError" || /BodyStreamBuffer|Failed to fetch|NetworkError|network error|aborted/i.test(msg);
+      };
+
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        analysis = "";
+        failed = false;
+        failMsg = "";
+        try {
+          const authHeaders = await getAuthHeaders();
+          const response = await fetch("/api/chat/analyze-vision-stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders },
+            credentials: "include",
+            body: JSON.stringify({ files: cleaned, prompt: promptToUse, sessionId: currentSessionId }),
+            // Raised from 120s: with batches now allowed up to ~95MB, just
+            // the UPLOAD phase on a slow connection can approach the old
+            // budget before the server even starts responding.
+            signal: AbortSignal.timeout(240000),
+          });
+          if (!response.ok || !response.body) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.message || errData.error || `HTTP ${response.status}`);
+          }
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              let event: any;
+              try { event = JSON.parse(line.slice(6)); } catch { continue; }
+              if (event.type === "token" && event.token) {
+                analysis += event.token;
+                setStreamingAnalysis(analysis);
+              } else if (event.type === "done") {
+                analysis = event.analysis || analysis;
+              } else if (event.type === "error") {
+                failed = true;
+                failMsg = event.message || "Analysis failed";
+              }
             }
           }
+          if (!analysis && !failed) { failed = true; failMsg = "No analysis returned"; }
+          break; // got a real response (success or a genuine server-side error) — stop retrying
+        } catch (e) {
+          const transient = isTransientNetworkError(e);
+          failed = true;
+          failMsg = e instanceof Error && e.name === "TimeoutError"
+            ? "Analysis took too long — try fewer or smaller files at once, or check your connection."
+            : transient
+              ? "Upload was interrupted — this usually means a slow or unstable connection."
+              : (e instanceof Error ? e.message : "Failed to analyze files");
+          if (transient && attempt < MAX_ATTEMPTS) {
+            setStreamingAnalysis(`Connection interrupted — retrying (${attempt}/${MAX_ATTEMPTS - 1})...`);
+            await new Promise(r => setTimeout(r, attempt * 2000)); // 2s, then 4s
+            continue;
+          }
         }
-        if (!analysis && !failed) { failed = true; failMsg = "No analysis returned"; }
-      } catch (e) {
-        failed = true;
-        failMsg = e instanceof Error && e.name === "TimeoutError" ? "Analysis took too long — try fewer or smaller files at once." : (e instanceof Error ? e.message : "Failed to analyze files");
-      } finally {
-        setStreamingAnalysis(null);
       }
+      setStreamingAnalysis(null);
 
       filesToSend.forEach(f => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl); });
       setPendingFiles([]);
