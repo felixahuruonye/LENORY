@@ -70,7 +70,6 @@ import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVoice, getVapiVoiceForCall } from "@/lib/useVoice";
 import { useVoiceCall } from "@/contexts/VoiceCallContext";
-import { detectFeatureOpen } from "@/lib/featureRegistry";
 import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shared/schema";
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -986,32 +985,7 @@ export default function Chat() {
       return;
     }
 
-    // Feature navigation — special-cased for image generation: previously
-    // this hard-redirected straight off the chat page the moment someone
-    // typed something like "create an image", which is exactly the "chat
-    // page has a broken relationship with the image feature" complaint.
-    // Now: nudge them to turn on Image Gen mode (or open the studio) via a
-    // normal assistant chat message instead of yanking them away.
-    const featureRoute = detectFeatureOpen(message);
-    if (featureRoute === "/image-gen" && !imageGenMode) {
-      const prompt = message.trim();
-      resetInput();
-      let sessionId = currentSessionId;
-      if (!sessionId) {
-        const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
-        const sData = await sRes.json();
-        sessionId = sData.id;
-        switchToSession(sData.id);
-        queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-      }
-      await apiRequest("POST", "/api/chat/send", {
-        content: prompt, sessionId, autoLearn: false, skipAi: false,
-        overrideResponse: `To generate images right here in chat, tap **+** and turn on **Image Gen** — then just describe what you want.\n\nOr for more options (styles, editing, history), open the [Image Studio](/image-gen).`,
-      });
-      await refetchMessages();
-      return;
-    }
-    if (featureRoute) { window.location.href = featureRoute; return; }
+    // REMOVED: Feature keyword navigation hijack. All messages now go directly to the AI model.
 
     // Video mode
     if (videoMode) {
