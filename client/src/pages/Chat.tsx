@@ -279,7 +279,6 @@ export default function Chat() {
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // ─── Engineering Agent Integration ─────────────────────────────────────────
-  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const [engineeringTasks, setEngineeringTasks] = useState<any[]>([]);
   const [showEngineeringPanel, setShowEngineeringPanel] = useState(false);
 
@@ -318,7 +317,8 @@ export default function Chat() {
       for (const task of engineeringTasks) {
         if (["completed", "failed", "rejected", "rolled_back"].includes(task.status)) continue;
         try {
-          const res = await fetch(`/api/engineering/tasks/${task.id}`, { headers: getAuthHeaders() });
+          const headers = await getAuthHeaders();
+          const res = await fetch(`/api/engineering/tasks/${task.id}`, { headers });
           if (res.ok) {
             const updated = await res.json();
             setEngineeringTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
@@ -1053,7 +1053,6 @@ export default function Chat() {
     // Video mode
     if (videoMode) {
       const prompt = message.trim();
-      const userName = (user as any)?.firstName || "there";
       setIsLoading(true);
       resetInput();
       try {
