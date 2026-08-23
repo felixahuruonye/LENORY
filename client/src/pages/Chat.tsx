@@ -271,6 +271,7 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 // ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
   const { user, isLoading: authLoading } = useAuth();
+  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { speak, stop, isPlaying } = useVoice();
@@ -1209,7 +1210,6 @@ export default function Chat() {
   // model-default effect, which itself must run before any early return —
   // ALL hooks must be called unconditionally on every render, never after a
   // conditional return, or React throws and unmounts the whole page) ────────
-  const isAdmin = (user as any)?.email === "felixahuruonye@gmail.com";
   const userPlan: "free" | "pro" | "premium" = isAdmin ? "premium" : ((user as any)?.subscriptionTier || "free");
 
   // Sets the model selector to what a user on this tier would actually use,
