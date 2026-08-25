@@ -45,7 +45,7 @@ function isCommandAllowed(command: string): boolean {
 
 function sanitizeCommand(command: string): string {
   // Prevent shell injection
-  const dangerous = /[;&|<>$`\]/;
+  const dangerous = /[;&|<>$`\\]/;
   if (dangerous.test(command)) {
     throw new Error("Command contains dangerous characters");
   }
