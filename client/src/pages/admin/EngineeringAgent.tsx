@@ -1,11 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,7 +13,8 @@ import { Link } from "wouter";
 import {
   Wrench, Loader2, Send, CheckCircle2, XCircle, AlertTriangle,
   ChevronRight, Clock, GitBranch, GitPullRequest, Eye,
-  Play, RotateCcw, Brain, Code, Shield, Activity, ArrowLeft
+  Play, RotateCcw, Brain, Code, Shield, Activity, ArrowLeft,
+  Radio, Zap, Thermometer, Server
 } from "lucide-react";
 import type { EngineeringTask, EngineeringTaskEvent } from "../../../shared/engineeringSchema";
 
@@ -41,26 +41,28 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  idle: "Idle",
-  received: "Received",
-  planning: "Planning",
-  investigating: "Investigating",
-  sandbox_creating: "Creating Sandbox",
-  implementing: "Implementing",
-  testing: "Testing",
-  test_failed: "Test Failed",
-  debugging: "Debugging",
-  reviewing: "Reviewing",
-  ready_for_approval: "Ready for Approval",
-  approved: "Approved",
-  rejected: "Rejected",
-  merging: "Merging",
-  deploying: "Deploying",
-  verifying_deployment: "Verifying",
-  completed: "Completed",
-  rolled_back: "Rolled Back",
-  failed: "Failed",
+  idle: "Idle", received: "Received", planning: "Planning",
+  investigating: "Investigating", sandbox_creating: "Creating Sandbox",
+  implementing: "Implementing", testing: "Testing", test_failed: "Test Failed",
+  debugging: "Debugging", reviewing: "Reviewing",
+  ready_for_approval: "Ready for Approval", approved: "Approved",
+  rejected: "Rejected", merging: "Merging", deploying: "Deploying",
+  verifying_deployment: "Verifying", completed: "Completed",
+  rolled_back: "Rolled Back", failed: "Failed",
 };
+
+interface StreamEvent {
+  type: string;
+  taskId: string;
+  timestamp: string;
+  data: any;
+}
+
+interface CooldownEntry {
+  model: string;
+  until: number;
+  reason: string;
+}
 
 export default function EngineeringAgent() {
   const { user } = useAuth();
@@ -68,7 +70,11 @@ export default function EngineeringAgent() {
   const [request, setRequest] = useState("");
   const [selectedTask, setSelectedTask] = useState<EngineeringTask | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+  const [showCooldowns, setShowCooldowns] = useState(false);
   const [approvalNotes, setApprovalNotes] = useState("");
+  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
   const { data: tasks = [], isLoading, refetch } = useQuery<EngineeringTask[]>({
@@ -81,6 +87,59 @@ export default function EngineeringAgent() {
     queryKey: ["/api/engineering/tasks", selectedTask?.id, "events"],
     enabled: !!selectedTask && isAuthorized,
   });
+
+  const { data: cooldownData } = useQuery({
+    queryKey: ["/api/engineering/cooldowns"],
+    enabled: isAuthorized && showCooldowns,
+    refetchInterval: showCooldowns ? 5000 : false,
+  });
+
+  const cooldowns: CooldownEntry[] = cooldownData?.cooldowns || [];
+  const modelConfig = cooldownData?.config || {};
+
+  // SSE Streaming
+  useEffect(() => {
+    if (!selectedTask?.id || !showDetail) {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      setIsStreaming(false);
+      return;
+    }
+
+    const taskId = selectedTask.id;
+    setStreamEvents([]);
+    setIsStreaming(true);
+
+    const es = new EventSource(`/api/engineering/tasks/${taskId}/stream`);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      setIsStreaming(true);
+    };
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "heartbeat") return;
+        setStreamEvents((prev) => [...prev, data]);
+      } catch (e) {
+        console.error("SSE parse error:", e);
+      }
+    };
+
+    es.onerror = () => {
+      setIsStreaming(false);
+      es.close();
+    };
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+      setIsStreaming(false);
+    };
+  }, [selectedTask?.id, showDetail]);
 
   const createTask = useMutation({
     mutationFn: async (req: string) => {
@@ -100,8 +159,7 @@ export default function EngineeringAgent() {
   const approveTask = useMutation({
     mutationFn: async ({ taskId, approved }: { taskId: string; approved: boolean }) => {
       const res = await apiRequest("POST", `/api/engineering/tasks/${taskId}/approve`, {
-        approved,
-        notes: approvalNotes,
+        approved, notes: approvalNotes,
       });
       return res.json();
     },
@@ -110,8 +168,7 @@ export default function EngineeringAgent() {
         title: data.status === "approved" ? "Task approved" : "Task rejected",
         description: data.status === "approved" ? "Merging and deploying..." : "Task has been rejected.",
       });
-      setApprovalNotes("");
-      setShowDetail(false);
+      setApprovalNotes(""); setShowDetail(false);
       queryClient.invalidateQueries({ queryKey: ["/api/engineering/tasks"] });
     },
     onError: (err: any) => {
@@ -127,8 +184,11 @@ export default function EngineeringAgent() {
 
   const openDetail = (task: EngineeringTask) => {
     setSelectedTask(task);
+    setStreamEvents([]);
     setShowDetail(true);
   };
+
+  const formatTime = (ts: string) => new Date(ts).toLocaleTimeString();
 
   if (!isAuthorized) {
     return (
@@ -147,7 +207,6 @@ export default function EngineeringAgent() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="h-14 border-b flex items-center px-4 justify-between">
         <div className="flex items-center gap-3">
           <Link href="/dashboard">
@@ -158,6 +217,9 @@ export default function EngineeringAgent() {
           <Badge variant="outline" className="text-xs">Beta</Badge>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowCooldowns(!showCooldowns)}>
+            <Thermometer className="w-4 h-4 mr-1" /> {showCooldowns ? "Hide" : "Cooldowns"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RotateCcw className="w-4 h-4 mr-1" /> Refresh
           </Button>
@@ -165,6 +227,46 @@ export default function EngineeringAgent() {
       </header>
 
       <div className="max-w-6xl mx-auto p-6 space-y-6">
+        {/* Cooldown Status Panel */}
+        {showCooldowns && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Server className="w-5 h-5 text-primary" />
+                Model Status & Cooldowns
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {Object.entries(modelConfig).map(([role, cfg]: [string, any]) => (
+                  <div key={role} className="space-y-1">
+                    <p className="text-sm font-medium capitalize">{cfg.label} Models</p>
+                    <div className="flex flex-wrap gap-2">
+                      {cfg.pool.map((model: string) => {
+                        const cd = cooldowns.find((c) => c.model === model);
+                        return (
+                          <Badge key={model} variant={cd ? "destructive" : "secondary"} className="text-xs">
+                            <Zap className="w-3 h-3 mr-1" />
+                            {model}
+                            {cd && (
+                              <span className="ml-1 opacity-75">
+                                ({Math.ceil((cd.until - Date.now()) / 1000)}s)
+                              </span>
+                            )}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {cooldowns.length === 0 && (
+                  <p className="text-sm text-muted-foreground">All models are available. No cooldowns active.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Submit Request */}
         <Card>
           <CardHeader>
@@ -178,11 +280,7 @@ export default function EngineeringAgent() {
               <Textarea
                 value={request}
                 onChange={(e) => setRequest(e.target.value)}
-                placeholder="Describe what you want built or fixed. Examples:
-• Fix the login bug where users get stuck on the callback page
-• Add a collaborative study room feature
-• Investigate why CBT submissions are failing
-• Build a student leaderboard"
+                placeholder="Describe what you want built or fixed..."
                 className="min-h-[100px]"
               />
               <div className="flex justify-end">
@@ -245,13 +343,18 @@ export default function EngineeringAgent() {
         </Card>
       </div>
 
-      {/* Task Detail Dialog */}
+      {/* Task Detail Dialog with Streaming */}
       <Dialog open={showDetail} onOpenChange={setShowDetail}>
         <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Wrench className="w-5 h-5 text-primary" />
               Task Details
+              {isStreaming && (
+                <Badge variant="outline" className="text-xs flex items-center gap-1 animate-pulse">
+                  <Radio className="w-3 h-3 text-green-500" /> LIVE
+                </Badge>
+              )}
             </DialogTitle>
             <DialogDescription>{selectedTask?.id}</DialogDescription>
           </DialogHeader>
@@ -274,6 +377,49 @@ export default function EngineeringAgent() {
                   <p className="text-sm font-medium mb-1">Request</p>
                   <p className="text-sm">{selectedTask.request}</p>
                 </div>
+
+                {/* LIVE STREAM EVENTS */}
+                {streamEvents.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      <Radio className="w-4 h-4 text-green-500 animate-pulse" />
+                      Live Agent Activity
+                    </p>
+                    <div className="max-h-[200px] overflow-y-auto space-y-1 border rounded-lg p-2 bg-black/20">
+                      {streamEvents.map((ev, idx) => (
+                        <div key={idx} className="text-xs flex items-start gap-2 p-1.5 rounded hover:bg-white/5">
+                          <span className="text-muted-foreground flex-shrink-0">{formatTime(ev.timestamp)}</span>
+                          {ev.type === "phase" && (
+                            <span className="text-blue-300">📍 {ev.data.phase}{ev.data.message ? ` — ${ev.data.message}` : ""}</span>
+                          )}
+                          {ev.type === "model" && (
+                            <span className="text-purple-300">🤖 {ev.data.role} using <b>{ev.data.model}</b></span>
+                          )}
+                          {ev.type === "log" && (
+                            <span className={ev.data.level === "error" ? "text-red-300" : ev.data.level === "warn" ? "text-yellow-300" : "text-green-300"}>
+                              📝 {ev.data.message}
+                            </span>
+                          )}
+                          {ev.type === "error" && (
+                            <span className="text-red-400 font-medium">❌ {ev.data.error}</span>
+                          )}
+                          {ev.type === "review" && (
+                            <span className="text-orange-300">👁️ {ev.data.reviewer}: {ev.data.verdict}</span>
+                          )}
+                          {ev.type === "file" && (
+                            <span className="text-cyan-300">📄 {ev.data.action} {ev.data.path}</span>
+                          )}
+                          {ev.type === "complete" && (
+                            <span className="text-green-400 font-medium">✅ {ev.data.status}</span>
+                          )}
+                          {ev.type === "connected" && (
+                            <span className="text-muted-foreground">🔌 Connected to stream</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Investigation */}
                 {selectedTask.investigation && (
@@ -317,14 +463,6 @@ export default function EngineeringAgent() {
                   </div>
                 )}
 
-                {/* Risk Assessment */}
-                {selectedTask.riskAssessment && (
-                  <div className="p-3 bg-muted rounded-lg">
-                    <p className="text-sm font-medium mb-1">Risk Assessment</p>
-                    <pre className="text-xs overflow-x-auto whitespace-pre-wrap">{selectedTask.riskAssessment}</pre>
-                  </div>
-                )}
-
                 {/* Diff */}
                 {selectedTask.diff && (
                   <div className="p-3 bg-muted rounded-lg">
@@ -362,25 +500,16 @@ export default function EngineeringAgent() {
                 {selectedTask.status === "ready_for_approval" && (
                   <div className="space-y-3 pt-4 border-t">
                     <p className="text-sm font-medium">Admin Approval Required</p>
-                    <Textarea
-                      value={approvalNotes}
-                      onChange={(e) => setApprovalNotes(e.target.value)}
-                      placeholder="Optional approval notes..."
-                      className="min-h-[60px]"
-                    />
+                    <Textarea value={approvalNotes} onChange={(e) => setApprovalNotes(e.target.value)}
+                      placeholder="Optional approval notes..." className="min-h-[60px]" />
                     <div className="flex gap-2">
-                      <Button
-                        variant="destructive"
+                      <Button variant="destructive"
                         onClick={() => approveTask.mutate({ taskId: selectedTask.id, approved: false })}
-                        disabled={approveTask.isPending}
-                      >
+                        disabled={approveTask.isPending}>
                         <XCircle className="w-4 h-4 mr-2" /> Reject
                       </Button>
-                      <Button
-                        onClick={() => approveTask.mutate({ taskId: selectedTask.id, approved: true })}
-                        disabled={approveTask.isPending}
-                        className="flex-1"
-                      >
+                      <Button onClick={() => approveTask.mutate({ taskId: selectedTask.id, approved: true })}
+                        disabled={approveTask.isPending} className="flex-1">
                         {approveTask.isPending ? (
                           <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</>
                         ) : (
@@ -394,14 +523,9 @@ export default function EngineeringAgent() {
                 {/* PR Link */}
                 {selectedTask.prUrl && (
                   <div className="pt-4 border-t">
-                    <a
-                      href={selectedTask.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-primary hover:underline"
-                    >
-                      <GitPullRequest className="w-4 h-4" />
-                      View Branch on GitHub
+                    <a href={selectedTask.prUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-primary hover:underline">
+                      <GitPullRequest className="w-4 h-4" /> View Branch on GitHub
                     </a>
                   </div>
                 )}
