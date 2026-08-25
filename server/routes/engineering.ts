@@ -33,8 +33,8 @@ export function registerEngineeringRoutes(app: Express): void {
 
       const task = await submitEngineeringRequest(
         request,
-        req.user.id,
-        req.user.email
+        req.userId,
+        req.userEmail
       );
 
       res.status(201).json(task);
@@ -108,8 +108,8 @@ export function registerEngineeringRoutes(app: Express): void {
       const task = await approveTask(
         req.params.taskId,
         approved,
-        req.user.id,
-        req.user.email,
+        req.userId,
+        req.userEmail,
         notes
       );
 
