@@ -12,7 +12,7 @@ import {
   Coins, Crown, BarChart3, RefreshCcw, Shield,
   Search, ArrowLeft, ExternalLink, AlertTriangle,
   CheckCircle2, XCircle, HelpCircle, Zap, Clock,
-  Activity, CreditCard
+  Activity, CreditCard, Wrench, History
 } from "lucide-react";
 import { Link } from "wouter";
 import { UserDetailModal } from "@/components/UserDetailModal";
@@ -338,15 +338,21 @@ export default function AdminDashboard() {
               All systems operational
             </div>
             <div className="flex items-center gap-2 ml-4">
-              <Button variant="outline" size="sm" asChild className="text-xs">
-                <Link href="/admin/engineering"><Wrench className="h-3 w-3 mr-1" /> Engineering</Link>
-              </Button>
-              <Button variant="outline" size="sm" asChild className="text-xs">
-                <Link href="/admin/complaints"><AlertTriangle className="h-3 w-3 mr-1" /> Complaints</Link>
-              </Button>
-              <Button variant="outline" size="sm" asChild className="text-xs">
-                <Link href="/admin/history"><History className="h-3 w-3 mr-1" /> History</Link>
-              </Button>
+              <Link href="/admin/engineering">
+                <Button variant="outline" size="sm" className="text-xs">
+                  <Wrench className="h-3 w-3 mr-1" /> Engineering
+                </Button>
+              </Link>
+              <Link href="/admin/complaints">
+                <Button variant="outline" size="sm" className="text-xs">
+                  <AlertTriangle className="h-3 w-3 mr-1" /> Complaints
+                </Button>
+              </Link>
+              <Link href="/admin/history">
+                <Button variant="outline" size="sm" className="text-xs">
+                  <History className="h-3 w-3 mr-1" /> History
+                </Button>
+              </Link>
             </div>
           </div>
         </div>
