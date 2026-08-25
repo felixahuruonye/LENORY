@@ -15,22 +15,22 @@ const GROQ_MODEL_POOLS: Record<ModelRole, GroqModelConfig[]> = {
   investigator: [
     { model: "llama-3.3-70b-versatile", temperature: 0.2, maxTokens: 8000, label: "Llama 3.3 70B" },
     { model: "llama-3.1-70b-versatile", temperature: 0.2, maxTokens: 8000, label: "Llama 3.1 70B" },
-    { model: "mixtral-8x7b-32768", temperature: 0.2, maxTokens: 8000, label: "Mixtral 8x7B" },
+    { model: "deepseek-r1-distill-llama-70b", temperature: 0.2, maxTokens: 8000, label: "DeepSeek R1 70B" },
   ],
   coder: [
     { model: "llama-3.3-70b-versatile", temperature: 0.1, maxTokens: 16000, label: "Llama 3.3 70B" },
     { model: "llama-3.1-70b-versatile", temperature: 0.1, maxTokens: 16000, label: "Llama 3.1 70B" },
-    { model: "mixtral-8x7b-32768", temperature: 0.1, maxTokens: 16000, label: "Mixtral 8x7B" },
+    { model: "deepseek-r1-distill-llama-70b", temperature: 0.1, maxTokens: 16000, label: "DeepSeek R1 70B" },
   ],
   reviewer_1: [
     { model: "llama-3.1-70b-versatile", temperature: 0.2, maxTokens: 8000, label: "Llama 3.1 70B" },
-    { model: "mixtral-8x7b-32768", temperature: 0.2, maxTokens: 8000, label: "Mixtral 8x7B" },
     { model: "gemma2-9b-it", temperature: 0.2, maxTokens: 8000, label: "Gemma 2 9B" },
+    { model: "llama-3.3-70b-versatile", temperature: 0.2, maxTokens: 8000, label: "Llama 3.3 70B" },
   ],
   reviewer_2: [
-    { model: "mixtral-8x7b-32768", temperature: 0.2, maxTokens: 8000, label: "Mixtral 8x7B" },
     { model: "gemma2-9b-it", temperature: 0.2, maxTokens: 8000, label: "Gemma 2 9B" },
     { model: "llama-3.1-8b-instant", temperature: 0.2, maxTokens: 8000, label: "Llama 3.1 8B" },
+    { model: "llama-3.1-70b-versatile", temperature: 0.2, maxTokens: 8000, label: "Llama 3.1 70B" },
   ],
 };
 
