@@ -337,6 +337,17 @@ export default function AdminDashboard() {
               <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
               All systems operational
             </div>
+            <div className="flex items-center gap-2 ml-4">
+              <Button variant="outline" size="sm" asChild className="text-xs">
+                <Link href="/admin/engineering"><Wrench className="h-3 w-3 mr-1" /> Engineering</Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild className="text-xs">
+                <Link href="/admin/complaints"><AlertTriangle className="h-3 w-3 mr-1" /> Complaints</Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild className="text-xs">
+                <Link href="/admin/history"><History className="h-3 w-3 mr-1" /> History</Link>
+              </Button>
+            </div>
           </div>
         </div>
       </header>
