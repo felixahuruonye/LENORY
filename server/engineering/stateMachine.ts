@@ -255,13 +255,13 @@ export async function getTasksByStatus(status: EngineeringTaskStatus): Promise<E
 
 export const VALID_TRANSITIONS: Record<EngineeringTaskStatus, EngineeringTaskStatus[]> = {
   idle: ["received"],
-  received: ["planning", "failed"],
+  received: ["planning", "investigating", "failed"],
   planning: ["investigating", "failed"],
-  investigating: ["sandbox_creating", "failed"],
+  investigating: ["sandbox_creating", "implementing", "failed"],
   sandbox_creating: ["implementing", "failed"],
   implementing: ["testing", "failed"],
   testing: ["test_failed", "reviewing", "failed"],
-  test_failed: ["debugging", "failed"],
+  test_failed: ["debugging", "investigating", "failed"],
   debugging: ["testing", "failed"],
   reviewing: ["ready_for_approval", "failed"],
   ready_for_approval: ["approved", "rejected", "failed"],
