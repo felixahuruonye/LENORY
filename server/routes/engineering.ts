@@ -176,7 +176,7 @@ export function registerEngineeringRoutes(app: Express): void {
   });
 
   // ─── DELETE TASK ─────────────────────────────────────────────────────────
-  app.delete("/api/engineering/tasks/:taskId", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.delete("/api/engineering/tasks/:taskId", supabaseAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       if (!isAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
