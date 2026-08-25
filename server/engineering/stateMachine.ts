@@ -21,6 +21,97 @@ function generateTaskId(): string {
   return `eng_${year}${month}${day}_${random}`;
 }
 
+// ─── CamelCase ↔ Snake_case conversion helpers ─────────────────────────────
+
+function taskToDb(task: Partial<EngineeringTask>): Record<string, any> {
+  const map: Record<string, string> = {
+    id: "id",
+    request: "request",
+    status: "status",
+    createdAt: "created_at",
+    updatedAt: "updated_at",
+    adminId: "admin_id",
+    adminEmail: "admin_email",
+    baseCommit: "base_commit",
+    branchName: "branch_name",
+    prUrl: "pr_url",
+    investigation: "investigation",
+    rootCause: "root_cause",
+    implementation: "implementation",
+    testResults: "test_results",
+    buildResult: "build_result",
+    reviewResult: "review_result",
+    riskAssessment: "risk_assessment",
+    diff: "diff",
+    errorLog: "error_log",
+    sandboxPath: "sandbox_path",
+    maxAttempts: "max_attempts",
+    currentAttempt: "current_attempt",
+    metadata: "metadata",
+  };
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(task)) {
+    if (value !== undefined && map[key]) {
+      result[map[key]] = value;
+    }
+  }
+  return result;
+}
+
+function taskFromDb(row: Record<string, any>): EngineeringTask {
+  return {
+    id: row.id,
+    request: row.request,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    adminId: row.admin_id,
+    adminEmail: row.admin_email,
+    baseCommit: row.base_commit,
+    branchName: row.branch_name ?? null,
+    prUrl: row.pr_url ?? null,
+    investigation: row.investigation ?? null,
+    rootCause: row.root_cause ?? null,
+    implementation: row.implementation ?? null,
+    testResults: row.test_results ?? null,
+    buildResult: row.build_result ?? null,
+    reviewResult: row.review_result ?? null,
+    riskAssessment: row.risk_assessment ?? null,
+    diff: row.diff ?? null,
+    errorLog: row.error_log ?? null,
+    sandboxPath: row.sandbox_path ?? null,
+    maxAttempts: row.max_attempts ?? 5,
+    currentAttempt: row.current_attempt ?? 0,
+    metadata: row.metadata ?? {},
+  };
+}
+
+function eventToDb(event: Partial<EngineeringTaskEvent>): Record<string, any> {
+  const result: Record<string, any> = {};
+  if (event.id !== undefined) result.id = event.id;
+  if (event.taskId !== undefined) result.task_id = event.taskId;
+  if (event.eventType !== undefined) result.event_type = event.eventType;
+  if (event.actor !== undefined) result.actor = event.actor;
+  if (event.message !== undefined) result.message = event.message;
+  if (event.metadata !== undefined) result.metadata = event.metadata;
+  if (event.createdAt !== undefined) result.created_at = event.createdAt;
+  return result;
+}
+
+function eventFromDb(row: Record<string, any>): EngineeringTaskEvent {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    eventType: row.event_type,
+    actor: row.actor,
+    message: row.message,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+  };
+}
+
+// ─── Task CRUD ─────────────────────────────────────────────────────────────
+
 export async function createTask(
   request: string,
   adminId: string,
@@ -55,14 +146,16 @@ export async function createTask(
     metadata: {},
   };
 
+  const dbRecord = taskToDb({ ...task, id: taskId });
+
   const { data, error } = await supabaseDb
     .from(TASKS_TABLE)
-    .insert({ ...task, id: taskId })
+    .insert(dbRecord)
     .select()
     .single();
 
   if (error) throw new Error(`Failed to create task: ${error.message}`);
-  return data as EngineeringTask;
+  return taskFromDb(data);
 }
 
 export async function getTask(taskId: string): Promise<EngineeringTask | null> {
@@ -72,8 +165,8 @@ export async function getTask(taskId: string): Promise<EngineeringTask | null> {
     .select("*")
     .eq("id", taskId)
     .single();
-  if (error) return null;
-  return data as EngineeringTask;
+  if (error || !data) return null;
+  return taskFromDb(data);
 }
 
 export async function updateTaskStatus(
@@ -83,20 +176,20 @@ export async function updateTaskStatus(
 ): Promise<EngineeringTask> {
   if (!supabaseDb) throw new Error("Supabase not available");
 
+  const dbRecord = taskToDb({ status, updatedAt: new Date().toISOString(), ...updates });
+
   const { data, error } = await supabaseDb
     .from(TASKS_TABLE)
-    .update({
-      status,
-      updatedAt: new Date().toISOString(),
-      ...updates,
-    })
+    .update(dbRecord)
     .eq("id", taskId)
     .select()
     .single();
 
   if (error) throw new Error(`Failed to update task: ${error.message}`);
-  return data as EngineeringTask;
+  return taskFromDb(data);
 }
+
+// ─── Events ────────────────────────────────────────────────────────────────
 
 export async function logEvent(
   taskId: string,
@@ -110,14 +203,14 @@ export async function logEvent(
     return;
   }
 
-  const event = {
+  const event = eventToDb({
     taskId,
     eventType,
     actor,
     message,
     metadata,
     createdAt: new Date().toISOString(),
-  };
+  });
 
   const { error } = await supabaseDb.from(EVENTS_TABLE).insert(event);
   if (error) {
@@ -130,10 +223,10 @@ export async function getTaskEvents(taskId: string): Promise<EngineeringTaskEven
   const { data, error } = await supabaseDb
     .from(EVENTS_TABLE)
     .select("*")
-    .eq("taskId", taskId)
-    .order("createdAt", { ascending: true });
-  if (error) return [];
-  return (data || []) as EngineeringTaskEvent[];
+    .eq("task_id", taskId)
+    .order("created_at", { ascending: true });
+  if (error || !data) return [];
+  return (data || []).map(eventFromDb);
 }
 
 export async function getAllTasks(limit = 50): Promise<EngineeringTask[]> {
@@ -141,10 +234,10 @@ export async function getAllTasks(limit = 50): Promise<EngineeringTask[]> {
   const { data, error } = await supabaseDb
     .from(TASKS_TABLE)
     .select("*")
-    .order("createdAt", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(limit);
-  if (error) return [];
-  return (data || []) as EngineeringTask[];
+  if (error || !data) return [];
+  return (data || []).map(taskFromDb);
 }
 
 export async function getTasksByStatus(status: EngineeringTaskStatus): Promise<EngineeringTask[]> {
@@ -153,10 +246,12 @@ export async function getTasksByStatus(status: EngineeringTaskStatus): Promise<E
     .from(TASKS_TABLE)
     .select("*")
     .eq("status", status)
-    .order("createdAt", { ascending: false });
-  if (error) return [];
-  return (data || []) as EngineeringTask[];
+    .order("created_at", { ascending: false });
+  if (error || !data) return [];
+  return (data || []).map(taskFromDb);
 }
+
+// ─── State Machine ─────────────────────────────────────────────────────────
 
 export const VALID_TRANSITIONS: Record<EngineeringTaskStatus, EngineeringTaskStatus[]> = {
   idle: ["received"],

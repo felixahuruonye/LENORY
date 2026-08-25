@@ -38,8 +38,14 @@ export async function submitEngineeringRequest(
   // Start async processing
   processTask(task.id).catch(async (err) => {
     console.error(`Task ${task.id} failed:`, err);
-    await logEvent(task.id, "error", "system", err.message || String(err));
-    await transitionTask(task.id, "failed", { errorLog: err.message || String(err) });
+    try {
+      await logEvent(task.id, "error", "system", err.message || String(err));
+    } catch {}
+    try {
+      await transitionTask(task.id, "failed", { errorLog: err.message || String(err) });
+    } catch (e) {
+      console.error(`Could not transition task ${task.id} to failed:`, e);
+    }
   });
 
   return task;
@@ -244,6 +250,10 @@ export async function approveTask(
     const repoUrl = pat
       ? `https://${pat}@github.com/felixahuruonye/LENORY.git`
       : REPO_URL;
+
+    if (!task.sandboxPath || !task.branchName) {
+      throw new Error("Sandbox or branch not available for this task");
+    }
 
     execSync(`cd ${task.sandboxPath} && git push ${repoUrl} ${task.branchName}`, {
       timeout: 60000,
