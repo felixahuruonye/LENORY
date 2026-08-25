@@ -14,7 +14,7 @@ import {
   Wrench, Loader2, Send, CheckCircle2, XCircle, AlertTriangle,
   ChevronRight, Clock, GitBranch, GitPullRequest, Eye,
   Play, RotateCcw, Brain, Code, Shield, Activity, ArrowLeft,
-  Radio, Zap, Thermometer, Server, Trash2
+  Radio, Zap, CreditCard, BarChart3, Server, Trash2
 } from "lucide-react";
 import type { EngineeringTask, EngineeringTaskEvent } from "../../../shared/engineeringSchema";
 
@@ -70,7 +70,7 @@ export default function EngineeringAgent() {
   const [request, setRequest] = useState("");
   const [selectedTask, setSelectedTask] = useState<EngineeringTask | null>(null);
   const [showDetail, setShowDetail] = useState(false);
-  const [showCooldowns, setShowCooldowns] = useState(false);
+  const [showProvider, setShowProvider] = useState(false);
   const [approvalNotes, setApprovalNotes] = useState("");
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -88,14 +88,14 @@ export default function EngineeringAgent() {
     enabled: !!selectedTask && isAuthorized,
   });
 
-  const { data: cooldownData } = useQuery({
-    queryKey: ["/api/engineering/cooldowns"],
-    enabled: isAuthorized && showCooldowns,
-    refetchInterval: showCooldowns ? 5000 : false,
+  const { data: providerData } = useQuery({
+    queryKey: ["/api/engineering/provider"],
+    enabled: isAuthorized && showProvider,
+    refetchInterval: showProvider ? 10000 : false,
   });
 
-  const cooldowns: CooldownEntry[] = cooldownData?.cooldowns || [];
-  const modelConfig = cooldownData?.config || {};
+  
+  const modelConfig = providerData?.config || {};
 
   // SSE Streaming
   useEffect(() => {
@@ -233,8 +233,8 @@ export default function EngineeringAgent() {
           <Badge variant="outline" className="text-xs">Beta</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowCooldowns(!showCooldowns)}>
-            <Thermometer className="w-4 h-4 mr-1" /> {showCooldowns ? "Hide" : "Cooldowns"}
+          <Button variant="outline" size="sm" onClick={() => setShowProvider(!showProvider)}>
+            <CreditCard className="w-4 h-4 mr-1" /> {showProvider ? "Hide" : "Provider"}
           </Button>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RotateCcw className="w-4 h-4 mr-1" /> Refresh
@@ -243,40 +243,71 @@ export default function EngineeringAgent() {
       </header>
 
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        {/* Cooldown Status Panel */}
-        {showCooldowns && (
+        {/* Provider Stats Panel */}
+        {showProvider && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Server className="w-5 h-5 text-primary" />
-                Model Status & Cooldowns
+                DeepSeek Provider Stats
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
+                {/* Balance */}
+                <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-primary" />
+                    <span className="text-sm font-medium">Account Balance</span>
+                  </div>
+                  <Badge variant={providerData?.balance?.isAvailable ? "default" : "destructive"}>
+                    {providerData?.balance?.isAvailable
+                      ? `${providerData.balance.balance.toFixed(2)} ${providerData.balance.currency}`
+                      : "Unavailable / No Key"}
+                  </Badge>
+                </div>
+
+                {/* Total Cost */}
+                <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4 text-primary" />
+                    <span className="text-sm font-medium">Total Session Cost</span>
+                  </div>
+                  <Badge variant="secondary">
+                    ${(providerData?.totalCost || 0).toFixed(4)}
+                  </Badge>
+                </div>
+
+                {/* Models */}
                 {Object.entries(modelConfig).map(([role, cfg]: [string, any]) => (
                   <div key={role} className="space-y-1">
                     <p className="text-sm font-medium capitalize">{cfg.label} Models</p>
                     <div className="flex flex-wrap gap-2">
-                      {cfg.pool.map((model: string) => {
-                        const cd = cooldowns.find((c) => c.model === model);
-                        return (
-                          <Badge key={model} variant={cd ? "destructive" : "secondary"} className="text-xs">
-                            <Zap className="w-3 h-3 mr-1" />
-                            {model}
-                            {cd && (
-                              <span className="ml-1 opacity-75">
-                                ({Math.ceil((cd.until - Date.now()) / 1000)}s)
-                              </span>
-                            )}
-                          </Badge>
-                        );
-                      })}
+                      {cfg.pool.map((model: string) => (
+                        <Badge key={model} variant="secondary" className="text-xs">
+                          <Zap className="w-3 h-3 mr-1" />
+                          {model}
+                        </Badge>
+                      ))}
                     </div>
                   </div>
                 ))}
-                {cooldowns.length === 0 && (
-                  <p className="text-sm text-muted-foreground">All models are available. No cooldowns active.</p>
+
+                {/* Recent Usage */}
+                {providerData?.usage && providerData.usage.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Recent Usage</p>
+                    <div className="max-h-[150px] overflow-y-auto space-y-1">
+                      {providerData.usage.slice(-10).map((u: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between text-xs p-2 bg-muted rounded">
+                          <span className="text-muted-foreground">{new Date(u.timestamp).toLocaleTimeString()}</span>
+                          <span>{u.role} → {u.model}</span>
+                          <span className="text-muted-foreground">{u.totalTokens} tokens</span>
+                          <span className="text-primary">${u.cost.toFixed(4)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </CardContent>

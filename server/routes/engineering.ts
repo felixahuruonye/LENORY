@@ -192,18 +192,18 @@ export function registerEngineeringRoutes(app: Express): void {
     }
   });
 
-  // ─── COOLDOWN STATUS ─────────────────────────────────────────────────────
-  app.get("/api/engineering/cooldowns", supabaseAuth, async (req: AuthenticatedRequest, res: Response) => {
+  // ─── PROVIDER STATS ──────────────────────────────────────────────────────
+  app.get("/api/engineering/provider", supabaseAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       if (!isAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const cooldowns = getCooldownStatus();
-      const config = getGroqModelConfig();
-      res.json({ cooldowns, config });
+      const balance = await getDeepSeekBalance();
+      const config = getDeepSeekModelConfig();
+      res.json({ balance, config, usage: getUsageHistory(), totalCost: getTotalCost() });
     } catch (err: any) {
-      logAdminError("/api/engineering/cooldowns", err);
-      res.status(500).json({ message: err.message || "Failed to fetch cooldowns" });
+      logAdminError("/api/engineering/provider", err);
+      res.status(500).json({ message: err.message || "Failed to fetch provider stats" });
     }
   });
 }

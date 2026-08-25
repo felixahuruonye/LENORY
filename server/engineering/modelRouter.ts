@@ -3,13 +3,15 @@
 
 import type { ModelRole, InvestigationResult, ReviewResult } from "./types";
 import {
-  callGroqModel,
-  runGroqInvestigation,
-  runGroqCoder,
-  runGroqReviewer,
-  getCooldownStatus,
-  getGroqModelConfig,
-} from "./groqRouter";
+  callDeepSeekModel,
+  runDeepSeekInvestigation,
+  runDeepSeekCoder,
+  runDeepSeekReviewer,
+  getDeepSeekBalance,
+  getDeepSeekModelConfig,
+  getUsageHistory,
+  getTotalCost,
+} from "./deepseekRouter";
 import { emitModel, emitLog } from "./streaming";
 
 interface ModelConfig {
@@ -119,20 +121,20 @@ export async function runInvestigation(
   recentErrors: string[],
   taskId?: string
 ): Promise<InvestigationResult> {
-  // Try Groq exclusively
-  if (process.env.GROQ_API_KEY) {
+  // Use DeepSeek exclusively
+  if (process.env.DEEPSEEK_API_KEY) {
     try {
-      return await runGroqInvestigation(request, repoContext, relatedFiles, recentErrors, (model) => {
+      return await runDeepSeekInvestigation(request, repoContext, relatedFiles, recentErrors, (model) => {
         if (taskId) emitModel(taskId, "investigator", model);
       });
     } catch (e: any) {
-      console.error("Groq investigation failed:", e.message);
-      if (taskId) emitError(taskId, `Groq investigation failed: ${e.message}`);
-      throw new Error(`Groq investigation failed: ${e.message}`);
+      console.error("DeepSeek investigation failed:", e.message);
+      if (taskId) emitError(taskId, `DeepSeek investigation failed: ${e.message}`);
+      throw new Error(`DeepSeek investigation failed: ${e.message}`);
     }
   }
 
-  // OpenRouter (only if no Groq key)
+  // OpenRouter (only if no DeepSeek key)
   const systemPrompt = `You are the LENORY Engineering Investigator. Your job is to deeply investigate engineering requests BEFORE any code is written.
 
 RULES:
@@ -199,16 +201,16 @@ export async function runCoder(
   filesToModify: { path: string; content: string }[],
   taskId: string
 ): Promise<string> {
-  // Try Groq exclusively
-  if (process.env.GROQ_API_KEY) {
+  // Use DeepSeek exclusively
+  if (process.env.DEEPSEEK_API_KEY) {
     try {
-      return await runGroqCoder(investigation, filesToModify, taskId, (model) => {
+      return await runDeepSeekCoder(investigation, filesToModify, taskId, (model) => {
         emitModel(taskId, "coder", model);
       });
     } catch (e: any) {
-      console.error("Groq coder failed:", e.message);
-      emitError(taskId, `Groq coder failed: ${e.message}`);
-      throw new Error(`Groq coder failed: ${e.message}`);
+      console.error("DeepSeek coder failed:", e.message);
+      emitError(taskId, `DeepSeek coder failed: ${e.message}`);
+      throw new Error(`DeepSeek coder failed: ${e.message}`);
     }
   }
 
@@ -268,16 +270,16 @@ export async function runReviewer(
   buildResult: string,
   taskId?: string
 ): Promise<ReviewResult> {
-  // Try Groq exclusively
-  if (process.env.GROQ_API_KEY) {
+  // Use DeepSeek exclusively
+  if (process.env.DEEPSEEK_API_KEY) {
     try {
-      return await runGroqReviewer(reviewerRole, originalRequest, investigation, diff, testResults, buildResult, (model) => {
+      return await runDeepSeekReviewer(reviewerRole, originalRequest, investigation, diff, testResults, buildResult, (model) => {
         if (taskId) emitModel(taskId, reviewerRole, model);
       });
     } catch (e: any) {
-      console.error(`Groq ${reviewerRole} failed:`, e.message);
-      if (taskId) emitError(taskId, `Groq ${reviewerRole} failed: ${e.message}`);
-      throw new Error(`Groq ${reviewerRole} failed: ${e.message}`);
+      console.error(`DeepSeek ${reviewerRole} failed:`, e.message);
+      if (taskId) emitError(taskId, `DeepSeek ${reviewerRole} failed: ${e.message}`);
+      throw new Error(`DeepSeek ${reviewerRole} failed: ${e.message}`);
     }
   }
 
@@ -346,4 +348,4 @@ Review independently and return ONLY the JSON response.`;
 
 // ─── Exports ─────────────────────────────────────────────────────────────
 
-export { getCooldownStatus, getGroqModelConfig };
+export { getDeepSeekBalance, getDeepSeekModelConfig, getUsageHistory, getTotalCost };
