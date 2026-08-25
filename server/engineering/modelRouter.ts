@@ -1,7 +1,16 @@
 // server/engineering/modelRouter.ts
-// Centralized OpenRouter model routing for engineering agent roles
+// Unified model routing: Groq primary, OpenRouter fallback
 
 import type { ModelRole, InvestigationResult, ReviewResult } from "./types";
+import {
+  callGroqModel,
+  runGroqInvestigation,
+  runGroqCoder,
+  runGroqReviewer,
+  getCooldownStatus,
+  getGroqModelConfig,
+} from "./groqRouter";
+import { emitModel, emitLog } from "./streaming";
 
 interface ModelConfig {
   model: string;
@@ -13,27 +22,28 @@ const DEFAULT_CONFIGS: Record<ModelRole, ModelConfig> = {
   investigator: {
     model: process.env.ENGINEERING_INVESTIGATOR_MODEL || "anthropic/claude-sonnet-4",
     temperature: 0.2,
-    maxTokens: 8000,
+    maxTokens: 4000,
   },
   coder: {
     model: process.env.ENGINEERING_CODER_MODEL || "deepseek/deepseek-chat-v3-0324",
     temperature: 0.1,
-    maxTokens: 16000,
+    maxTokens: 8000,
   },
   reviewer_1: {
     model: process.env.ENGINEERING_REVIEWER_1_MODEL || "anthropic/claude-sonnet-4",
     temperature: 0.2,
-    maxTokens: 8000,
+    maxTokens: 4000,
   },
   reviewer_2: {
-    model: process.env.ENGINEERING_REVIEWER_2_MODEL || "google/gemini-2.5-pro-preview-06-05",
+    model: process.env.ENGINEERING_REVIEWER_2_MODEL || "google/gemini-2.5-flash",
     temperature: 0.2,
-    maxTokens: 8000,
+    maxTokens: 4000,
   },
 };
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// ─── Unified call ──────────────────────────────────────────────────────────
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -43,69 +53,86 @@ interface ChatMessage {
 export async function callModel(
   role: ModelRole,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number } = {},
+  taskId?: string
 ): Promise<string> {
-  const config = DEFAULT_CONFIGS[role];
-  const model = config.model;
-  const temperature = options.temperature ?? config.temperature;
-  const maxTokens = options.maxTokens ?? config.maxTokens;
-
-  if (!OPENROUTER_API_KEY) {
-    throw new Error("OPENROUTER_API_KEY not configured");
-  }
-
-  const maxRetries = 3;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  // Try Groq first (exclusive if key is set)
+  if (process.env.GROQ_API_KEY) {
     try {
-      const response = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": process.env.VITE_APP_URL || "https://lenory-backend.onrender.com",
-          "X-Title": "LENORY Engineering Agent",
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-        }),
+      const result = await callGroqModel(role, messages, options, (model) => {
+        if (taskId) emitModel(taskId, role, model);
+        console.log(`[ENGINEERING] ${role} using Groq model: ${model}`);
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`OpenRouter HTTP ${response.status}: ${errText.slice(0, 200)}`);
+      return result;
+    } catch (groqErr: any) {
+      console.error(`[ENGINEERING] Groq failed for ${role}:`, groqErr.message);
+      if (taskId) {
+        emitError(taskId, `Groq error: ${groqErr.message}. Check GROQ_API_KEY is valid.`);
+        emitLog(taskId, `Groq failed for ${role}: ${groqErr.message}`, "error");
       }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error("Empty response from OpenRouter");
-      }
-      return content;
-    } catch (err: any) {
-      lastError = err;
-      console.error(`Model call attempt ${attempt}/${maxRetries} failed for ${role}:`, err.message);
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, attempt * 2000));
-      }
+      throw new Error(`Groq failed for ${role}: ${groqErr.message}. GROQ_API_KEY may be invalid or models are unavailable.`);
     }
   }
 
-  throw lastError || new Error(`All ${maxRetries} attempts failed for ${role}`);
+  // Only use OpenRouter if GROQ_API_KEY is NOT set
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("No AI provider available. Set GROQ_API_KEY or OPENROUTER_API_KEY.");
+  }
+
+  const config = DEFAULT_CONFIGS[role];
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://lenory.com",
+      "X-Title": "LENORY Engineering Agent",
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      temperature: options.temperature ?? config.temperature,
+      max_tokens: options.maxTokens ?? config.maxTokens,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Empty response from OpenRouter");
+
+  if (taskId) emitModel(taskId, role, config.model);
+  console.log(`[ENGINEERING] ${role} using OpenRouter model: ${config.model}`);
+  return content;
 }
 
-// ─── Investigator Prompts ──────────────────────────────────────────────────
+// ─── Investigator ──────────────────────────────────────────────────────────
 
 export async function runInvestigation(
   request: string,
   repoContext: string,
   relatedFiles: string[],
-  recentErrors: string[]
+  recentErrors: string[],
+  taskId?: string
 ): Promise<InvestigationResult> {
+  // Try Groq exclusively
+  if (process.env.GROQ_API_KEY) {
+    try {
+      return await runGroqInvestigation(request, repoContext, relatedFiles, recentErrors, (model) => {
+        if (taskId) emitModel(taskId, "investigator", model);
+      });
+    } catch (e: any) {
+      console.error("Groq investigation failed:", e.message);
+      if (taskId) emitError(taskId, `Groq investigation failed: ${e.message}`);
+      throw new Error(`Groq investigation failed: ${e.message}`);
+    }
+  }
+
+  // OpenRouter (only if no Groq key)
   const systemPrompt = `You are the LENORY Engineering Investigator. Your job is to deeply investigate engineering requests BEFORE any code is written.
 
 RULES:
@@ -144,7 +171,7 @@ Investigate thoroughly and return ONLY the JSON response.`;
   const response = await callModel("investigator", [
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
-  ]);
+  ], {}, taskId);
 
   try {
     const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -165,13 +192,26 @@ Investigate thoroughly and return ONLY the JSON response.`;
   }
 }
 
-// ─── Coder Prompts ─────────────────────────────────────────────────────────
+// ─── Coder ─────────────────────────────────────────────────────────────────
 
 export async function runCoder(
   investigation: InvestigationResult,
   filesToModify: { path: string; content: string }[],
   taskId: string
 ): Promise<string> {
+  // Try Groq exclusively
+  if (process.env.GROQ_API_KEY) {
+    try {
+      return await runGroqCoder(investigation, filesToModify, taskId, (model) => {
+        emitModel(taskId, "coder", model);
+      });
+    } catch (e: any) {
+      console.error("Groq coder failed:", e.message);
+      emitError(taskId, `Groq coder failed: ${e.message}`);
+      throw new Error(`Groq coder failed: ${e.message}`);
+    }
+  }
+
   const systemPrompt = `You are the LENORY Engineering Coder. You implement fixes based on investigation results.
 
 RULES:
@@ -214,10 +254,10 @@ Implement the fix. Return complete file contents for all modified files.`;
   return await callModel("coder", [
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
-  ], { maxTokens: 16000 });
+  ], { maxTokens: 16000 }, taskId);
 }
 
-// ─── Reviewer Prompts ───────────────────────────────────────────────────────
+// ─── Reviewer ─────────────────────────────────────────────────────────────
 
 export async function runReviewer(
   reviewerRole: "reviewer_1" | "reviewer_2",
@@ -225,8 +265,22 @@ export async function runReviewer(
   investigation: InvestigationResult,
   diff: string,
   testResults: string,
-  buildResult: string
+  buildResult: string,
+  taskId?: string
 ): Promise<ReviewResult> {
+  // Try Groq exclusively
+  if (process.env.GROQ_API_KEY) {
+    try {
+      return await runGroqReviewer(reviewerRole, originalRequest, investigation, diff, testResults, buildResult, (model) => {
+        if (taskId) emitModel(taskId, reviewerRole, model);
+      });
+    } catch (e: any) {
+      console.error(`Groq ${reviewerRole} failed:`, e.message);
+      if (taskId) emitError(taskId, `Groq ${reviewerRole} failed: ${e.message}`);
+      throw new Error(`Groq ${reviewerRole} failed: ${e.message}`);
+    }
+  }
+
   const systemPrompt = `You are an independent code reviewer for the LENORY Engineering Agent. You do NOT trust the coder's explanation — you verify independently.
 
 RULES:
@@ -266,14 +320,14 @@ Review independently and return ONLY the JSON response.`;
   const response = await callModel(reviewerRole, [
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
-  ]);
+  ], {}, taskId);
 
   try {
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     const jsonStr = jsonMatch ? jsonMatch[0] : response;
     const parsed = JSON.parse(jsonStr);
     return {
-      reviewerModel: DEFAULT_CONFIGS[reviewerRole].model,
+      reviewerModel: parsed.reviewerModel || "openrouter-model",
       verdict: parsed.verdict,
       feedback: parsed.feedback,
       securityConcerns: parsed.securityConcerns || [],
@@ -281,7 +335,7 @@ Review independently and return ONLY the JSON response.`;
     };
   } catch (e) {
     return {
-      reviewerModel: DEFAULT_CONFIGS[reviewerRole].model,
+      reviewerModel: "openrouter-model",
       verdict: "request_changes",
       feedback: `Parse error: ${response.slice(0, 500)}`,
       securityConcerns: ["Could not parse review response"],
@@ -290,11 +344,6 @@ Review independently and return ONLY the JSON response.`;
   }
 }
 
-export function getModelConfig(): Record<ModelRole, { model: string; label: string }> {
-  return {
-    investigator: { model: DEFAULT_CONFIGS.investigator.model, label: "Investigator" },
-    coder: { model: DEFAULT_CONFIGS.coder.model, label: "Coder" },
-    reviewer_1: { model: DEFAULT_CONFIGS.reviewer_1.model, label: "Reviewer 1" },
-    reviewer_2: { model: DEFAULT_CONFIGS.reviewer_2.model, label: "Reviewer 2" },
-  };
-}
+// ─── Exports ─────────────────────────────────────────────────────────────
+
+export { getCooldownStatus, getGroqModelConfig };

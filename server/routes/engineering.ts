@@ -9,6 +9,7 @@ import {
   getAllTasks,
   getTask,
   getTaskEvents,
+  deleteTask,
 } from "../engineering";
 import { logAdminError } from "../adminTools";
 
