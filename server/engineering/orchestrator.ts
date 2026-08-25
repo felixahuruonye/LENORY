@@ -10,7 +10,7 @@ import {
   getAllTasks,
 } from "./stateMachine";
 import { runInvestigation, runCoder, runReviewer } from "./modelRouter";
-import { createSandbox, destroySandbox, getSandboxGitDiff, commitSandboxChanges } from "./sandbox";
+import { createSandbox, destroySandbox, getSandboxGitDiff, commitSandboxChanges, readSandboxFile, writeSandboxFile } from "./sandbox";
 import { executeTool } from "./tools";
 import { getRecentErrors } from "../adminTools";
 

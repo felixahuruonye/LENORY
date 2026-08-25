@@ -5056,6 +5056,10 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     }
   });
 
+  // ─── REGISTER ENGINEERING & COMPLAINTS ROUTES ──────────────────────────────
+  registerEngineeringRoutes(app);
+  registerComplaintsRoutes(app);
+
   // ─── RETURN HTTP SERVER ────────────────────────────────────────────────────
 
   return httpServer;

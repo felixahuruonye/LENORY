@@ -29,6 +29,7 @@ export async function createTask(
 ): Promise<EngineeringTask> {
   if (!supabaseDb) throw new Error("Supabase not available");
 
+  const taskId = generateTaskId();
   const task: Omit<EngineeringTask, "id"> = {
     request,
     status: "received",
@@ -56,7 +57,7 @@ export async function createTask(
 
   const { data, error } = await supabaseDb
     .from(TASKS_TABLE)
-    .insert(task)
+    .insert({ ...task, id: taskId })
     .select()
     .single();
 
