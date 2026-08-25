@@ -14,7 +14,7 @@ import {
   Wrench, Loader2, Send, CheckCircle2, XCircle, AlertTriangle,
   ChevronRight, Clock, GitBranch, GitPullRequest, Eye,
   Play, RotateCcw, Brain, Code, Shield, Activity, ArrowLeft,
-  Radio, Zap, Thermometer, Server
+  Radio, Zap, Thermometer, Server, Trash2
 } from "lucide-react";
 import type { EngineeringTask, EngineeringTaskEvent } from "../../../shared/engineeringSchema";
 
@@ -153,6 +153,22 @@ export default function EngineeringAgent() {
     },
     onError: (err: any) => {
       toast({ title: "Failed to create task", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      const res = await apiRequest("DELETE", `/api/engineering/tasks/${taskId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Task deleted", description: "The task has been removed." });
+      setShowDetail(false);
+      setSelectedTask(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/engineering/tasks"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to delete task", description: err.message, variant: "destructive" });
     },
   });
 
@@ -321,7 +337,7 @@ export default function EngineeringAgent() {
                   <div
                     key={task.id}
                     onClick={() => openDetail(task)}
-                    className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 cursor-pointer transition-colors"
+                    className="group flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 cursor-pointer transition-colors"
                   >
                     <div className={`w-3 h-3 rounded-full ${STATUS_COLORS[task.status] || "bg-gray-500"}`} />
                     <div className="flex-1 min-w-0">
@@ -334,6 +350,19 @@ export default function EngineeringAgent() {
                         <span>{new Date(task.createdAt).toLocaleString()}</span>
                       </div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm("Delete this task?")) {
+                          deleteTaskMutation.mutate(task.id);
+                        }
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4 text-red-400" />
+                    </Button>
                     <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                   </div>
                 ))}
@@ -495,6 +524,22 @@ export default function EngineeringAgent() {
                     ))}
                   </div>
                 )}
+
+                {/* Delete Button */}
+                <div className="pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-red-400 border-red-400/30 hover:bg-red-950/20"
+                    onClick={() => {
+                      if (confirm("Delete this task?")) {
+                        deleteTaskMutation.mutate(selectedTask.id);
+                      }
+                    }}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" /> Delete Task
+                  </Button>
+                </div>
 
                 {/* Approval Controls */}
                 {selectedTask.status === "ready_for_approval" && (

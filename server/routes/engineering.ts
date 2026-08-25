@@ -134,4 +134,75 @@ export function registerEngineeringRoutes(app: Express): void {
       res.status(500).json({ message: err.message || "Failed to fetch model config" });
     }
   });
+
+  // ─── SSE STREAMING ───────────────────────────────────────────────────────
+  app.get("/api/engineering/tasks/:taskId/stream", supabaseAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const { taskId } = req.params;
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    const sendEvent = (event: any) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    sendEvent({ type: "connected", taskId, timestamp: new Date().toISOString() });
+
+    const listener = (event: any) => {
+      if (event.taskId === taskId) {
+        sendEvent(event);
+      }
+    };
+
+    taskStream.on("all", listener);
+
+    const heartbeat = setInterval(() => {
+      sendEvent({ type: "heartbeat", taskId, timestamp: new Date().toISOString() });
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      taskStream.off("all", listener);
+      res.end();
+    });
+
+    req.on("error", () => {
+      clearInterval(heartbeat);
+      taskStream.off("all", listener);
+      res.end();
+    });
+  });
+
+  // ─── DELETE TASK ─────────────────────────────────────────────────────────
+  app.delete("/api/engineering/tasks/:taskId", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!isAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+
+      const { taskId } = req.params;
+      await deleteTask(taskId);
+      res.json({ success: true, message: "Task deleted" });
+    } catch (err: any) {
+      logAdminError("DELETE /api/engineering/tasks/:taskId", err);
+      res.status(500).json({ message: err.message || "Failed to delete task" });
+    }
+  });
+
+  // ─── COOLDOWN STATUS ─────────────────────────────────────────────────────
+  app.get("/api/engineering/cooldowns", supabaseAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!isAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const cooldowns = getCooldownStatus();
+      const config = getGroqModelConfig();
+      res.json({ cooldowns, config });
+    } catch (err: any) {
+      logAdminError("/api/engineering/cooldowns", err);
+      res.status(500).json({ message: err.message || "Failed to fetch cooldowns" });
+    }
+  });
 }

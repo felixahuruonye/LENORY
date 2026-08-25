@@ -240,6 +240,28 @@ export async function getAllTasks(limit = 50): Promise<EngineeringTask[]> {
   return (data || []).map(taskFromDb);
 }
 
+export async function deleteTask(taskId: string): Promise<void> {
+  if (!supabaseDb) throw new Error("Supabase not available");
+
+  // Delete events first (foreign key constraint)
+  const { error: eventsError } = await supabaseDb
+    .from(EVENTS_TABLE)
+    .delete()
+    .eq("task_id", taskId);
+
+  if (eventsError) {
+    console.error("Failed to delete task events:", eventsError.message);
+  }
+
+  // Delete task
+  const { error } = await supabaseDb
+    .from(TASKS_TABLE)
+    .delete()
+    .eq("id", taskId);
+
+  if (error) throw new Error(`Failed to delete task: ${error.message}`);
+}
+
 export async function getTasksByStatus(status: EngineeringTaskStatus): Promise<EngineeringTask[]> {
   if (!supabaseDb) return [];
   const { data, error } = await supabaseDb
