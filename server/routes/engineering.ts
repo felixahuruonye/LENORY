@@ -15,7 +15,7 @@ import { logAdminError } from "../adminTools";
 const ADMIN_EMAIL = "felixahuruonye@gmail.com";
 
 function isAdmin(req: AuthenticatedRequest): boolean {
-  return req.user?.email === ADMIN_EMAIL;
+  return req.userEmail === ADMIN_EMAIL;
 }
 
 export function registerEngineeringRoutes(app: Express): void {
