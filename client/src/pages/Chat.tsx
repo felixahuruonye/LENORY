@@ -86,6 +86,7 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   searching: { label: "Searching the web...", icon: Search },
   writing: { label: "Writing response...", icon: PenLine },
   reading_file: { label: "Reading your file...", icon: Brain },
+  verifying: { label: "Double-checking the answer...", icon: Brain },
 };
 
 function TypingIndicator({ action }: { action?: string | null }) {

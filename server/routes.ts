@@ -92,6 +92,63 @@ Provide a thorough, step-by-step conceptual breakdown, theoretical background, a
 - **Math & engineering**: Given parameters → standard formula → step-by-step substitution → final answer with units, boxed.
 - **Theory/essay questions**: clear headings, bulleted points, bolded keywords examiners look for; answer the command word directly ("State", "Define", "Differentiate", "Outline").`;
 
+// ── TWO-PASS VERIFICATION SYSTEM ─────────────────────────────────────────────
+// For answer-sensitive questions (math, accounting, statistics, physics,
+// chemistry, engineering, programming), the model solves once, then
+// independently re-solves and cross-checks its own answer BEFORE anything
+// reaches the user — catching exactly the class of error where a model is
+// individually confident but simply wrong (e.g. Pass 1 says ₦5,680, an
+// independent Pass 2 attempt says ₦4,500 — that disagreement is the signal
+// to recalculate rather than trust either blindly). Deliberately does NOT
+// fire for ordinary conversation/simple requests, to avoid doubling latency
+// and cost on things like "summarize this paragraph."
+//
+// Heuristic-based (a keyword/pattern check, not an extra LLM call to decide)
+// — cheap enough to run on every message with no added latency of its own.
+function isAnswerSensitiveQuestion(text: string): boolean {
+  const t = text.toLowerCase();
+  const subjectHit = /\b(calculate|compute|solve|equation|formula|derivative|integral|algebra|geometry|trigonometry|calculus|statistics|probability|mean|median|standard deviation|regression|accounting|balance sheet|depreciation|interest rate|npv|irr|physics|velocity|acceleration|force|newton|thermodynamics|chemistry|mole|molarity|stoichiometry|reaction|ph\b|engineering|circuit|voltage|current|resistance|stress|strain|linear programming|optimi[sz]ation|matrix|vector|algorithm|time complexity|big o|code output|what is the output|debug this|trace through)\b/.test(t);
+  const numberCount = (t.match(/\d+(\.\d+)?/g) || []).length;
+  const hasOperators = /[=+\-*/^%]|\bx\^|\bsqrt\b/.test(t);
+  const numericHit = numberCount >= 2 && hasOperators;
+  return subjectHit || numericHit;
+}
+
+function buildVerificationPrompt(originalQuestion: string, pass1Answer: string): { role: "system" | "user"; content: string }[] {
+  return [
+    {
+      role: "system",
+      content: `You are now acting as a rigorous mathematical/technical verifier. Recheck the original question and the proposed solution from the beginning — do NOT assume the proposed answer is correct. Independently re-solve the problem yourself first, then compare your own result against the proposed one.
+
+Compare every numerical value, equation, constraint, sign, unit, substitution, calculation step, and final answer against the original question. Recalculate important numerical steps independently rather than just reading through them.
+
+For optimization/linear programming problems specifically, verify: decision variables, objective function, every constraint, the feasible region, candidate corner points, the objective value at each relevant corner point, the optimal solution, whether variables must be integers, and whether a graphical solution is specifically required.
+
+Respond in EXACTLY this format, nothing else before or after:
+VERDICT: CORRECT / CORRECTED / UNCERTAIN
+CORRECTIONS: [list any errors found, or "none"]
+VERIFIED SOLUTION: [the correct, complete solution — this is what the user will see if CORRECTED or CORRECT]
+VERIFICATION NOTES: [one brief sentence on what was independently checked]`,
+    },
+    {
+      role: "user",
+      content: `ORIGINAL QUESTION:\n${originalQuestion}\n\nPROPOSED SOLUTION TO VERIFY:\n${pass1Answer}`,
+    },
+  ];
+}
+
+function parseVerificationResponse(raw: string): { verdict: "CORRECT" | "CORRECTED" | "UNCERTAIN"; verifiedSolution: string; notes: string } | null {
+  const verdictMatch = raw.match(/VERDICT:\s*(CORRECT|CORRECTED|UNCERTAIN)/i);
+  const solutionMatch = raw.match(/VERIFIED SOLUTION:\s*([\s\S]*?)(?:\nVERIFICATION NOTES:|$)/i);
+  const notesMatch = raw.match(/VERIFICATION NOTES:\s*([\s\S]*)$/i);
+  if (!verdictMatch || !solutionMatch) return null;
+  return {
+    verdict: verdictMatch[1].toUpperCase() as "CORRECT" | "CORRECTED" | "UNCERTAIN",
+    verifiedSolution: solutionMatch[1].trim(),
+    notes: notesMatch ? notesMatch[1].trim() : "",
+  };
+}
+
 // ─── NEW: GOOGLE OAUTH CONFIG ────────────────────────────────────
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -616,15 +673,62 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
 
       let aiResponse: string;
       let modelUsedForLog = "gemini";
+      let verified = false;
       sendStatus("thinking", 5);
       if (overrideResponse) {
         aiResponse = overrideResponse;
       } else {
         try {
-          const result = await chatCompletionWithFailover(messages as any, isAdvanced ? "ultra" : "fast");
+          const tier = isAdvanced ? "ultra" : "fast";
+          const result = await chatCompletionWithFailover(messages as any, tier);
           aiResponse = result.text;
           modelUsedForLog = result.modelUsed;
           if (!aiResponse || aiResponse.trim() === "") aiResponse = "I received your message but had trouble formulating a response. Please try again.";
+
+          // PASS 2 — independent verification, same model tier the user
+          // selected, only for answer-sensitive questions (math, accounting,
+          // stats, physics, chemistry, engineering, programming/code) so
+          // ordinary conversation never pays the extra latency/cost.
+          if (isAnswerSensitiveQuestion(content)) {
+            sendStatus("verifying", 6);
+            try {
+              const verificationMessages = buildVerificationPrompt(content, aiResponse);
+              const verifyResult = await chatCompletionWithFailover(verificationMessages as any, tier);
+              const parsed = parseVerificationResponse(verifyResult.text);
+              if (parsed) {
+                if (parsed.verdict === "CORRECTED") {
+                  aiResponse = parsed.verifiedSolution;
+                } else if (parsed.verdict === "UNCERTAIN") {
+                  aiResponse = `${parsed.verifiedSolution}\n\n*Note: part of this couldn't be fully verified independently — ${parsed.notes || "double-check the flagged step yourself before relying on it."}*`;
+                }
+                // CORRECT: keep Pass 1's answer as-is (already right, per Pass 2's independent recheck)
+                verified = true;
+              }
+              // If parsing fails (malformed response), silently keep Pass 1's
+              // answer rather than show a broken verification artifact —
+              // an unparseable Pass 2 is treated as "couldn't verify," not
+              // as a reason to block the response the user is waiting for.
+            } catch (verifyError) {
+              // Retry once on a transient failure per the spec — never
+              // show an unverified math answer without at least one retry
+              // when verification itself is what failed (not the original
+              // solve).
+              try {
+                sendStatus("verifying", 4);
+                const verificationMessages = buildVerificationPrompt(content, aiResponse);
+                const retryResult = await chatCompletionWithFailover(verificationMessages as any, tier);
+                const parsed = parseVerificationResponse(retryResult.text);
+                if (parsed) {
+                  if (parsed.verdict === "CORRECTED") aiResponse = parsed.verifiedSolution;
+                  verified = true;
+                }
+              } catch {
+                // Both verification attempts failed — proceed with Pass 1's
+                // answer unverified rather than block the user entirely;
+                // not labeled as verified since it genuinely isn't.
+              }
+            }
+          }
         } catch (aiError) {
           aiResponse = "I'm having trouble connecting to my AI services right now. Please try again in a moment.";
         }
