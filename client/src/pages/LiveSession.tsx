@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   Pencil,
   Save,
+  Upload,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -141,6 +142,7 @@ export default function LiveSession() {
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load history on mount
   useEffect(() => {
@@ -219,6 +221,73 @@ export default function LiveSession() {
     setIsRecording(false);
     setIsPaused(false);
   }, []);
+
+  const handleUploadRecording = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      // Accept common audio formats
+      const allowed = [
+        "audio/",
+        "video/webm",
+        "video/mp4",
+        "application/ogg",
+      ];
+      const isAudio =
+        allowed.some((p) => file.type.startsWith(p)) ||
+        /\.(webm|mp3|wav|m4a|ogg|aac|flac|mp4|mpeg)$/i.test(file.name);
+
+      if (!isAudio) {
+        toast({
+          title: "Invalid file",
+          description: "Please upload an audio recording (mp3, wav, webm, m4a, etc.).",
+          variant: "destructive",
+        });
+        e.target.value = "";
+        return;
+      }
+
+      // Clear any active recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      setIsRecording(false);
+      setIsPaused(false);
+
+      setTranscript("");
+      setSegments([]);
+      setFormattedNotes("");
+      setDetectedLanguage("");
+
+      const blob = file.slice(0, file.size, file.type || "audio/webm");
+      setAudioBlobs([blob]);
+      const url = URL.createObjectURL(blob);
+      setAudioUrl(url);
+
+      // Try to read duration from the audio element
+      const audio = new Audio();
+      audio.preload = "metadata";
+      audio.src = url;
+      audio.onloadedmetadata = () => {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          setRecordingDuration(Math.round(audio.duration));
+        } else {
+          setRecordingDuration(0);
+        }
+      };
+      audio.onerror = () => setRecordingDuration(0);
+
+      toast({
+        title: "Recording uploaded",
+        description: `${file.name} is ready to transcribe.`,
+      });
+      e.target.value = "";
+    },
+    [toast]
+  );
 
   // Split blob into chunks ≤ 24 MB
   const splitBlob = (blob: Blob, maxBytes = 24 * 1024 * 1024): Blob[] => {
@@ -527,13 +596,35 @@ export default function LiveSession() {
                   )}
                 </div>
 
+                {/* Hidden file input for uploading a recording */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.aac,.flac,.mpeg"
+                  className="hidden"
+                  onChange={handleUploadRecording}
+                  data-testid="input-upload-recording"
+                />
+
                 {/* Controls */}
                 <div className="flex items-center gap-3 flex-wrap justify-center">
                   {!isRecording && !audioUrl && (
-                    <Button onClick={startRecording} size="lg" className="gap-2 px-8" data-testid="button-start-recording">
-                      <Mic className="w-5 h-5" />
-                      Start Recording
-                    </Button>
+                    <>
+                      <Button onClick={startRecording} size="lg" className="gap-2 px-8" data-testid="button-start-recording">
+                        <Mic className="w-5 h-5" />
+                        Start Recording
+                      </Button>
+                      <Button
+                        onClick={() => fileInputRef.current?.click()}
+                        variant="outline"
+                        size="lg"
+                        className="gap-2"
+                        data-testid="button-upload-recording"
+                      >
+                        <Upload className="w-5 h-5" />
+                        Upload Recording
+                      </Button>
+                    </>
                   )}
 
                   {isRecording && (
@@ -571,6 +662,17 @@ export default function LiveSession() {
                       >
                         <Mic className="w-4 h-4" />
                         Record Again
+                      </Button>
+
+                      <Button
+                        onClick={() => fileInputRef.current?.click()}
+                        variant="outline"
+                        size="lg"
+                        className="gap-2"
+                        data-testid="button-upload-recording-again"
+                      >
+                        <Upload className="w-4 h-4" />
+                        Upload File
                       </Button>
                     </>
                   )}
