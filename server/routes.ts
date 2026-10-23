@@ -9,7 +9,8 @@ import path from "path";
 // @ts-ignore - multer types not available but package is installed
 import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions, getActiveUsers, getPlatformHealth, getTotalPlatformCredits, getUserActivity, getUserCohorts, getUserCreditHistory, getUserCredits } from "./adminTools";
-import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits } from "./creditsStore";
+import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits, getFeatureCost, getAllFeatureCosts, setFeatureCost, DEFAULT_FEATURE_COSTS } from "./creditsStore";
+import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueue";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -1294,6 +1295,72 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     } catch (error) {
       console.error("Error saving tier config:", error);
       res.status(500).json({ message: "Failed to save tier config" });
+    }
+  });
+
+  // ─── FEATURE CREDIT COSTS (admin-configurable per-feature deductions) ────
+  // Optional Supabase table (create once in SQL editor):
+  //   create table if not exists feature_costs (
+  //     feature text primary key,
+  //     cost integer not null,
+  //     updated_at timestamptz not null default now()
+  //   );
+  app.get('/api/admin/feature-costs', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      const costs = await getAllFeatureCosts();
+      res.json({ costs, defaults: DEFAULT_FEATURE_COSTS });
+    } catch (error) {
+      console.error("Error fetching feature costs:", error);
+      res.status(500).json({ message: "Failed to fetch feature costs" });
+    }
+  });
+
+  app.put('/api/admin/feature-costs/:feature', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      const feature = req.params.feature;
+      const cost = Number(req.body.cost);
+      if (!feature || !Number.isFinite(cost) || cost < 0) {
+        return res.status(400).json({ message: "feature and non-negative cost required" });
+      }
+      const ok = await setFeatureCost(feature, cost);
+      if (!ok) {
+        return res.status(500).json({
+          message: "Failed to save — ensure feature_costs table exists in Supabase (see server comment)",
+        });
+      }
+      const costs = await getAllFeatureCosts();
+      res.json({ success: true, costs });
+    } catch (error) {
+      console.error("Error saving feature cost:", error);
+      res.status(500).json({ message: "Failed to save feature cost" });
+    }
+  });
+
+  app.get('/api/admin/job-queue', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      res.json(getQueueStats());
+    } catch (error) {
+      res.status(500).json({ message: "Failed to read job queue" });
+    }
+  });
+
+  app.get('/api/jobs/:id', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const job = getJob(req.params.id);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.userId !== req.userId) {
+        const requester = await storage.getUser(req.userId);
+        if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch job" });
     }
   });
 
@@ -4435,7 +4502,8 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      const gate = await checkCreditGate(userId, user?.email, tier, 1, "Voice transcription");
+      const gateCost = await getFeatureCost("voice_transcription_gate");
+      const gate = await checkCreditGate(userId, user?.email, tier, gateCost, "Voice transcription");
       if (!gate.allowed) {
         return res.status(402).json({ error: gate.error, message: gate.message, balance: gate.balance });
       }
@@ -4462,9 +4530,11 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       }
       const data = groqResData as any;
       if (user?.email !== REAL_ADMIN_EMAIL && data.duration) {
-        const minutes = Math.ceil(data.duration / 60 / 5);
+        const per5 = await getFeatureCost("voice_transcription_per_5min");
+        const units = Math.max(1, Math.ceil(data.duration / 60 / 5));
+        const charge = units * per5;
         const credits = await getOrCreateCredits(userId, tier);
-        await deductCredits(userId, Math.min(minutes, credits.balance));
+        await deductCredits(userId, Math.min(charge, credits.balance));
       }
       res.json({
         text: data.text || '',
@@ -4499,11 +4569,12 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       } = req.body;
       if (!transcript) return res.status(400).json({ error: 'transcript required' });
 
-      // Credit gate: format notes costs 3 credits (admin exempt)
+      // Credit gate: format notes cost is admin-configurable (default 3)
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
-      const gate = await checkCreditGate(userId, user?.email, tier, 3, "Format notes");
+      const formatCost = await getFeatureCost("format_notes");
+      const gate = await checkCreditGate(userId, user?.email, tier, formatCost, "Format notes");
       if (!gate.allowed) {
         return res.status(402).json({ error: gate.error, message: gate.message, balance: gate.balance });
       }
@@ -4560,7 +4631,7 @@ Omit sections that do not apply. Prefer clarity over length.`;
       const notes = await chatWithGemini([{ role: 'user', content: prompt }]);
 
       if (user?.email !== REAL_ADMIN_EMAIL) {
-        await deductCredits(userId, 3);
+        await deductCredits(userId, formatCost);
       }
 
       res.json({ notes: notes || transcript });

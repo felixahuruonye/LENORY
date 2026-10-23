@@ -422,3 +422,85 @@ export async function addCredits(userId: string, amount: number, tier: string = 
     return null;
   }
 }
+// ─── Feature credit costs (admin-configurable) ─────────────────────────────
+// Defaults used when feature_costs table is missing or a key is absent.
+// Admin Dashboard → Credit Usage can override these without code deploys.
+export const DEFAULT_FEATURE_COSTS: Record<string, number> = {
+  "voice_transcription_gate": 1,       // min credits to start a transcription
+  "voice_transcription_per_5min": 1,   // per 5 minutes of audio
+  "format_notes": 3,                   // Gemini structured notebook
+  "chat_fast": 1,
+  "chat_standard": 2,
+  "chat_advanced": 5,
+  "image_generate": 5,
+  "image_edit": 6,
+  "live_ai_voice_gate": 20,
+  "kb_folder_chat": 2,
+  "kb_quiz": 3,
+  "kb_flashcards": 2,
+  "video_summarize": 5,
+};
+
+let featureCostCache: Record<string, number> | null = null;
+let featureCostCacheAt = 0;
+const FEATURE_COST_CACHE_MS = 30_000;
+
+async function loadFeatureCostsFromDb(): Promise<Record<string, number> | null> {
+  if (!supabaseAdmin) return null;
+  try {
+    const { data, error } = await supabaseAdmin.from("feature_costs").select("*");
+    if (error) {
+      // Table may not exist yet — silent fallback
+      return null;
+    }
+    if (!data || data.length === 0) return null;
+    const merged: Record<string, number> = {};
+    for (const row of data as any[]) {
+      if (!row?.feature) continue;
+      const cost = Number(row.cost);
+      if (!Number.isFinite(cost) || cost < 0) continue;
+      merged[row.feature] = cost;
+    }
+    return Object.keys(merged).length > 0 ? merged : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getFeatureCost(feature: string): Promise<number> {
+  const now = Date.now();
+  if (!featureCostCache || now - featureCostCacheAt > FEATURE_COST_CACHE_MS) {
+    featureCostCache = await loadFeatureCostsFromDb();
+    featureCostCacheAt = now;
+  }
+  if (featureCostCache && feature in featureCostCache) return featureCostCache[feature];
+  return DEFAULT_FEATURE_COSTS[feature] ?? 1;
+}
+
+export async function getAllFeatureCosts(): Promise<Record<string, number>> {
+  const now = Date.now();
+  if (!featureCostCache || now - featureCostCacheAt > FEATURE_COST_CACHE_MS) {
+    featureCostCache = await loadFeatureCostsFromDb();
+    featureCostCacheAt = now;
+  }
+  return { ...DEFAULT_FEATURE_COSTS, ...(featureCostCache || {}) };
+}
+
+export async function setFeatureCost(feature: string, cost: number): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+  if (!Number.isFinite(cost) || cost < 0) return false;
+  try {
+    const { error } = await supabaseAdmin
+      .from("feature_costs")
+      .upsert({ feature, cost, updated_at: new Date().toISOString() });
+    if (error) {
+      logSupabaseError("upsert feature_costs", error);
+      return false;
+    }
+    featureCostCache = null;
+    return true;
+  } catch (e) {
+    console.error("[creditsStore] setFeatureCost threw:", e);
+    return false;
+  }
+}

@@ -42,6 +42,7 @@ export default function AdminDashboard() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [tierConfigDraft, setTierConfigDraft] = useState<Record<string, { dailyAdd: string; maxBalance: string }>>({});
+  const [featureCostDraft, setFeatureCostDraft] = useState<Record<string, string>>({});
 
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
@@ -148,6 +149,46 @@ export default function AdminDashboard() {
   });
 
   // ─── TIER CONFIG (daily/monthly credit amounts, DB-backed) ────────────────
+  const { data: featureCostsData, isLoading: featureCostsLoading, refetch: refetchFeatureCosts } = useQuery({
+    queryKey: ["/api/admin/feature-costs"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/feature-costs");
+      return res.json();
+    },
+    enabled: !!user,
+  });
+
+  useEffect(() => {
+    if (!featureCostsData?.costs) return;
+    const draft: Record<string, string> = {};
+    for (const [k, v] of Object.entries(featureCostsData.costs as Record<string, number>)) {
+      draft[k] = String(v);
+    }
+    setFeatureCostDraft(draft);
+  }, [featureCostsData]);
+
+  const saveFeatureCostMutation = useMutation({
+    mutationFn: async ({ feature, cost }: { feature: string; cost: number }) => {
+      const res = await apiRequest("PUT", `/api/admin/feature-costs/${feature}`, { cost });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Feature cost saved" });
+      refetchFeatureCosts();
+    },
+    onError: (e: any) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+  });
+
+  const { data: jobQueueStats } = useQuery({
+    queryKey: ["/api/admin/job-queue"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/job-queue");
+      return res.json();
+    },
+    enabled: !!user,
+    refetchInterval: 15000,
+  });
+
   const { data: tierConfigData, isLoading: tierConfigLoading, refetch: refetchTierConfig } = useQuery({
     queryKey: ["/api/admin/tier-config"],
     queryFn: async () => {
@@ -787,6 +828,60 @@ export default function AdminDashboard() {
                         </Button>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Credit Usage — Feature Costs</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Set how many credits each feature deducts. Values load from defaults; persist to Supabase table{" "}
+                  <code className="text-xs">feature_costs</code> when available (see server comments for SQL).
+                </p>
+                {featureCostsLoading && !Object.keys(featureCostDraft).length ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading feature costs...
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {Object.keys(featureCostDraft).sort().map((feature) => (
+                      <div key={feature} className="border rounded-lg p-3 space-y-2">
+                        <p className="text-xs font-mono font-medium break-all">{feature}</p>
+                        <div className="flex gap-2">
+                          <Input
+                            type="number"
+                            min={0}
+                            value={featureCostDraft[feature] ?? ""}
+                            onChange={(e) =>
+                              setFeatureCostDraft((prev) => ({ ...prev, [feature]: e.target.value }))
+                            }
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              saveFeatureCostMutation.mutate({
+                                feature,
+                                cost: Number(featureCostDraft[feature]),
+                              })
+                            }
+                            disabled={saveFeatureCostMutation.isPending}
+                          >
+                            Save
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {jobQueueStats && (
+                  <div className="rounded-lg border p-3 text-sm text-muted-foreground">
+                    Job queue: {jobQueueStats.queued ?? 0} queued · {jobQueueStats.running ?? 0} running ·{" "}
+                    {jobQueueStats.done ?? 0} done · {jobQueueStats.failed ?? 0} failed (max concurrent{" "}
+                    {jobQueueStats.maxConcurrent ?? 2})
                   </div>
                 )}
               </CardContent>

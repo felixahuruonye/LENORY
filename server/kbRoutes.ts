@@ -11,6 +11,10 @@ const kbUpload = multer({ storage: multer.memoryStorage() });
 
 const REAL_ADMIN_EMAIL = "felixahuruonye@gmail.com";
 
+// Write My Note / Knowledge Base hard storage caps (enforced server-side)
+const FOLDER_STORAGE_LIMIT = 100 * 1024 * 1024; // 100 MB per notebook/folder
+const TOPIC_FILE_LIMIT = 50 * 1024 * 1024; // 50 MB per topic/file
+
 // Mirrors the client's UPLOAD_BATCH_LIMITS in Notes.tsx — that check is
 // client-side only (a user can bypass the UI and call this endpoint
 // directly), so it's re-enforced here. The endpoint itself only ever
@@ -20,6 +24,18 @@ const REAL_ADMIN_EMAIL = "felixahuruonye@gmail.com";
 const UPLOAD_BATCH_LIMITS: Record<string, number> = { free: 1, pro: 5, premium: 15 };
 const UPLOAD_WINDOW_MS = 60_000;
 const recentUploads = new Map<string, number[]>();
+
+async function assertFolderStorageRoom(folderId: string, incomingBytes: number): Promise<{ ok: true } | { ok: false; message: string; used: number }> {
+  const files = await storage.getKBFiles(folderId);
+  const used = (files || []).reduce((sum: number, f: any) => sum + (Number(f.file_size ?? f.size_bytes ?? f.sizeBytes ?? 0) || 0), 0);
+  if (incomingBytes > TOPIC_FILE_LIMIT) {
+    return { ok: false, message: `Each topic/file is limited to ${Math.round(TOPIC_FILE_LIMIT / (1024 * 1024))} MB. Delete content or upgrade your plan.`, used };
+  }
+  if (used + incomingBytes > FOLDER_STORAGE_LIMIT) {
+    return { ok: false, message: `Notebook storage full (${Math.round(used / (1024 * 1024))} MB / 100 MB). Delete topics or upgrade your plan.`, used };
+  }
+  return { ok: true };
+}
 
 function checkUploadRateLimit(userId: string, tier: string): { allowed: boolean; limit: number } {
   const limit = UPLOAD_BATCH_LIMITS[tier] ?? UPLOAD_BATCH_LIMITS.free;
@@ -179,6 +195,10 @@ export function registerKbRoutes(app: Express) {
         }
       }
       const { originalname, mimetype, buffer } = req.file;
+      const room = await assertFolderStorageRoom(req.params.id, buffer.length);
+      if (!room.ok) {
+        return res.status(413).json({ message: room.message, error: "STORAGE_FULL", used: room.used, folderLimit: FOLDER_STORAGE_LIMIT, fileLimit: TOPIC_FILE_LIMIT });
+      }
       let extractedText = "";
       let fileType = "upload";
       if (mimetype.startsWith("text/") || originalname.endsWith(".txt") || originalname.endsWith(".md")) {
@@ -230,9 +250,14 @@ export function registerKbRoutes(app: Express) {
         const resp = await fetch(url);
         extractedText = (await resp.text()).substring(0, 20000);
       } catch {}
+      const size = Buffer.byteLength(extractedText || "", "utf8");
+      const room = await assertFolderStorageRoom(req.params.id, size);
+      if (!room.ok) {
+        return res.status(413).json({ message: room.message, error: "STORAGE_FULL", used: room.used });
+      }
       const file = await storage.createKBFile({
         folder_id: req.params.id, user_id: req.userId, name: name || url,
-        file_type: "url", full_text_url: url, file_size: extractedText.length, extracted_text: extractedText,
+        file_type: "url", full_text_url: url, file_size: size, extracted_text: extractedText,
       });
       res.status(201).json(file);
     } catch (error) { res.status(500).json({ message: "Failed to add file from URL" }); }
@@ -241,9 +266,14 @@ export function registerKbRoutes(app: Express) {
     try {
       const { name, content } = req.body;
       if (!name || !content) return res.status(400).json({ message: "Name and content are required" });
+      const size = typeof content === "string" ? Buffer.byteLength(content, "utf8") : 0;
+      const room = await assertFolderStorageRoom(req.params.id, size);
+      if (!room.ok) {
+        return res.status(413).json({ message: room.message, error: "STORAGE_FULL", used: room.used, folderLimit: FOLDER_STORAGE_LIMIT, fileLimit: TOPIC_FILE_LIMIT });
+      }
       const file = await storage.createKBFile({
         folder_id: req.params.id, user_id: req.userId, name,
-        file_type: "text", file_size: content.length, extracted_text: content,
+        file_type: "text", file_size: size, extracted_text: content,
       });
       res.status(201).json(file);
     } catch (error) { res.status(500).json({ message: "Failed to add note" }); }

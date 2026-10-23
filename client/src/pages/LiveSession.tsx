@@ -120,6 +120,11 @@ export default function LiveSession() {
   const [photos, setPhotos] = useState<string[]>([]);
   const [showOfflineNotice, setShowOfflineNotice] = useState(false);
   const [showStartRecCard, setShowStartRecCard] = useState(false);
+  const [quietPeriod, setQuietPeriod] = useState(false);
+  const [autoPauseOnSilence, setAutoPauseOnSilence] = useState(false);
+  const [showSilenceSettings, setShowSilenceSettings] = useState(false);
+  const [videoUrlInput, setVideoUrlInput] = useState("");
+  const [showVideoUrl, setShowVideoUrl] = useState(false);
 
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
@@ -133,6 +138,10 @@ export default function LiveSession() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const silenceMsRef = useRef(0);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -262,11 +271,59 @@ export default function LiveSession() {
       recorder.start(2000);
       setIsRecording(true); setIsPaused(false); setShowStartRecCard(false);
       setShowOfflineNotice(true); setView("recording");
+      setQuietPeriod(false); silenceMsRef.current = 0;
+
+      // Voice activity / silence detection (does NOT discard audio)
+      try {
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        analyserRef.current = analyser;
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let lastTs = performance.now();
+        const tick = (now: number) => {
+          const dt = now - lastTs; lastTs = now;
+          analyser.getByteFrequencyData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) sum += data[i];
+          const avg = sum / data.length;
+          const speaking = avg > 12;
+          if (!speaking) {
+            silenceMsRef.current += dt;
+            if (silenceMsRef.current > 15000) setQuietPeriod(true);
+            if (autoPauseOnSilence && silenceMsRef.current > 45000) {
+              const r = mediaRecorderRef.current;
+              if (r && r.state === "recording") {
+                r.pause();
+                setIsPaused(true);
+                toast({ title: "Auto-paused", description: "Long silence detected. Resume when the lecture continues." });
+              }
+              silenceMsRef.current = 0;
+            }
+          } else {
+            silenceMsRef.current = 0;
+            setQuietPeriod(false);
+            if (autoPauseOnSilence) {
+              const r = mediaRecorderRef.current;
+              if (r && r.state === "paused") {
+                r.resume();
+                setIsPaused(false);
+              }
+            }
+          }
+          rafRef.current = requestAnimationFrame(tick);
+        };
+        rafRef.current = requestAnimationFrame(tick);
+      } catch {}
+
       toast({ title: "Recording started", description: "Saved locally in chunks. Turn off mobile data to save bandwidth." });
     } catch (err: any) {
       toast({ title: "Microphone error", description: err?.message || "Could not access microphone", variant: "destructive" });
     }
-  }, [toast, selectedTopic, selectedNotebook]);
+  }, [toast, selectedTopic, selectedNotebook, autoPauseOnSilence]);
 
   const pauseResumeRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current; if (!recorder) return;
@@ -278,8 +335,37 @@ export default function LiveSession() {
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") recorder.stop();
     setIsRecording(false); setIsPaused(false); setShowOfflineNotice(false);
+    setQuietPeriod(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    try { audioCtxRef.current?.close(); } catch {}
+    audioCtxRef.current = null; analyserRef.current = null;
     toast({ title: "Recording stopped", description: "Turn on internet, then tap Generate My Notes." });
   }, [toast]);
+
+  const handleVideoUrlSubmit = () => {
+    const url = videoUrlInput.trim();
+    if (!url) return;
+    const lower = url.toLowerCase();
+    const supported =
+      lower.includes("youtube.com") ||
+      lower.includes("youtu.be") ||
+      lower.includes("vimeo.com");
+    if (!supported) {
+      toast({
+        title: "Link not supported yet",
+        description: "Upload the video file instead, or use a YouTube/Vimeo link when the integration is enabled.",
+        variant: "destructive",
+      });
+      return;
+    }
+    // Policy-safe path: we do not download YouTube AV without authorization.
+    // Offer metadata-only guidance and file upload.
+    toast({
+      title: "External video links",
+      description: "For rights and policy reasons, paste links are limited. Download/export audio you're authorized to use, then Upload the file.",
+    });
+    setShowVideoUrl(false);
+  };
 
   const handleCameraCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -582,6 +668,7 @@ export default function LiveSession() {
               <Button size="sm" className="gap-1.5" onClick={() => setShowStartRecCard(true)}><Mic className="w-4 h-4" />Record</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => fileInputRef.current?.click()}><Upload className="w-4 h-4" />Upload</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => videoInputRef.current?.click()}><FileText className="w-4 h-4" />Video</Button>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowVideoUrl(true)}><Link2 className="w-4 h-4" />Link</Button>
             </div>
             <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.aac,.flac" className="hidden" onChange={handleUploadRecording} />
             <input ref={videoInputRef} type="file" accept="video/*,.mp4,.webm,.mov" className="hidden" onChange={handleUploadRecording} />
@@ -648,6 +735,12 @@ export default function LiveSession() {
               {!isRecording && audioUrl && "Recording complete"}
               {!isRecording && !audioUrl && "Ready"}
             </p>
+            {quietPeriod && isRecording && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">Quiet period detected — still recording (audio is never discarded)</p>
+            )}
+            <button type="button" className="text-xs text-primary underline" onClick={() => setShowSilenceSettings(true)}>
+              Silence detection settings
+            </button>
             <div className="flex flex-wrap items-center justify-center gap-3">
               {isRecording && (
                 <>
@@ -720,7 +813,22 @@ export default function LiveSession() {
             ) : transcript ? (
               <div className="rounded-xl border bg-card p-4 space-y-3">
                 {segments.length > 0 ? segments.map((s, i) => (
-                  <div key={i} className="text-sm"><span className="text-xs font-mono text-muted-foreground mr-2">{formatDuration(s.start || 0)}</span><span>{s.text}</span></div>
+                  <button
+                    key={i}
+                    type="button"
+                    className="text-sm text-left w-full rounded-lg px-2 py-1.5 hover:bg-muted/50 transition"
+                    onClick={() => {
+                      const el = audioElRef.current;
+                      if (el && Number.isFinite(s.start)) {
+                        el.currentTime = Math.max(0, s.start);
+                        el.play().catch(() => {});
+                      }
+                    }}
+                    title="Tap to replay this part of the recording"
+                  >
+                    <span className="text-xs font-mono text-primary mr-2">{formatDuration(s.start || 0)}</span>
+                    <span>{s.text}</span>
+                  </button>
                 )) : <p className="text-sm whitespace-pre-wrap leading-relaxed">{transcript}</p>}
               </div>
             ) : null}
@@ -854,6 +962,57 @@ export default function LiveSession() {
               <Button variant="outline" className="gap-2" onClick={() => copyShare("link")}><Link2 className="w-4 h-4" />Copy link</Button>
             </div>
             {shareLink && <p className="text-xs break-all text-muted-foreground bg-muted/40 p-2 rounded-lg">{shareLink}</p>}
+          </div>
+        </div>
+      )}
+
+      {showSilenceSettings && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-background border shadow-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-lg">Silence detection</h2>
+              <Button variant="ghost" size="icon" onClick={() => setShowSilenceSettings(false)}><X className="w-5 h-5" /></Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              After 15s without speech, a quiet-period indicator appears. Audio is never deleted because of silence.
+            </p>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="text-sm pr-2">
+                <p className="font-medium">Auto-pause on long silence</p>
+                <p className="text-xs text-muted-foreground">After ~45s quiet, pause; resume when speech returns (experimental)</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoPauseOnSilence}
+                onClick={() => setAutoPauseOnSilence((v) => !v)}
+                className={`w-11 h-6 rounded-full transition shrink-0 ${autoPauseOnSilence ? "bg-primary" : "bg-muted"} relative`}
+              >
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition ${autoPauseOnSilence ? "left-5" : "left-0.5"}`} />
+              </button>
+            </div>
+            <Button className="w-full" onClick={() => setShowSilenceSettings(false)}>Done</Button>
+          </div>
+        </div>
+      )}
+
+      {showVideoUrl && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-background border shadow-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-lg">Paste video link</h2>
+              <Button variant="ghost" size="icon" onClick={() => setShowVideoUrl(false)}><X className="w-5 h-5" /></Button>
+            </div>
+            <input
+              value={videoUrlInput}
+              onChange={(e) => setVideoUrlInput(e.target.value)}
+              placeholder="https://youtube.com/… or Vimeo"
+              className="w-full px-3 py-2 text-sm rounded-lg border bg-muted/30 focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              Unsupported platforms show a notice. YouTube/Vimeo full download is restricted by policy — prefer uploading a file you are authorized to use.
+            </p>
+            <Button className="w-full" onClick={handleVideoUrlSubmit}>Continue</Button>
           </div>
         </div>
       )}
