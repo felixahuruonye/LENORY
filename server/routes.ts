@@ -4487,25 +4487,82 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.post('/api/groq/format-notes', supabaseAuth, async (req: any, res: Response) => {
     try {
-      const { transcript, subject } = req.body;
+      const {
+        transcript,
+        subject,
+        lecturer,
+        topic,
+        date,
+        hasPhotos,
+        photoCount,
+        segments,
+      } = req.body;
       if (!transcript) return res.status(400).json({ error: 'transcript required' });
-      const prompt = `You are an expert note-taker. Convert this lecture/audio transcript into clear, well-structured study notes.
-      ${subject ? `Subject: ${subject}` : ''}
 
-      Transcript:
-      """
-      ${transcript.slice(0, 8000)}
-      """
+      // Credit gate: format notes costs 3 credits (admin exempt)
+      const userId = req.userId;
+      const user = await storage.getUser(userId);
+      const tier = (user as any)?.subscriptionTier || 'free';
+      const gate = await checkCreditGate(userId, user?.email, tier, 3, "Format notes");
+      if (!gate.allowed) {
+        return res.status(402).json({ error: gate.error, message: gate.message, balance: gate.balance });
+      }
 
-      Format as markdown with:
-      - A clear title
-      - Key objectives (bullet points)
-      - Main content sections with headers
-      - Key terms bolded
-      - Summary at the end
-      - Action items / things to study further`;
+      const segmentHint =
+        Array.isArray(segments) && segments.length
+          ? `\nTimestamped segments (use for references, do not invent times):\n${segments
+              .slice(0, 80)
+              .map((s: any) => `[${Math.floor(s.start || 0)}s] ${s.text || ""}`)
+              .join("\n")
+              .slice(0, 4000)}`
+          : "";
+
+      const prompt = `You are LENORY, an expert academic note-taker for students.
+
+CRITICAL RULES:
+- Improve structure and readability WITHOUT changing facts or inventing missing information.
+- Never invent quotations, definitions, formulas, or technical claims that are not supported by the transcript.
+- If something is unclear or uncertain, mark it **[Unverified]** rather than guessing.
+- Choose a note structure appropriate for the subject (math ≠ biology practical ≠ literature). Do not force every lecture into the same template.
+- Preserve the lecturer's teaching; do not replace it with a plausible substitute lecture.
+
+Context:
+- Subject/Course: ${subject || "General"}
+- Topic: ${topic || "Lecture"}
+- Lecturer: ${lecturer || "Not specified"}
+- Date: ${date || new Date().toISOString().slice(0, 10)}
+- Board photographs attached: ${hasPhotos ? `yes (${photoCount || 0})` : "no"}
+
+Transcript:
+"""
+${String(transcript).slice(0, 45000)}
+"""
+${segmentHint}
+
+Produce a structured markdown notebook that MAY include only sections that fit this lecture:
+1. Title, date, and topic
+2. Learning objectives
+3. Definitions and explanations
+4. Organized sections and subsections
+5. Important formulas, examples, diagrams (describe; note photos if present)
+6. Key terms and meanings
+7. Important points emphasized by the lecturer
+8. Concise revision summary
+9. Potential examination questions
+10. Flashcards / practice quiz items (short)
+11. References to the original recording with timestamps when available
+12. Areas that need verification (unclear audio) marked **[Unverified]**
+13. Further study suggestions
+
+Omit sections that do not apply. Prefer clarity over length.`;
+
       const { chatWithGemini } = await import('./gemini');
       const notes = await chatWithGemini([{ role: 'user', content: prompt }]);
+
+      if (user?.email !== REAL_ADMIN_EMAIL) {
+        await deductCredits(userId, 3);
+      }
+
       res.json({ notes: notes || transcript });
     } catch (error) {
       console.error('Format notes error:', error);
