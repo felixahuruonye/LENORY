@@ -257,6 +257,7 @@ export interface IStorage {
   getKBFiles(folderId: string): Promise<any[]>;
   getKBFile(id: string): Promise<any>;
   createKBFile(file: any): Promise<any>;
+  updateKBFile(id: string, updates: any): Promise<any>;
   deleteKBFile(id: string): Promise<void>;
   
   getKBFolderCredits(folderId: string): Promise<any>;
@@ -1130,6 +1131,30 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return fileData;
+  }
+
+  async updateKBFile(id: string, updates: any): Promise<any> {
+    if (supabaseDb) {
+      try {
+        const updateData: any = { updated_at: new Date().toISOString() };
+        if (updates.name !== undefined) updateData.name = updates.name;
+        if (updates.extracted_text !== undefined) updateData.extracted_text = updates.extracted_text;
+        if (updates.file_size !== undefined) updateData.file_size = updates.file_size;
+        if (updates.file_type !== undefined) updateData.file_type = updates.file_type;
+        if (updates.mime_type !== undefined) updateData.mime_type = updates.mime_type;
+        const { data, error } = await supabaseDb
+          .from("kb_files")
+          .update(updateData)
+          .eq("id", id)
+          .select()
+          .single();
+        if (!error && data) return data;
+        console.error("updateKBFile error:", error);
+      } catch (e) {
+        console.error("updateKBFile error:", e);
+      }
+    }
+    return null;
   }
 
   async deleteKBFile(id: string): Promise<void> {

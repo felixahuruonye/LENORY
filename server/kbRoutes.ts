@@ -383,19 +383,61 @@ export function registerKbRoutes(app: Express) {
   app.post('/api/kb/folders/:id/files/text', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { name, content } = req.body;
-      if (!name || !content) return res.status(400).json({ message: "Name and content are required" });
-      const size = typeof content === "string" ? Buffer.byteLength(content, "utf8") : 0;
+      if (!name || content === undefined || content === null) {
+        return res.status(400).json({ message: "Name and content are required" });
+      }
+      const contentStr = typeof content === "string" ? content : JSON.stringify(content);
+      const size = Buffer.byteLength(contentStr, "utf8");
+      if (size > TOPIC_FILE_LIMIT) {
+        return res.status(413).json({
+          message: `Topic content is too large (${Math.round(size / (1024 * 1024))} MB). Remove embedded images and try again.`,
+          error: "STORAGE_FULL",
+        });
+      }
       const room = await assertFolderStorageRoom(req.params.id, size);
       if (!room.ok) {
         return res.status(413).json({ message: room.message, error: "STORAGE_FULL", used: room.used, folderLimit: FOLDER_STORAGE_LIMIT, fileLimit: TOPIC_FILE_LIMIT });
       }
       const file = await storage.createKBFile({
         folder_id: req.params.id, user_id: req.userId, name,
-        file_type: "text", file_size: size, extracted_text: content,
+        file_type: "text", file_size: size, extracted_text: contentStr,
       });
       res.status(201).json(file);
-    } catch (error) { res.status(500).json({ message: "Failed to add note" }); }
+    } catch (error) { console.error("KB text create error:", error); res.status(500).json({ message: "Failed to add note" }); }
   });
+
+  // Update an existing topic/file in place (avoids delete+recreate and huge payload races)
+  app.put('/api/kb/folders/:folderId/files/:fileId', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { name, content } = req.body;
+      const existing = await storage.getKBFile(req.params.fileId);
+      if (!existing) return res.status(404).json({ message: "File not found" });
+      if (existing.folder_id !== req.params.folderId && existing.folderId !== req.params.folderId) {
+        return res.status(400).json({ message: "File does not belong to this folder" });
+      }
+      const contentStr = content === undefined || content === null
+        ? (existing.extracted_text || "")
+        : (typeof content === "string" ? content : JSON.stringify(content));
+      const size = Buffer.byteLength(contentStr, "utf8");
+      if (size > TOPIC_FILE_LIMIT) {
+        return res.status(413).json({
+          message: `Topic content is too large (${Math.round(size / (1024 * 1024))} MB). Try saving without board photos embedded.`,
+          error: "STORAGE_FULL",
+        });
+      }
+      const updated = await storage.updateKBFile(req.params.fileId, {
+        name: name || existing.name,
+        extracted_text: contentStr,
+        file_size: size,
+      });
+      if (!updated) return res.status(500).json({ message: "Failed to update file" });
+      res.json(updated);
+    } catch (error) {
+      console.error("KB file update error:", error);
+      res.status(500).json({ message: "Failed to update note" });
+    }
+  });
+
   app.delete('/api/kb/folders/:folderId/files/:fileId', supabaseAuth, async (req: any, res: Response) => {
     try {
       await storage.deleteKBFile(req.params.fileId);

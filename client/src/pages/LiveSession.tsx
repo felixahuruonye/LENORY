@@ -35,6 +35,8 @@ interface TopicPayload {
   transcript?: string; formattedNotes?: string;
   segments?: Array<{ text: string; start: number; end: number; speaker?: string }>;
   duration?: number; photos?: string[]; language?: string;
+  photoCount?: number; hasRecording?: boolean;
+  uploadedFiles?: Array<{ name: string; type: string; size?: number }>;
 }
 interface TranscriptSegment { text: string; start: number; end: number; speaker?: string; }
 
@@ -539,26 +541,89 @@ export default function LiveSession() {
   }, [transcript, selectedNotebook, selectedTopic, photos, segments, toast]);
 
   const saveToTopic = useCallback(async () => {
-    if (!selectedNotebook || !selectedTopic) { toast({ title: "Open a topic first", variant: "destructive" }); return; }
+    if (!selectedNotebook || !selectedTopic) {
+      toast({ title: "Open a topic first", variant: "destructive" });
+      return;
+    }
     setIsSaving(true);
     try {
+      // Do NOT embed full photo data-URLs — they blow past body limits ("Failed to fetch").
+      // Keep at most 3 tiny thumbnails if under 80KB each; otherwise metadata only.
+      const lightPhotos: string[] = [];
+      for (const p of photos.slice(0, 6)) {
+        if (typeof p === "string" && p.startsWith("data:") && p.length < 80_000) lightPhotos.push(p);
+      }
       const payload: TopicPayload = {
-        transcript, formattedNotes: formattedNotes || transcript, segments,
-        duration: recordingDuration, photos: photos.slice(0, 20), language: detectedLanguage,
+        transcript: (transcript || "").slice(0, 180_000),
+        formattedNotes: (formattedNotes || transcript || "").slice(0, 180_000),
+        segments: (segments || []).slice(0, 400),
+        duration: recordingDuration,
+        photos: lightPhotos,
+        photoCount: photos.length,
+        hasRecording: !!(audioUrl || audioBlobs.length),
+        language: detectedLanguage,
+        uploadedFiles: [
+          ...(audioBlobs.length
+            ? [{ name: "Lecture recording", type: "audio", size: audioBlobs[0]?.size }]
+            : []),
+          ...photos.map((_, i) => ({ name: `Board photo ${i + 1}`, type: "image" })),
+        ],
       };
-      const res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/text`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: selectedTopic.name, content: JSON.stringify(payload) }),
+      const body = JSON.stringify({
+        name: selectedTopic.name,
+        content: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error("Save failed");
-      try { await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`, { method: "DELETE" }); } catch {}
-      const newFile = await res.json(); setSelectedTopic(newFile);
-      refetchTopics(); queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
-      toast({ title: "Saved to topic file" }); setView("topic"); setTopicTab("note");
+
+      // Prefer in-place update so we keep the same topic id
+      let res = await authFetch(
+        `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body }
+      );
+      if (!res.ok) {
+        // Fallback: create new text file if update not available
+        res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/text`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (res.ok) {
+          try {
+            await authFetch(
+              `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+              { method: "DELETE" }
+            );
+          } catch {}
+        }
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || err.error || `Save failed (${res.status})`);
+      }
+      const saved = await res.json();
+      setSelectedTopic({ ...selectedTopic, ...saved, extracted_text: saved.extracted_text || JSON.stringify(payload) });
+      refetchTopics();
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({ title: "Saved to topic file" });
+      setView("topic");
+      setTopicTab("note");
     } catch (err: any) {
-      toast({ title: "Save failed", description: err?.message, variant: "destructive" });
-    } finally { setIsSaving(false); }
-  }, [selectedNotebook, selectedTopic, transcript, formattedNotes, segments, recordingDuration, photos, detectedLanguage, toast, refetchTopics, queryClient]);
+      const msg = err?.message || "Could not save";
+      toast({
+        title: "Save failed",
+        description:
+          msg === "Failed to fetch"
+            ? "Network error while saving. Check your connection and try again."
+            : msg,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    selectedNotebook, selectedTopic, transcript, formattedNotes, segments,
+    recordingDuration, photos, detectedLanguage, audioUrl, audioBlobs,
+    toast, refetchTopics, queryClient,
+  ]);
 
   const openShare = async (forcePublic?: boolean) => {
     if (!selectedNotebook) return;
@@ -755,25 +820,115 @@ export default function LiveSession() {
             </div>
             <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.aac,.flac" className="hidden" onChange={handleUploadRecording} />
             <input ref={videoInputRef} type="file" accept="video/*,.mp4,.webm,.mov" className="hidden" onChange={handleUploadRecording} />
-            {(transcript || formattedNotes) && (
+            {(transcript || formattedNotes || audioUrl || photos.length > 0) ? (
               <>
                 <div className="flex rounded-lg border p-0.5 bg-muted/30">
                   <button type="button" className={`flex-1 text-sm py-2 rounded-md font-medium transition ${topicTab === "live" ? "bg-background shadow-sm" : "text-muted-foreground"}`} onClick={() => setTopicTab("live")}>Live Class</button>
                   <button type="button" className={`flex-1 text-sm py-2 rounded-md font-medium transition ${topicTab === "note" ? "bg-background shadow-sm" : "text-muted-foreground"}`} onClick={() => setTopicTab("note")}>Note</button>
                 </div>
-                <div className="rounded-xl border bg-card p-4 prose prose-sm dark:prose-invert max-w-none">
-                  {topicTab === "live" ? (
-                    <pre className="whitespace-pre-wrap text-sm font-sans">{transcript || "No transcript yet."}</pre>
-                  ) : (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{formattedNotes || "No formatted notes yet."}</ReactMarkdown>
-                  )}
-                </div>
+
+                {topicTab === "live" && (
+                  <div className="space-y-4">
+                    {/* Recording for this topic */}
+                    <div className="rounded-xl border bg-card p-4 space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Recording</p>
+                      {audioUrl ? (
+                        <>
+                          <audio controls src={audioUrl} className="w-full h-10" />
+                          <p className="text-xs text-muted-foreground">
+                            Duration {formatDuration(recordingDuration)}
+                            {audioBlobs[0] ? ` · ${formatBytes(audioBlobs[0].size)}` : ""}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {recordingDuration > 0
+                            ? `Recording was ${formatDuration(recordingDuration)} (playback available after capture in this session).`
+                            : "No recording in this session yet. Record or upload audio above."}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Transcript */}
+                    <div className="rounded-xl border bg-card p-4 space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transcript</p>
+                      {transcript ? (
+                        segments.length > 0 ? (
+                          <div className="space-y-1 max-h-64 overflow-y-auto">
+                            {segments.slice(0, 80).map((s, i) => (
+                              <button
+                                key={i}
+                                type="button"
+                                className="text-sm text-left w-full rounded px-1 py-1 hover:bg-muted/50"
+                                onClick={() => {
+                                  if (audioElRef.current && Number.isFinite(s.start)) {
+                                    audioElRef.current.currentTime = Math.max(0, s.start);
+                                    audioElRef.current.play().catch(() => {});
+                                  } else if (audioUrl) {
+                                    const a = new Audio(audioUrl);
+                                    a.currentTime = Math.max(0, s.start || 0);
+                                    a.play().catch(() => {});
+                                  }
+                                }}
+                              >
+                                <span className="text-xs font-mono text-primary mr-2">{formatDuration(s.start || 0)}</span>
+                                {s.text}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <pre className="whitespace-pre-wrap text-sm font-sans max-h-64 overflow-y-auto">{transcript}</pre>
+                        )
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No transcript yet. Generate notes from a recording.</p>
+                      )}
+                    </div>
+
+                    {/* Uploaded files matched / attached */}
+                    <div className="rounded-xl border bg-card p-4 space-y-3">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
+                      {photos.length === 0 && !audioUrl && !audioBlobs.length ? (
+                        <p className="text-sm text-muted-foreground">No extra files yet. Snap board photos while recording or upload documents.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {(audioUrl || audioBlobs.length > 0) && (
+                            <div className="flex items-center gap-2 text-sm rounded-lg border px-3 py-2">
+                              <Mic className="w-4 h-4 text-primary shrink-0" />
+                              <span className="truncate">Lecture recording</span>
+                              <span className="text-xs text-muted-foreground ml-auto">{formatDuration(recordingDuration)}</span>
+                            </div>
+                          )}
+                          {photos.map((src, i) => (
+                            <div key={i} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                              <img src={src} alt="" className="w-12 h-12 object-cover rounded" />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">Board photo {i + 1}</p>
+                                <p className="text-xs text-muted-foreground">Used when formatting notes</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {topicTab === "note" && (
+                  <div className="rounded-xl border bg-card p-4 prose prose-sm dark:prose-invert max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {formattedNotes || "No formatted notes yet. Use Format Note after transcription."}
+                    </ReactMarkdown>
+                  </div>
+                )}
               </>
-            )}
-            {!transcript && !formattedNotes && (
+            ) : (
               <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground space-y-3">
                 <p>Record a lecture or upload audio/video to generate notes for this topic.</p>
-                <div className="flex justify-center gap-2"><Button onClick={() => setShowStartRecCard(true)} className="gap-2"><Mic className="w-4 h-4" />Start Recording</Button></div>
+                <div className="flex justify-center gap-2">
+                  <Button onClick={() => setShowStartRecCard(true)} className="gap-2">
+                    <Mic className="w-4 h-4" />Start Recording
+                  </Button>
+                </div>
               </div>
             )}
           </main>
