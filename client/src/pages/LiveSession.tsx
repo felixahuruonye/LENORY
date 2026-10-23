@@ -396,10 +396,11 @@ export default function LiveSession() {
     e.target.value = "";
   }, [toast]);
 
-  const splitBlob = (blob: Blob, maxBytes = 24 * 1024 * 1024): Blob[] => {
+  // Keep chunks under Groq's ~25 MB limit after conversion; 12 MB is safer on mobile.
+  const splitBlob = (blob: Blob, maxBytes = 12 * 1024 * 1024): Blob[] => {
     if (blob.size <= maxBytes) return [blob];
     const parts: Blob[] = []; let offset = 0;
-    while (offset < blob.size) { parts.push(blob.slice(offset, offset + maxBytes, blob.type)); offset += maxBytes; }
+    while (offset < blob.size) { parts.push(blob.slice(offset, offset + maxBytes, blob.type || "audio/webm")); offset += maxBytes; }
     return parts;
   };
 
@@ -417,12 +418,16 @@ export default function LiveSession() {
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i]; const form = new FormData();
         const ext = chunk.type.includes("mp4") ? "mp4" : chunk.type.includes("mp3") || chunk.type.includes("mpeg") ? "mp3" : "webm";
-        form.append("audio", chunk, `part${i + 1}.${ext}`); form.append("language", "en");
+        form.append("audio", chunk, `part${i + 1}.${ext}`);
+        form.append("language", "auto");
         const res = await fetch("/api/groq/transcribe", {
           method: "POST", body: form,
           headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
         });
-        if (!res.ok) { const err = await res.json().catch(() => ({ error: "Unknown error" })); throw new Error(err.message || err.error || "Transcription failed"); }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "Unknown error" }));
+          throw new Error(err.message || err.error || err.detail || "Transcription failed");
+        }
         const data = await res.json();
         if (data.text) allTexts.push(data.text.trim());
         if (data.language && !lang) lang = data.language;
@@ -484,17 +489,19 @@ export default function LiveSession() {
     } finally { setIsSaving(false); }
   }, [selectedNotebook, selectedTopic, transcript, formattedNotes, segments, recordingDuration, photos, detectedLanguage, toast, refetchTopics, queryClient]);
 
-  const openShare = async () => {
+  const openShare = async (forcePublic?: boolean) => {
     if (!selectedNotebook) return;
+    const isPublic = forcePublic !== undefined ? forcePublic : sharePublic;
+    if (forcePublic !== undefined) setSharePublic(forcePublic);
     try {
       const res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/share`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ permission: sharePublic ? "public" : "private" }),
+        body: JSON.stringify({ permission: isPublic ? "public" : "private" }),
       });
       if (res.ok) {
         const data = await res.json();
         const token = data.shareToken || data.share_code;
-        setShareLink(`${window.location.origin}/notes/shared/${token}`);
+        setShareLink(`${window.location.origin}/shared/${token}`);
       } else setShareLink(`${window.location.origin}/live-session`);
     } catch { setShareLink(`${window.location.origin}/live-session`); }
     setShowShare(true);
@@ -792,7 +799,7 @@ export default function LiveSession() {
             {isTranscribing && (
               <div className="flex items-center gap-3 p-4 rounded-xl bg-primary/10 border border-primary/20">
                 <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                <div><p className="text-sm font-medium">Transcribing with Groq whisper-large-v3-turbo</p><p className="text-xs text-muted-foreground">Chunks process sequentially for long audio</p></div>
+                <div><p className="text-sm font-medium">Transcribing With Lenory</p><p className="text-xs text-muted-foreground">Long audio is processed in chunks</p></div>
               </div>
             )}
             {audioUrl && <audio ref={audioElRef} controls src={audioUrl} className="w-full h-10" />}
@@ -950,7 +957,11 @@ export default function LiveSession() {
             </div>
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div className="flex items-center gap-2 text-sm">{sharePublic ? <Globe className="w-4 h-4" /> : <Lock className="w-4 h-4" />}{sharePublic ? "Public preview" : "Private (login required)"}</div>
-              <button type="button" role="switch" aria-checked={sharePublic} onClick={() => setSharePublic((p) => !p)} className={`w-11 h-6 rounded-full transition ${sharePublic ? "bg-primary" : "bg-muted"} relative`}>
+              <button type="button" role="switch" aria-checked={sharePublic} onClick={() => {
+                  const next = !sharePublic;
+                  setSharePublic(next);
+                  openShare(next);
+                }} className={`w-11 h-6 rounded-full transition ${sharePublic ? "bg-primary" : "bg-muted"} relative`}>
                 <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition ${sharePublic ? "left-5" : "left-0.5"}`} />
               </button>
             </div>

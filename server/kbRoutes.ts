@@ -114,42 +114,160 @@ export function registerKbRoutes(app: Express) {
     } catch (error) { console.error("SAVE TRANSCRIPT ERROR:", error); res.status(500).json({ message: "Failed to save transcript" }); }
   });
 
-  // Public shared-folder lookup (viewer must still be signed in)
-  app.get('/api/kb/shared/:code', supabaseAuth, async (req: any, res: Response) => {
+  // Shared-folder lookup — public notebooks are readable without login;
+  // private ones require auth. Original recordings are never exposed on public previews.
+  app.get('/api/kb/shared/:code', async (req: any, res: Response) => {
     try {
       const folder = await storage.getKBFolderByShareCode(req.params.code);
       if (!folder) return res.status(404).json({ message: "This share link is invalid or has been revoked." });
+
+      const perm = String(folder.share_permission || folder.sharePermission || "private").toLowerCase();
+      const isPublic = perm === "public" || perm === "view";
+
+      // Optional auth: attach userId if Bearer token present
+      let userId: string | null = null;
+      try {
+        const auth = req.headers.authorization || "";
+        const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+        if (token) {
+          const { createClient } = await import("@supabase/supabase-js");
+          const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+          const anon = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+          if (url && anon) {
+            const client = createClient(url, anon);
+            const { data } = await client.auth.getUser(token);
+            userId = data?.user?.id || null;
+          }
+        }
+      } catch {}
+
+      if (!isPublic && !userId) {
+        return res.status(401).json({
+          message: "This notebook is private. Sign in to view it.",
+          error: "LOGIN_REQUIRED",
+          requiresAuth: true,
+        });
+      }
+
       const files = await storage.getKBFiles(folder.id);
-      const owner = await storage.getUser(folder.user_id);
-      res.json({
-        folder: { id: folder.id, name: folder.name, description: folder.description, created_at: folder.created_at },
-        files: files.map((f: any) => ({ id: f.id, name: f.name, file_type: f.file_type, file_size: f.file_size, created_at: f.created_at, extracted_text: f.extracted_text })),
-        ownerName: owner?.firstName || "A Lenory user",
-        isOwnFolder: folder.user_id === req.userId,
+      const owner = await storage.getUser(folder.user_id || folder.userId);
+      const safeFiles = (files || []).map((f: any) => {
+        const base: any = {
+          id: f.id,
+          name: f.name,
+          file_type: f.file_type,
+          file_size: f.file_size ?? f.size_bytes ?? 0,
+          created_at: f.created_at,
+        };
+        // Public: allow text/notes preview only — never audio blobs or raw recording payloads
+        if (isPublic && !userId) {
+          const text = f.extracted_text || f.extractedText || "";
+          // Strip embedded audioDataUrl from topic JSON if present
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && typeof parsed === "object") {
+              const { transcript, formattedNotes, segments, duration, language } = parsed;
+              base.extracted_text = JSON.stringify({
+                transcript: transcript || "",
+                formattedNotes: formattedNotes || "",
+                segments: Array.isArray(segments) ? segments.slice(0, 50) : [],
+                duration,
+                language,
+              });
+              base.preview_notes = formattedNotes || (transcript || "").slice(0, 500);
+            } else {
+              base.extracted_text = String(text).slice(0, 4000);
+              base.preview_notes = String(text).slice(0, 500);
+            }
+          } catch {
+            base.extracted_text = String(text).slice(0, 4000);
+            base.preview_notes = String(text).slice(0, 500);
+          }
+        } else {
+          base.extracted_text = f.extracted_text || f.extractedText || "";
+        }
+        return base;
       });
-    } catch (error) { console.error("SHARED FOLDER LOOKUP ERROR:", error); res.status(500).json({ message: "Failed to load shared folder" }); }
+
+      // Parse notebook meta from description JSON when present
+      let meta: any = {};
+      try {
+        meta = folder.description ? JSON.parse(folder.description) : {};
+        if (typeof meta !== "object" || !meta) meta = {};
+      } catch {
+        meta = {};
+      }
+
+      res.json({
+        folder: {
+          id: folder.id,
+          name: folder.name,
+          description: folder.description,
+          created_at: folder.created_at,
+          meta,
+          share_permission: perm,
+        },
+        files: safeFiles,
+        ownerName: owner?.firstName || owner?.first_name || "A Lenory user",
+        isOwnFolder: !!userId && (folder.user_id === userId || folder.userId === userId),
+        isPublic,
+        requiresAuth: !isPublic,
+      });
+    } catch (error) {
+      console.error("SHARED FOLDER LOOKUP ERROR:", error);
+      res.status(500).json({ message: "Failed to load shared folder" });
+    }
   });
 
-  // Copy a shared folder + its files into the visiting user's own Knowledge Base
+  // Lightweight metadata for link previews (WhatsApp / Telegram / Slack crawlers)
+  app.get('/api/kb/shared/:code/meta', async (req: any, res: Response) => {
+    try {
+      const folder = await storage.getKBFolderByShareCode(req.params.code);
+      if (!folder) return res.status(404).json({ message: "Not found" });
+      const files = await storage.getKBFiles(folder.id);
+      const perm = String(folder.share_permission || "private").toLowerCase();
+      res.json({
+        title: folder.name || "LENORY Notebook",
+        description: `Shared notebook on LENORY · ${(files || []).length} topic${(files || []).length === 1 ? "" : "s"}`,
+        isPublic: perm === "public" || perm === "view",
+        fileCount: (files || []).length,
+      });
+    } catch {
+      res.status(500).json({ message: "Failed" });
+    }
+  });
+
+  // Copy a shared folder + its files into the visiting user's own library (Write My Note)
   app.post('/api/kb/shared/:code/save', supabaseAuth, async (req: any, res: Response) => {
     try {
       const sourceFolder = await storage.getKBFolderByShareCode(req.params.code);
       if (!sourceFolder) return res.status(404).json({ message: "This share link is invalid or has been revoked." });
-      if (sourceFolder.user_id === req.userId) return res.status(400).json({ message: "This is already your folder." });
+      if (sourceFolder.user_id === req.userId || sourceFolder.userId === req.userId) {
+        return res.status(400).json({ message: "This is already your folder." });
+      }
       const newFolder = await storage.createKBFolder({
-        user_id: req.userId, name: `${sourceFolder.name} (shared copy)`,
+        user_id: req.userId,
+        name: `${sourceFolder.name} (shared copy)`,
         description: sourceFolder.description || null,
       });
       const sourceFiles = await storage.getKBFiles(sourceFolder.id);
       for (const f of sourceFiles) {
         await storage.createKBFile({
-          folder_id: newFolder.id, user_id: req.userId, name: f.name,
-          file_type: f.file_type, mime_type: f.mime_type, file_size: f.file_size,
-          extracted_text: f.extracted_text, source_type: f.source_type,
+          folder_id: newFolder.id,
+          user_id: req.userId,
+          name: f.name,
+          file_type: f.file_type,
+          mime_type: f.mime_type,
+          file_size: f.file_size ?? f.size_bytes ?? 0,
+          extracted_text: f.extracted_text,
+          source_type: f.source_type || "shared_import",
         });
       }
       res.status(201).json({ folder: newFolder, filesCopied: sourceFiles.length });
-    } catch (error) { console.error("SAVE SHARED FOLDER ERROR:", error); res.status(500).json({ message: "Failed to save shared folder" }); }
+    } catch (error) {
+      console.error("SAVE SHARED FOLDER ERROR:", error);
+      res.status(500).json({ message: "Failed to save shared folder" });
+    }
   });
 
   app.post('/api/kb/folders', supabaseAuth, async (req: any, res: Response) => {

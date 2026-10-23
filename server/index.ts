@@ -86,6 +86,49 @@ app.use((req, res, next) => {
     logAdminError("unhandledRejection", reason);
   });
 
+  // Link-preview HTML for WhatsApp / Telegram / Facebook crawlers on /shared/:code
+  // Must be registered before the SPA static fallback.
+  app.get(["/shared/:code", "/notes/shared/:code"], async (req: Request, res: Response, next: NextFunction) => {
+    const ua = String(req.headers["user-agent"] || "");
+    const isBot = /whatsapp|telegram|facebookexternalhit|facebot|twitterbot|slackbot|linkedinbot|discordbot|preview|bot|crawl|spider/i.test(ua);
+    // Always inject OG when ?preview=1 or bot; browsers still get the SPA via next()
+    // unless we serve a full page. For bots we return HTML with meta only.
+    if (!isBot && req.query.preview !== "1") return next();
+    try {
+      const { storage } = await import("./storage");
+      const code = req.params.code;
+      const folder = await storage.getKBFolderByShareCode(code);
+      if (!folder) return next();
+      const files = await storage.getKBFiles(folder.id);
+      const host = req.get("host") || "lenory.app";
+      const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+      const url = `${proto}://${host}/shared/${code}`;
+      const title = `${folder.name || "Notebook"} · LENORY`;
+      const description = `Shared notebook on LENORY · ${(files || []).length} topic${(files || []).length === 1 ? "" : "s"}. Open to preview or save to your library.`;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<title>${title.replace(/</g, "")}</title>
+<meta name="description" content="${description.replace(/"/g, "'")}"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="LENORY"/>
+<meta property="og:title" content="${title.replace(/"/g, "'")}"/>
+<meta property="og:description" content="${description.replace(/"/g, "'")}"/>
+<meta property="og:url" content="${url}"/>
+<meta property="og:image" content="${proto}://${host}/favicon.png"/>
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="${title.replace(/"/g, "'")}"/>
+<meta name="twitter:description" content="${description.replace(/"/g, "'")}"/>
+<meta http-equiv="refresh" content="0;url=${url}"/>
+</head><body>
+<p>Shared notebook: <a href="${url}">${(folder.name || "LENORY").replace(/</g, "")}</a></p>
+</body></html>`);
+    } catch {
+      next();
+    }
+  });
+
   // Always use static build files if they exist (avoids HMR issues)
   const distPath = path.resolve(import.meta.dirname, "public");
   const hasStaticBuild = fs.existsSync(path.join(distPath, "index.html"));

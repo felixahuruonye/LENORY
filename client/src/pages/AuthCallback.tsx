@@ -67,7 +67,7 @@ export default function AuthCallback() {
           
           setStatus('success');
           setTimeout(() => {
-            setLocation('/dashboard');
+            setLocation(postLoginPath());
           }, 1000);
         } else {
           const params = new URLSearchParams(window.location.search);

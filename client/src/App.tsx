@@ -72,7 +72,7 @@ function Router() {
     );
   }
 
-  // Not authenticated - show public routes
+  // Not authenticated - show public routes (including shared notebook previews)
   if (!isAuthenticated) {
     return (
       <Switch>
@@ -80,6 +80,8 @@ function Router() {
         <Route path="/login" component={Login} />
         <Route path="/signup" component={Signup} />
         <Route path="/pricing" component={Pricing} />
+        <Route path="/shared/:code" component={SharedFolder} />
+        <Route path="/notes/shared/:code" component={SharedFolder} />
         <Route path="/" component={Landing} />
         <Route>
           <Redirect to="/" />
@@ -117,6 +119,7 @@ function Router() {
           old links) still points at /knowledge-base. */}
       <Route path="/knowledge-base" component={Notes} />
       <Route path="/shared/:code" component={SharedFolder} />
+      <Route path="/notes/shared/:code" component={SharedFolder} />
       <Route path="/languages" component={Languages} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/settings" component={SettingsPanel} />

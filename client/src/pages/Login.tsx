@@ -14,6 +14,18 @@ import { Link } from "wouter";
 const DEVICE_TOKEN_KEY = "lernory_device_token";
 const LENORY_ID_KEY = "lernory_user_id";
 
+function postLoginPath(): string {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get("next") || sessionStorage.getItem("lenory_return_after_login");
+    if (next && next.startsWith("/") && !next.startsWith("//")) {
+      sessionStorage.removeItem("lenory_return_after_login");
+      return next;
+    }
+  } catch {}
+  return "/dashboard";
+}
+
 function getDeviceInfo() {
   return {
     userAgent: navigator.userAgent,
@@ -131,7 +143,7 @@ export default function Login() {
     setView("email-login");
   }
 
-  const handleTrustedContinue = () => setLocation("/dashboard");
+  const handleTrustedContinue = () => setLocation(postLoginPath());
 
   const handleActiveSessionContinue = async () => {
     setIsLoading(true);
@@ -142,7 +154,7 @@ export default function Login() {
       }
     } catch {}
     setIsLoading(false);
-    setLocation("/dashboard");
+    setLocation(postLoginPath());
   };
 
   const handleSwitchAccount = async () => {
@@ -198,7 +210,7 @@ export default function Login() {
         toast({ title: "Welcome Back!", description: "Redirecting to your dashboard..." });
         // Redirect immediately — save device in background (non-blocking)
         saveDeviceInBackground(data.session.access_token);
-        setLocation("/dashboard");
+        setLocation(postLoginPath());
       }
     } catch {
       toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });
@@ -248,7 +260,7 @@ export default function Login() {
         await supabase.auth.setSession({ access_token: data.accessToken, refresh_token: data.refreshToken });
         toast({ title: `Welcome back${lookupResult.firstName ? ", " + lookupResult.firstName : ""}!` });
         saveDeviceInBackground(data.accessToken);
-        setLocation("/dashboard");
+        setLocation(postLoginPath());
       }
     } catch {
       toast({ title: "Error", description: "Something went wrong. Please try again.", variant: "destructive" });

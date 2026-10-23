@@ -4485,20 +4485,46 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   const groqUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 26 * 1024 * 1024 },
+    // Allow larger uploads; we convert/compress with ffmpeg before calling Groq (25 MB limit)
+    limits: { fileSize: 100 * 1024 * 1024 },
   });
 
+  /** Convert any audio/video buffer to mono 16kHz MP3 that Groq Whisper accepts reliably. */
+  async function convertMediaToGroqMp3(inputPath: string): Promise<string> {
+    // @ts-ignore — ffmpeg-static exports a binary path string
+    const ffmpegStatic = (await import("ffmpeg-static")).default as string;
+    const { spawn } = await import("child_process");
+    const outPath = `${inputPath}.mp3`;
+    await new Promise<void>((resolve, reject) => {
+      const ff = spawn(ffmpegStatic, [
+        "-y",
+        "-i", inputPath,
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-b:a", "48k",
+        "-f", "mp3",
+        outPath,
+      ]);
+      let stderr = "";
+      ff.stderr.on("data", (d) => { stderr += d.toString(); });
+      ff.on("close", (code) => {
+        if (code === 0 && fs.existsSync(outPath)) resolve();
+        else reject(new Error(`ffmpeg failed (${code}): ${stderr.slice(-400)}`));
+      });
+      ff.on("error", reject);
+    });
+    return outPath;
+  }
+
   app.post('/api/groq/transcribe', supabaseAuth, groqUpload.single('audio'), async (req: any, res: Response) => {
+    let tmpFile = "";
+    let convertedFile = "";
     try {
       const apiKey = process.env.GROQ_API_KEY;
       if (!apiKey) return res.status(500).json({ error: "Speech-to-text is temporarily unavailable." });
       if (!req.file) return res.status(400).json({ error: "No audio file provided." });
 
-      // Was previously checked AFTER already paying Groq for the
-      // transcription, and even then only deducted whatever was left
-      // (including 0) instead of blocking — meaning a 0-credit user could
-      // transcribe unlimited audio for free while we kept paying Groq for
-      // every request. Now gated before the Groq call happens at all.
       const userId = req.userId;
       const user = await storage.getUser(userId);
       const tier = (user as any)?.subscriptionTier || 'free';
@@ -4508,26 +4534,57 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         return res.status(402).json({ error: gate.error, message: gate.message, balance: gate.balance });
       }
 
-      const { language = 'en' } = req.body;
-      const tmpFile = path.join(os.tmpdir(), `groq_audio_${Date.now()}_${req.file.originalname || 'audio.webm'}`);
+      const { language = 'auto' } = req.body;
+      const origName = (req.file.originalname || "audio.webm").replace(/[^\w.\-]+/g, "_");
+      tmpFile = path.join(os.tmpdir(), `groq_in_${Date.now()}_${origName}`);
       fs.writeFileSync(tmpFile, req.file.buffer);
-      let groqResData: any;
+
+      // Always normalize with ffmpeg (fixes Android webm, video containers, odd codecs)
       try {
-        const { default: OpenAI } = await import('openai');
-        const groqClient = new OpenAI({
-          apiKey,
-          baseURL: 'https://api.groq.com/openai/v1',
+        convertedFile = await convertMediaToGroqMp3(tmpFile);
+      } catch (ffErr: any) {
+        console.error("ffmpeg convert error, trying original file:", ffErr?.message);
+        convertedFile = tmpFile;
+      }
+
+      // Groq hard limit ~25 MB — if still large after convert, reject with clear message
+      const convSize = fs.statSync(convertedFile).size;
+      if (convSize > 24.5 * 1024 * 1024) {
+        return res.status(413).json({
+          error: "Audio too large after compression",
+          message: "This chunk is still over 25 MB. Try a shorter recording or split the file.",
+          detail: `size=${convSize}`,
         });
-        const transcription = await groqClient.audio.transcriptions.create({
-          file: fs.createReadStream(tmpFile) as any,
+      }
+
+      let groqResData: any;
+      const { default: OpenAI } = await import('openai');
+      const groqClient = new OpenAI({
+        apiKey,
+        baseURL: 'https://api.groq.com/openai/v1',
+      });
+
+      const tryTranscribe = async (filePath: string) => {
+        return groqClient.audio.transcriptions.create({
+          file: fs.createReadStream(filePath) as any,
           model: 'whisper-large-v3-turbo',
           response_format: 'verbose_json',
           ...(language && language !== 'auto' ? { language } : {}),
         } as any);
-        groqResData = transcription;
-      } finally {
-        try { fs.unlinkSync(tmpFile); } catch {}
+      };
+
+      try {
+        groqResData = await tryTranscribe(convertedFile);
+      } catch (firstErr: any) {
+        // Retry once without language hint (helps non-English / mislabeled files)
+        console.warn("Groq first attempt failed, retrying without language:", firstErr?.message);
+        groqResData = await groqClient.audio.transcriptions.create({
+          file: fs.createReadStream(convertedFile) as any,
+          model: 'whisper-large-v3-turbo',
+          response_format: 'verbose_json',
+        } as any);
       }
+
       const data = groqResData as any;
       if (user?.email !== REAL_ADMIN_EMAIL && data.duration) {
         const per5 = await getFeatureCost("voice_transcription_per_5min");
@@ -4549,7 +4606,17 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       });
     } catch (error: any) {
       console.error('Groq transcribe error:', error);
-      res.status(500).json({ error: 'Transcription failed', detail: error?.message });
+      const detail = error?.message || error?.error?.message || String(error);
+      res.status(500).json({
+        error: 'Transcription failed',
+        message: detail.includes('Invalid file') || detail.includes('format')
+          ? 'Audio format could not be processed. Try re-recording or uploading MP3/WAV.'
+          : (detail.slice(0, 300) || 'Transcription failed'),
+        detail,
+      });
+    } finally {
+      try { if (tmpFile) fs.unlinkSync(tmpFile); } catch {}
+      try { if (convertedFile && convertedFile !== tmpFile) fs.unlinkSync(convertedFile); } catch {}
     }
   });
 
