@@ -31,7 +31,27 @@ interface TopicFile {
   id: string; name: string; size_bytes?: number; sizeBytes?: number;
   extracted_text?: string | null; extractedText?: string | null; created_at?: string; createdAt?: string;
 }
+interface TopicPage {
+  id: string;
+  pageNumber: number;
+  title?: string;
+  createdAt: string;
+  transcript?: string;
+  formattedNotes?: string;
+  segments?: Array<{ text: string; start: number; end: number; speaker?: string }>;
+  duration?: number;
+  photos?: string[];
+  language?: string;
+  photoCount?: number;
+  hasRecording?: boolean;
+  recordingUrl?: string;
+  uploadedFiles?: Array<{ name: string; type: string; size?: number; url?: string }>;
+}
+/** v2 multi-page topic document (legacy single-page fields still accepted) */
 interface TopicPayload {
+  version?: number;
+  pages?: TopicPage[];
+  // legacy single-page fields
   transcript?: string; formattedNotes?: string;
   segments?: Array<{ text: string; start: number; end: number; speaker?: string }>;
   duration?: number; photos?: string[]; language?: string;
@@ -66,9 +86,75 @@ function relativeTime(iso?: string): string {
   if (days < 7) return `${days} days ago`; return d.toLocaleDateString();
 }
 function parseTopicPayload(raw?: string | null): TopicPayload {
-  if (!raw) return {};
-  try { const j = JSON.parse(raw); if (j && typeof j === "object") return j; } catch {}
-  return { transcript: raw };
+  if (!raw) return { version: 2, pages: [] };
+  try {
+    const j = JSON.parse(raw);
+    if (j && typeof j === "object") {
+      // Already multi-page
+      if (Array.isArray(j.pages)) return { version: 2, pages: j.pages, ...j };
+      // Legacy single blob → migrate to one page
+      if (j.transcript || j.formattedNotes || j.recordingUrl || j.photos) {
+        const page: TopicPage = {
+          id: j.id || `page_legacy_${Date.now()}`,
+          pageNumber: 1,
+          title: j.title || "Page 1",
+          createdAt: j.createdAt || new Date().toISOString(),
+          transcript: j.transcript,
+          formattedNotes: j.formattedNotes,
+          segments: j.segments,
+          duration: j.duration,
+          photos: j.photos,
+          language: j.language,
+          photoCount: j.photoCount,
+          hasRecording: j.hasRecording,
+          recordingUrl: j.recordingUrl,
+          uploadedFiles: j.uploadedFiles,
+        };
+        return { version: 2, pages: [page] };
+      }
+      return j;
+    }
+  } catch {}
+  return {
+    version: 2,
+    pages: [{
+      id: `page_raw_${Date.now()}`,
+      pageNumber: 1,
+      title: "Page 1",
+      createdAt: new Date().toISOString(),
+      transcript: raw || "",
+    }],
+  };
+}
+
+function getTopicPages(payload: TopicPayload): TopicPage[] {
+  if (Array.isArray(payload.pages) && payload.pages.length) {
+    return [...payload.pages].sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0));
+  }
+  return [];
+}
+
+function loadPageIntoState(page: TopicPage | null | undefined) {
+  if (!page) {
+    return {
+      transcript: "",
+      formattedNotes: "",
+      segments: [] as TranscriptSegment[],
+      duration: 0,
+      photos: [] as string[],
+      recordingUrl: undefined as string | undefined,
+      language: "",
+    };
+  }
+  return {
+    transcript: page.transcript || "",
+    formattedNotes: page.formattedNotes || "",
+    segments: page.segments || [],
+    duration: page.duration || 0,
+    photos: page.photos || [],
+    recordingUrl: page.recordingUrl,
+    language: page.language || "",
+  };
 }
 async function authFetch(url: string, init: RequestInit = {}) {
   const headers = await getAuthHeaders();
@@ -100,7 +186,12 @@ export default function LiveSession() {
   const [view, setView] = useState<View>("home");
   const [selectedNotebook, setSelectedNotebook] = useState<Notebook | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<TopicFile | null>(null);
-  const [topicTab, setTopicTab] = useState<"live" | "note">("note");
+  const [topicTab, setTopicTab] = useState<"live" | "note">("live");
+  const [topicPages, setTopicPages] = useState<TopicPage[]>([]);
+  const [selectedPageIndex, setSelectedPageIndex] = useState(0);
+  const [playingSegIndex, setPlayingSegIndex] = useState<number | null>(null);
+  const [isSegPlaying, setIsSegPlaying] = useState(false);
+  const segAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const [showCreateNotebook, setShowCreateNotebook] = useState(false);
   const [nbName, setNbName] = useState(""); const [nbSession, setNbSession] = useState("");
@@ -619,6 +710,89 @@ export default function LiveSession() {
     } finally { setIsFormatting(false); }
   }, [transcript, selectedNotebook, selectedTopic, photos, segments, toast]);
 
+
+  const applyTopicPage = useCallback((page: TopicPage | null) => {
+    const s = loadPageIntoState(page);
+    setTranscript(s.transcript);
+    setFormattedNotes(s.formattedNotes);
+    setSegments(s.segments);
+    setRecordingDuration(s.duration);
+    setPhotos(s.photos);
+    setDetectedLanguage(s.language || "");
+    if (s.recordingUrl) {
+      setAudioUrl(s.recordingUrl);
+      setAudioBlobs([]);
+    } else {
+      setAudioUrl(null);
+      setAudioBlobs([]);
+    }
+    // stop any segment playback
+    try { segAudioRef.current?.pause(); } catch {}
+    setPlayingSegIndex(null);
+    setIsSegPlaying(false);
+  }, []);
+
+  const stopSegmentAudio = useCallback(() => {
+    try {
+      const a = segAudioRef.current || audioElRef.current;
+      if (a) { a.pause(); }
+    } catch {}
+    setIsSegPlaying(false);
+    setPlayingSegIndex(null);
+  }, []);
+
+  const playSegmentAt = useCallback((index: number, start: number) => {
+    const src = audioUrl;
+    if (!src) {
+      toast({ title: "No recording", description: "This page has no audio to play.", variant: "destructive" });
+      return;
+    }
+    // Stop previous
+    try {
+      if (segAudioRef.current && segAudioRef.current !== audioElRef.current) {
+        segAudioRef.current.pause();
+      }
+    } catch {}
+    let audio = audioElRef.current;
+    if (!audio) {
+      audio = new Audio(src);
+      segAudioRef.current = audio;
+    } else {
+      if (audio.src !== src && !audio.src.endsWith(src) && audio.src !== src) {
+        audio.src = src;
+      }
+      segAudioRef.current = audio;
+    }
+    const onEnded = () => { setIsSegPlaying(false); setPlayingSegIndex(null); };
+    audio.onended = onEnded;
+    try {
+      audio.currentTime = Math.max(0, start || 0);
+      const p = audio.play();
+      if (p && typeof p.then === "function") p.catch(() => {});
+      setPlayingSegIndex(index);
+      setIsSegPlaying(true);
+    } catch {
+      toast({ title: "Could not play", variant: "destructive" });
+    }
+  }, [audioUrl, toast]);
+
+  const toggleSegmentPlay = useCallback((index: number, start: number) => {
+    if (playingSegIndex === index && isSegPlaying) {
+      try { (segAudioRef.current || audioElRef.current)?.pause(); } catch {}
+      setIsSegPlaying(false);
+      return;
+    }
+    if (playingSegIndex === index && !isSegPlaying) {
+      try {
+        const a = segAudioRef.current || audioElRef.current;
+        a?.play().catch(() => {});
+        setIsSegPlaying(true);
+      } catch {}
+      return;
+    }
+    playSegmentAt(index, start);
+  }, [playingSegIndex, isSegPlaying, playSegmentAt]);
+
   const saveToTopic = useCallback(async () => {
     if (!selectedNotebook || !selectedTopic) {
       toast({ title: "Open a topic first", variant: "destructive" });
@@ -626,27 +800,26 @@ export default function LiveSession() {
     }
     setIsSaving(true);
     try {
-      // 1) Persist any remaining local/data-URL photos to permanent storage
+      // Persist photos
       const permanentPhotos: string[] = [];
       for (let i = 0; i < photos.length; i++) {
-        const p = photos[i];
-        if (!p) continue;
-        if (p.startsWith("http://") || p.startsWith("https://")) {
-          permanentPhotos.push(p);
+        const ph = photos[i];
+        if (!ph) continue;
+        if (ph.startsWith("http://") || ph.startsWith("https://")) {
+          permanentPhotos.push(ph);
           continue;
         }
-        // data: or blob: — upload
         let uploaded: { url: string } | null = null;
-        if (p.startsWith("data:")) {
+        if (ph.startsWith("data:")) {
           uploaded = await uploadPermanentMedia(selectedNotebook.id, {
-            dataUrl: p,
+            dataUrl: ph,
             name: `board-${selectedTopic.id}-${i + 1}.jpg`,
             topicId: selectedTopic.id,
             role: "board_photo",
           });
-        } else if (p.startsWith("blob:") && navigator.onLine) {
+        } else if (ph.startsWith("blob:") && navigator.onLine) {
           try {
-            const blob = await fetch(p).then((r) => r.blob());
+            const blob = await fetch(ph).then((r) => r.blob());
             uploaded = await uploadPermanentMedia(selectedNotebook.id, {
               file: blob,
               name: `board-${selectedTopic.id}-${i + 1}.jpg`,
@@ -660,26 +833,43 @@ export default function LiveSession() {
       }
       setPhotos(permanentPhotos);
 
-      // 2) Persist lecture recording when present
+      // Persist recording
       let recordingUrl: string | undefined;
-      if (audioBlobs.length > 0 && navigator.onLine) {
+      // Prefer already-permanent URL if present
+      if (audioUrl && (audioUrl.startsWith("http://") || audioUrl.startsWith("https://"))) {
+        recordingUrl = audioUrl;
+      } else if (audioBlobs.length > 0 && navigator.onLine) {
         const blob = audioBlobs[0];
-        const ext = (blob.type || "").includes("mp4") ? "mp4" : (blob.type || "").includes("mpeg") || (blob.type || "").includes("mp3") ? "mp3" : "webm";
+        const ext = (blob.type || "").includes("mp4")
+          ? "mp4"
+          : (blob.type || "").includes("mpeg") || (blob.type || "").includes("mp3")
+            ? "mp3"
+            : "webm";
         const uploadedAudio = await uploadPermanentMedia(selectedNotebook.id, {
           file: blob,
-          name: `recording-${selectedTopic.id}.${ext}`,
+          name: `recording-${selectedTopic.id}-p${topicPages.length + 1}.${ext}`,
           mimeType: blob.type || "audio/webm",
           topicId: selectedTopic.id,
           role: "lecture_recording",
         });
         if (uploadedAudio?.url) {
           recordingUrl = uploadedAudio.url;
-          // Prefer permanent URL for player
           setAudioUrl(uploadedAudio.url);
         }
       }
 
-      const payload: TopicPayload = {
+      // Build NEW page and APPEND (never wipe previous pages)
+      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+      let pages = getTopicPages(existingDoc);
+      // Merge in memory pages if newer
+      if (topicPages.length > pages.length) pages = [...topicPages];
+
+      const nextNum = pages.length + 1;
+      const newPage: TopicPage = {
+        id: `page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        pageNumber: nextNum,
+        title: `Page ${nextNum}`,
+        createdAt: new Date().toISOString(),
         transcript: (transcript || "").slice(0, 180_000),
         formattedNotes: (formattedNotes || transcript || "").slice(0, 180_000),
         segments: (segments || []).slice(0, 400),
@@ -693,19 +883,21 @@ export default function LiveSession() {
           ...(recordingUrl
             ? [{ name: "Lecture recording", type: "audio", url: recordingUrl, size: audioBlobs[0]?.size }]
             : []),
-          ...permanentPhotos.map((url, i) => ({
-            name: `Board photo ${i + 1}`,
-            type: "image",
-            url,
-          })),
+          ...permanentPhotos.map((url, i) => ({ name: `Board photo ${i + 1}`, type: "image", url })),
         ],
       };
 
-      const body = JSON.stringify({
-        name: selectedTopic.name,
-        content: JSON.stringify(payload),
-      });
+      pages = [...pages, newPage];
+      const doc: TopicPayload = { version: 2, pages };
+      const content = JSON.stringify(doc);
+      const size = new Blob([content]).size;
+      if (size > TOPIC_STORAGE_LIMIT) {
+        throw new Error(
+          `This topic would exceed 50 MB (${formatBytes(size)}). Delete older pages or upgrade your plan.`
+        );
+      }
 
+      const body = JSON.stringify({ name: selectedTopic.name, content });
       let res = await authFetch(
         `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
         { method: "PUT", headers: { "Content-Type": "application/json" }, body }
@@ -730,14 +922,22 @@ export default function LiveSession() {
         throw new Error(err.message || err.error || `Save failed (${res.status})`);
       }
       const saved = await res.json();
-      setSelectedTopic({
+      const updatedTopic = {
         ...selectedTopic,
         ...saved,
-        extracted_text: saved.extracted_text || JSON.stringify(payload),
-      });
+        extracted_text: saved.extracted_text || content,
+        size_bytes: size,
+      };
+      setSelectedTopic(updatedTopic);
+      setTopicPages(pages);
+      setSelectedPageIndex(pages.length - 1);
+      applyTopicPage(newPage);
       refetchTopics();
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
-      toast({ title: "Saved to topic file", description: permanentPhotos.length ? `${permanentPhotos.length} photo(s) stored permanently` : undefined });
+      toast({
+        title: `Saved as Page ${nextNum}`,
+        description: `${pages.length} page${pages.length === 1 ? "" : "s"} in this topic · ${formatBytes(size)} / 50 MB`,
+      });
       setView("topic");
       setTopicTab("note");
     } catch (err: any) {
@@ -755,8 +955,8 @@ export default function LiveSession() {
     }
   }, [
     selectedNotebook, selectedTopic, transcript, formattedNotes, segments,
-    recordingDuration, photos, detectedLanguage, audioUrl, audioBlobs,
-    toast, refetchTopics, queryClient,
+    recordingDuration, photos, detectedLanguage, audioUrl, audioBlobs, topicPages,
+    toast, refetchTopics, queryClient, applyTopicPage,
   ]);
 
   const openShare = async (forcePublic?: boolean) => {
@@ -909,27 +1109,28 @@ export default function LiveSession() {
               <div className="space-y-2">
                 {topicFiles.filter((t) => !searchQuery || t.name.toLowerCase().includes(searchQuery.toLowerCase()) || (t.extracted_text || t.extractedText || "").toLowerCase().includes(searchQuery.toLowerCase())).map((t) => {
                   const size = t.size_bytes ?? t.sizeBytes ?? 0;
+                  const pageCount = getTopicPages(parseTopicPayload(t.extracted_text || t.extractedText)).length;
                   return (
                     <div key={t.id} className="flex items-center gap-2 rounded-xl border bg-card px-3 py-3">
                       <button type="button" className="flex-1 flex items-center gap-3 text-left min-w-0" onClick={() => {
                         setSelectedTopic(t);
                         const payload = parseTopicPayload(t.extracted_text || t.extractedText);
-                        setTranscript(payload.transcript || ""); setFormattedNotes(payload.formattedNotes || "");
-                        setSegments(payload.segments || []); setRecordingDuration(payload.duration || 0);
-                        setPhotos(payload.photos || []);
-                        if (payload.recordingUrl) {
-                          setAudioUrl(payload.recordingUrl);
-                          setAudioBlobs([]);
-                        } else {
-                          setAudioUrl(null);
-                          setAudioBlobs([]);
-                        }
-                        setTopicTab(payload.formattedNotes ? "note" : "live"); setView("topic");
+                        const pages = getTopicPages(payload);
+                        setTopicPages(pages);
+                        const idx = Math.max(0, pages.length - 1);
+                        setSelectedPageIndex(idx);
+                        const page = pages[idx] || null;
+                        applyTopicPage(page);
+                        setTopicTab(page?.formattedNotes ? "note" : "live");
+                        setView("topic");
                       }}>
                         <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0"><FileText className="w-4 h-4 text-primary" /></div>
                         <div className="min-w-0">
                           <p className="font-medium text-sm truncate">{t.name}</p>
-                          <p className="text-xs text-muted-foreground">{formatBytes(size)} / 50 MB · {relativeTime(t.created_at || t.createdAt)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {pageCount > 0 ? `${pageCount} page${pageCount === 1 ? "" : "s"} · ` : ""}
+                            {formatBytes(size)} / 50 MB · {relativeTime(t.created_at || t.createdAt)}
+                          </p>
                         </div>
                       </button>
                       <Button variant="ghost" size="icon" className="shrink-0" onClick={() => { if (confirm(`Delete "${t.name}" permanently?`)) deleteTopicMutation.mutate(t.id); }}><Trash2 className="w-4 h-4 text-destructive" /></Button>
@@ -946,23 +1147,57 @@ export default function LiveSession() {
         <>
           <header className="sticky top-0 z-40 bg-background/90 backdrop-blur border-b px-4 py-3">
             <div className="max-w-lg mx-auto flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={() => { setSelectedTopic(null); setView("notebook"); }}><ArrowLeft className="w-5 h-5" /></Button>
+              <Button variant="ghost" size="icon" onClick={() => { stopSegmentAudio(); setSelectedTopic(null); setView("notebook"); }}><ArrowLeft className="w-5 h-5" /></Button>
               <div className="flex-1 min-w-0">
                 <h1 className="font-bold text-base truncate">{selectedTopic.name}</h1>
-                <p className="text-xs text-muted-foreground">{selectedNotebook.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedNotebook.name}
+                  {topicPages.length > 0 ? ` · ${topicPages.length} page${topicPages.length === 1 ? "" : "s"} · ${formatBytes(selectedTopic.size_bytes ?? selectedTopic.sizeBytes ?? 0)} / 50 MB` : ""}
+                </p>
               </div>
             </div>
           </header>
           <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 space-y-4">
+            {/* Page selector — each save/upload is a numbered page */}
+            {topicPages.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pages in this topic</p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {topicPages.map((pg, idx) => (
+                    <button
+                      key={pg.id}
+                      type="button"
+                      onClick={() => {
+                        stopSegmentAudio();
+                        setSelectedPageIndex(idx);
+                        applyTopicPage(pg);
+                        setTopicTab(pg.formattedNotes ? "note" : "live");
+                      }}
+                      className={`shrink-0 rounded-lg border px-3 py-2 text-left min-w-[7rem] transition ${
+                        selectedPageIndex === idx ? "border-primary bg-primary/10 ring-1 ring-primary" : "bg-card hover:bg-muted/40"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">Page {pg.pageNumber}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        {pg.title || relativeTime(pg.createdAt)}
+                        {pg.hasRecording || pg.recordingUrl ? " · 🎧" : ""}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" className="gap-1.5" onClick={() => setShowStartRecCard(true)}><Mic className="w-4 h-4" />Record</Button>
+              <Button size="sm" className="gap-1.5" onClick={() => { stopSegmentAudio(); setShowStartRecCard(true); }}><Mic className="w-4 h-4" />Record</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => fileInputRef.current?.click()}><Upload className="w-4 h-4" />Upload</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => videoInputRef.current?.click()}><FileText className="w-4 h-4" />Video</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowVideoUrl(true)}><Link2 className="w-4 h-4" />Link</Button>
             </div>
             <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.aac,.flac" className="hidden" onChange={handleUploadRecording} />
             <input ref={videoInputRef} type="file" accept="video/*,.mp4,.webm,.mov" className="hidden" onChange={handleUploadRecording} />
-            {(transcript || formattedNotes || audioUrl || photos.length > 0) ? (
+
+            {(transcript || formattedNotes || audioUrl || photos.length > 0 || topicPages.length > 0) ? (
               <>
                 <div className="flex rounded-lg border p-0.5 bg-muted/30">
                   <button type="button" className={`flex-1 text-sm py-2 rounded-md font-medium transition ${topicTab === "live" ? "bg-background shadow-sm" : "text-muted-foreground"}`} onClick={() => setTopicTab("live")}>Live Class</button>
@@ -971,69 +1206,94 @@ export default function LiveSession() {
 
                 {topicTab === "live" && (
                   <div className="space-y-4">
-                    {/* Recording for this topic */}
                     <div className="rounded-xl border bg-card p-4 space-y-2">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Recording</p>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Recording · Page {topicPages[selectedPageIndex]?.pageNumber || 1}
+                      </p>
                       {audioUrl ? (
                         <>
-                          <audio controls src={audioUrl} className="w-full h-10" />
+                          <audio
+                            ref={audioElRef}
+                            controls
+                            src={audioUrl}
+                            className="w-full h-10"
+                            onPlay={() => setIsSegPlaying(true)}
+                            onPause={() => setIsSegPlaying(false)}
+                            onEnded={() => { setIsSegPlaying(false); setPlayingSegIndex(null); }}
+                          />
                           <p className="text-xs text-muted-foreground">
                             Duration {formatDuration(recordingDuration)}
-                            {audioBlobs[0] ? ` · ${formatBytes(audioBlobs[0].size)}` : ""}
+                            {audioUrl.startsWith("http") ? " · Saved permanently" : ""}
                           </p>
                         </>
                       ) : (
                         <p className="text-sm text-muted-foreground">
-                          {recordingDuration > 0
-                            ? `Recording was ${formatDuration(recordingDuration)} (playback available after capture in this session).`
-                            : "No recording in this session yet. Record or upload audio above."}
+                          No recording on this page yet. Record or upload, then save to keep it permanently on this page.
                         </p>
                       )}
                     </div>
 
-                    {/* Transcript */}
                     <div className="rounded-xl border bg-card p-4 space-y-2">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transcript</p>
                       {transcript ? (
                         segments.length > 0 ? (
-                          <div className="space-y-1 max-h-64 overflow-y-auto">
-                            {segments.slice(0, 80).map((s, i) => (
-                              <button
-                                key={i}
-                                type="button"
-                                className="text-sm text-left w-full rounded px-1 py-1 hover:bg-muted/50"
-                                onClick={() => {
-                                  if (audioElRef.current && Number.isFinite(s.start)) {
-                                    audioElRef.current.currentTime = Math.max(0, s.start);
-                                    audioElRef.current.play().catch(() => {});
-                                  } else if (audioUrl) {
-                                    const a = new Audio(audioUrl);
-                                    a.currentTime = Math.max(0, s.start || 0);
-                                    a.play().catch(() => {});
-                                  }
-                                }}
-                              >
-                                <span className="text-xs font-mono text-primary mr-2">{formatDuration(s.start || 0)}</span>
-                                {s.text}
-                              </button>
-                            ))}
+                          <div className="space-y-1 max-h-80 overflow-y-auto">
+                            {segments.slice(0, 120).map((s, i) => {
+                              const active = playingSegIndex === i;
+                              return (
+                                <div
+                                  key={i}
+                                  className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-sm ${active ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-muted/50"}`}
+                                >
+                                  <button
+                                    type="button"
+                                    className="mt-0.5 shrink-0 w-7 h-7 rounded-full border flex items-center justify-center bg-background"
+                                    title={active && isSegPlaying ? "Pause" : "Play from here"}
+                                    onClick={() => toggleSegmentPlay(i, s.start || 0)}
+                                  >
+                                    {active && isSegPlaying ? (
+                                      <Pause className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Play className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                  {active && (
+                                    <button
+                                      type="button"
+                                      className="mt-0.5 shrink-0 w-7 h-7 rounded-full border flex items-center justify-center bg-background text-destructive"
+                                      title="Stop"
+                                      onClick={stopSegmentAudio}
+                                    >
+                                      <Square className="w-3 h-3 fill-current" />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="flex-1 text-left min-w-0"
+                                    onClick={() => toggleSegmentPlay(i, s.start || 0)}
+                                  >
+                                    <span className="text-xs font-mono text-primary mr-2">{formatDuration(s.start || 0)}</span>
+                                    {s.text}
+                                  </button>
+                                </div>
+                              );
+                            })}
                           </div>
                         ) : (
                           <pre className="whitespace-pre-wrap text-sm font-sans max-h-64 overflow-y-auto">{transcript}</pre>
                         )
                       ) : (
-                        <p className="text-sm text-muted-foreground">No transcript yet. Generate notes from a recording.</p>
+                        <p className="text-sm text-muted-foreground">No transcript on this page yet.</p>
                       )}
                     </div>
 
-                    {/* Uploaded files matched / attached */}
                     <div className="rounded-xl border bg-card p-4 space-y-3">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
-                      {photos.length === 0 && !audioUrl && !audioBlobs.length ? (
-                        <p className="text-sm text-muted-foreground">No extra files yet. Snap board photos while recording or upload documents.</p>
+                      {photos.length === 0 && !audioUrl ? (
+                        <p className="text-sm text-muted-foreground">No files on this page yet.</p>
                       ) : (
                         <div className="space-y-2">
-                          {(audioUrl || audioBlobs.length > 0) && (
+                          {audioUrl && (
                             <div className="flex items-center gap-2 text-sm rounded-lg border px-3 py-2">
                               <Mic className="w-4 h-4 text-primary shrink-0" />
                               <span className="truncate">Lecture recording</span>
@@ -1062,15 +1322,18 @@ export default function LiveSession() {
 
                 {topicTab === "note" && (
                   <div className="rounded-xl border bg-card p-4 prose prose-sm dark:prose-invert max-w-none">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide not-prose mb-2">
+                      Note · Page {topicPages[selectedPageIndex]?.pageNumber || 1}
+                    </p>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {formattedNotes || "No formatted notes yet. Use Format Note after transcription."}
+                      {formattedNotes || "No formatted notes on this page yet. Use Format Note after transcription, then Save."}
                     </ReactMarkdown>
                   </div>
                 )}
               </>
             ) : (
               <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground space-y-3">
-                <p>Record a lecture or upload audio/video to generate notes for this topic.</p>
+                <p>Record a lecture or upload audio/video. Each save creates a new <strong>page</strong> in this topic (counts toward 50 MB).</p>
                 <div className="flex justify-center gap-2">
                   <Button onClick={() => setShowStartRecCard(true)} className="gap-2">
                     <Mic className="w-4 h-4" />Start Recording
