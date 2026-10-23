@@ -36,7 +36,8 @@ interface TopicPayload {
   segments?: Array<{ text: string; start: number; end: number; speaker?: string }>;
   duration?: number; photos?: string[]; language?: string;
   photoCount?: number; hasRecording?: boolean;
-  uploadedFiles?: Array<{ name: string; type: string; size?: number }>;
+  recordingUrl?: string;
+  uploadedFiles?: Array<{ name: string; type: string; size?: number; url?: string }>;
 }
 interface TranscriptSegment { text: string; start: number; end: number; speaker?: string; }
 
@@ -369,11 +370,89 @@ export default function LiveSession() {
     setShowVideoUrl(false);
   };
 
+
+  /** Upload image/audio permanently to notebook media storage. Returns public URL. */
+  const uploadPermanentMedia = async (
+    folderId: string,
+    opts: { file?: File | Blob; dataUrl?: string; name: string; mimeType?: string; topicId?: string; role?: string }
+  ): Promise<{ url: string; id?: string } | null> => {
+    try {
+      if (opts.file) {
+        const form = new FormData();
+        form.append("file", opts.file, opts.name);
+        form.append("label", opts.name);
+        if (opts.topicId) form.append("topicId", opts.topicId);
+        if (opts.role) form.append("role", opts.role);
+        const res = await authFetch(`/api/kb/folders/${folderId}/media`, { method: "POST", body: form });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.url ? { url: data.url, id: data.id } : null;
+      }
+      if (opts.dataUrl) {
+        const res = await authFetch(`/api/kb/folders/${folderId}/media`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dataUrl: opts.dataUrl,
+            name: opts.name,
+            mimeType: opts.mimeType,
+            topicId: opts.topicId,
+            role: opts.role,
+            label: opts.name,
+          }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.url ? { url: data.url, id: data.id } : null;
+      }
+    } catch (e) {
+      console.warn("permanent media upload failed", e);
+    }
+    return null;
+  };
+
   const handleCameraCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => { if (typeof reader.result === "string") { setPhotos((p) => [...p, reader.result as string]); toast({ title: "Photo saved to bucket" }); } };
-    reader.readAsDataURL(file); e.target.value = "";
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const localUrl = URL.createObjectURL(file);
+    setPhotos((p) => [...p, localUrl]);
+    // Persist in background when online + notebook selected
+    (async () => {
+      if (!selectedNotebook?.id || !navigator.onLine) {
+        toast({ title: "Photo captured", description: "Will upload when you save online." });
+        // Keep data URL fallback for offline save later
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            setPhotos((prev) => prev.map((u) => (u === localUrl ? (reader.result as string) : u)));
+          }
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+      toast({ title: "Uploading photo…" });
+      const saved = await uploadPermanentMedia(selectedNotebook.id, {
+        file,
+        name: `board-${Date.now()}.jpg`,
+        topicId: selectedTopic?.id,
+        role: "board_photo",
+      });
+      if (saved?.url) {
+        setPhotos((prev) => prev.map((u) => (u === localUrl ? saved.url : u)));
+        toast({ title: "Photo saved permanently" });
+      } else {
+        // Fallback data URL
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            setPhotos((prev) => prev.map((u) => (u === localUrl ? (reader.result as string) : u)));
+          }
+        };
+        reader.readAsDataURL(file);
+        toast({ title: "Photo kept locally", description: "Permanent upload failed — will retry on save.", variant: "destructive" });
+      }
+    })();
+    e.target.value = "";
   };
 
   const handleUploadRecording = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -547,40 +626,91 @@ export default function LiveSession() {
     }
     setIsSaving(true);
     try {
-      // Do NOT embed full photo data-URLs — they blow past body limits ("Failed to fetch").
-      // Keep at most 3 tiny thumbnails if under 80KB each; otherwise metadata only.
-      const lightPhotos: string[] = [];
-      for (const p of photos.slice(0, 6)) {
-        if (typeof p === "string" && p.startsWith("data:") && p.length < 80_000) lightPhotos.push(p);
+      // 1) Persist any remaining local/data-URL photos to permanent storage
+      const permanentPhotos: string[] = [];
+      for (let i = 0; i < photos.length; i++) {
+        const p = photos[i];
+        if (!p) continue;
+        if (p.startsWith("http://") || p.startsWith("https://")) {
+          permanentPhotos.push(p);
+          continue;
+        }
+        // data: or blob: — upload
+        let uploaded: { url: string } | null = null;
+        if (p.startsWith("data:")) {
+          uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+            dataUrl: p,
+            name: `board-${selectedTopic.id}-${i + 1}.jpg`,
+            topicId: selectedTopic.id,
+            role: "board_photo",
+          });
+        } else if (p.startsWith("blob:") && navigator.onLine) {
+          try {
+            const blob = await fetch(p).then((r) => r.blob());
+            uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+              file: blob,
+              name: `board-${selectedTopic.id}-${i + 1}.jpg`,
+              mimeType: blob.type || "image/jpeg",
+              topicId: selectedTopic.id,
+              role: "board_photo",
+            });
+          } catch {}
+        }
+        if (uploaded?.url) permanentPhotos.push(uploaded.url);
       }
+      setPhotos(permanentPhotos);
+
+      // 2) Persist lecture recording when present
+      let recordingUrl: string | undefined;
+      if (audioBlobs.length > 0 && navigator.onLine) {
+        const blob = audioBlobs[0];
+        const ext = (blob.type || "").includes("mp4") ? "mp4" : (blob.type || "").includes("mpeg") || (blob.type || "").includes("mp3") ? "mp3" : "webm";
+        const uploadedAudio = await uploadPermanentMedia(selectedNotebook.id, {
+          file: blob,
+          name: `recording-${selectedTopic.id}.${ext}`,
+          mimeType: blob.type || "audio/webm",
+          topicId: selectedTopic.id,
+          role: "lecture_recording",
+        });
+        if (uploadedAudio?.url) {
+          recordingUrl = uploadedAudio.url;
+          // Prefer permanent URL for player
+          setAudioUrl(uploadedAudio.url);
+        }
+      }
+
       const payload: TopicPayload = {
         transcript: (transcript || "").slice(0, 180_000),
         formattedNotes: (formattedNotes || transcript || "").slice(0, 180_000),
         segments: (segments || []).slice(0, 400),
         duration: recordingDuration,
-        photos: lightPhotos,
-        photoCount: photos.length,
-        hasRecording: !!(audioUrl || audioBlobs.length),
+        photos: permanentPhotos,
+        photoCount: permanentPhotos.length,
+        hasRecording: !!(recordingUrl || audioUrl || audioBlobs.length),
+        recordingUrl,
         language: detectedLanguage,
         uploadedFiles: [
-          ...(audioBlobs.length
-            ? [{ name: "Lecture recording", type: "audio", size: audioBlobs[0]?.size }]
+          ...(recordingUrl
+            ? [{ name: "Lecture recording", type: "audio", url: recordingUrl, size: audioBlobs[0]?.size }]
             : []),
-          ...photos.map((_, i) => ({ name: `Board photo ${i + 1}`, type: "image" })),
+          ...permanentPhotos.map((url, i) => ({
+            name: `Board photo ${i + 1}`,
+            type: "image",
+            url,
+          })),
         ],
       };
+
       const body = JSON.stringify({
         name: selectedTopic.name,
         content: JSON.stringify(payload),
       });
 
-      // Prefer in-place update so we keep the same topic id
       let res = await authFetch(
         `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
         { method: "PUT", headers: { "Content-Type": "application/json" }, body }
       );
       if (!res.ok) {
-        // Fallback: create new text file if update not available
         res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/text`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -600,10 +730,14 @@ export default function LiveSession() {
         throw new Error(err.message || err.error || `Save failed (${res.status})`);
       }
       const saved = await res.json();
-      setSelectedTopic({ ...selectedTopic, ...saved, extracted_text: saved.extracted_text || JSON.stringify(payload) });
+      setSelectedTopic({
+        ...selectedTopic,
+        ...saved,
+        extracted_text: saved.extracted_text || JSON.stringify(payload),
+      });
       refetchTopics();
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
-      toast({ title: "Saved to topic file" });
+      toast({ title: "Saved to topic file", description: permanentPhotos.length ? `${permanentPhotos.length} photo(s) stored permanently` : undefined });
       setView("topic");
       setTopicTab("note");
     } catch (err: any) {
@@ -782,7 +916,15 @@ export default function LiveSession() {
                         const payload = parseTopicPayload(t.extracted_text || t.extractedText);
                         setTranscript(payload.transcript || ""); setFormattedNotes(payload.formattedNotes || "");
                         setSegments(payload.segments || []); setRecordingDuration(payload.duration || 0);
-                        setPhotos(payload.photos || []); setTopicTab(payload.formattedNotes ? "note" : "live"); setView("topic");
+                        setPhotos(payload.photos || []);
+                        if (payload.recordingUrl) {
+                          setAudioUrl(payload.recordingUrl);
+                          setAudioBlobs([]);
+                        } else {
+                          setAudioUrl(null);
+                          setAudioBlobs([]);
+                        }
+                        setTopicTab(payload.formattedNotes ? "note" : "live"); setView("topic");
                       }}>
                         <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0"><FileText className="w-4 h-4 text-primary" /></div>
                         <div className="min-w-0">
@@ -900,11 +1042,16 @@ export default function LiveSession() {
                           )}
                           {photos.map((src, i) => (
                             <div key={i} className="flex items-center gap-3 rounded-lg border px-3 py-2">
-                              <img src={src} alt="" className="w-12 h-12 object-cover rounded" />
-                              <div className="min-w-0">
+                              <img src={src} alt="" className="w-12 h-12 object-cover rounded bg-muted" />
+                              <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium truncate">Board photo {i + 1}</p>
-                                <p className="text-xs text-muted-foreground">Used when formatting notes</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {src.startsWith("http") ? "Saved permanently" : "Local (will upload on save)"}
+                                </p>
                               </div>
+                              {src.startsWith("http") && (
+                                <a href={src} target="_blank" rel="noreferrer" className="text-xs text-primary shrink-0">Open</a>
+                              )}
                             </div>
                           ))}
                         </div>

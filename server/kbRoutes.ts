@@ -7,9 +7,68 @@ import { supabaseAuth } from "./supabaseAuth";
 import { deductCredits } from "./creditsStore";
 import { chatWithAI } from "./gemini";
 import { storage } from "./storage";
-const kbUpload = multer({ storage: multer.memoryStorage() });
+const kbUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 80 * 1024 * 1024 },
+});
 
 const REAL_ADMIN_EMAIL = "felixahuruonye@gmail.com";
+const KB_MEDIA_BUCKET = "lenory-kb-media";
+let kbMediaBucketReady = false;
+
+async function ensureKbMediaBucket() {
+  const { supabaseDb } = await import("./db");
+  if (!supabaseDb || kbMediaBucketReady) return supabaseDb;
+  try {
+    const { error: createErr } = await supabaseDb.storage.createBucket(KB_MEDIA_BUCKET, {
+      public: true,
+      fileSizeLimit: 80 * 1024 * 1024,
+    });
+    if (createErr && !/already exists/i.test(createErr.message || "")) {
+      console.warn("[kb media] createBucket:", createErr.message);
+    }
+    try {
+      await (supabaseDb.storage as any).updateBucket(KB_MEDIA_BUCKET, { public: true });
+    } catch {}
+    kbMediaBucketReady = true;
+  } catch (e) {
+    console.error("[kb media] ensure bucket failed:", e);
+  }
+  return supabaseDb;
+}
+
+/** Upload binary to permanent public storage. Returns public URL or null. */
+async function uploadKbMediaBuffer(
+  buffer: Buffer,
+  mimeType: string,
+  originalName: string,
+  userId: string,
+  folderId: string
+): Promise<string | null> {
+  const supabaseDb = await ensureKbMediaBucket();
+  if (!supabaseDb) return null;
+  const safeName = (originalName || "file").replace(/[^\w.\-]+/g, "_").slice(0, 80);
+  const ext = safeName.includes(".")
+    ? safeName.split(".").pop()
+    : (mimeType.split("/")[1] || "bin");
+  const pathKey = `${userId}/${folderId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  let { error } = await supabaseDb.storage
+    .from(KB_MEDIA_BUCKET)
+    .upload(pathKey, buffer, { contentType: mimeType || "application/octet-stream", upsert: false });
+  if (error && /bucket not found/i.test(error.message || "")) {
+    kbMediaBucketReady = false;
+    await ensureKbMediaBucket();
+    ({ error } = await supabaseDb.storage
+      .from(KB_MEDIA_BUCKET)
+      .upload(pathKey, buffer, { contentType: mimeType || "application/octet-stream", upsert: false }));
+  }
+  if (error) {
+    console.error("[kb media] upload error:", error.message);
+    return null;
+  }
+  const { data } = supabaseDb.storage.from(KB_MEDIA_BUCKET).getPublicUrl(pathKey);
+  return data?.publicUrl || null;
+}
 
 // Write My Note / Knowledge Base hard storage caps (enforced server-side)
 const FOLDER_STORAGE_LIMIT = 100 * 1024 * 1024; // 100 MB per notebook/folder
@@ -323,16 +382,25 @@ export function registerKbRoutes(app: Express) {
         extractedText = buffer.toString("utf-8");
       } else if (mimetype.startsWith("audio/")) {
         fileType = "audio";
-        const transcript = await transcribeAudioBuffer(buffer, originalname);
-        extractedText = transcript || "";
+        // Permanent storage first; skip auto-transcribe for speed (user uses Write My Note)
+        if (!(req.body?.skipExtract === "1" || req.body?.skipExtract === "true")) {
+          try {
+            const transcript = await transcribeAudioBuffer(buffer, originalname);
+            extractedText = transcript || "";
+          } catch {}
+        }
       } else if (mimetype.startsWith("image/")) {
         fileType = "image";
-        const { extractTextFromImage } = await import('./gemini');
-        const ocrText = await extractTextFromImage(buffer.toString('base64'), mimetype);
-        extractedText = ocrText || "";
+        if (!(req.body?.skipExtract === "1" || req.body?.skipExtract === "true")) {
+          try {
+            const { extractTextFromImage } = await import('./gemini');
+            const ocrText = await extractTextFromImage(buffer.toString('base64'), mimetype);
+            extractedText = ocrText || "";
+          } catch {}
+        }
       } else if (mimetype.startsWith("video/")) {
         fileType = "video";
-        if (buffer.length <= 20 * 1024 * 1024) {
+        if (buffer.length <= 20 * 1024 * 1024 && !(req.body?.skipExtract === "1" || req.body?.skipExtract === "true")) {
           try {
             const { GoogleGenAI } = await import('@google/genai');
             const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
@@ -352,12 +420,90 @@ export function registerKbRoutes(app: Express) {
           }
         }
       }
+
+      // Permanent binary storage (photos, audio, video)
+      let publicUrl: string | null = null;
+      if (mimetype.startsWith("image/") || mimetype.startsWith("audio/") || mimetype.startsWith("video/")) {
+        publicUrl = await uploadKbMediaBuffer(buffer, mimetype, originalname, req.userId, req.params.id);
+      }
+
       const file = await storage.createKBFile({
         folder_id: req.params.id, user_id: req.userId, name: originalname,
-        file_type: fileType, mime_type: mimetype, file_size: buffer.length, extracted_text: extractedText,
+        file_type: fileType, mime_type: mimetype, file_size: buffer.length,
+        extracted_text: extractedText, full_text_url: publicUrl,
       });
-      res.status(201).json(file);
+      res.status(201).json({ ...file, url: publicUrl || file.full_text_url || null });
     } catch (error) { console.error("KB FILE UPLOAD ERROR:", error); res.status(500).json({ message: "Failed to upload file" }); }
+  });
+
+  /**
+   * Fast permanent media upload for Write My Note (board photos / lecture audio).
+   * Skips OCR/transcription by default so capture stays snappy; stores public URL.
+   * Accepts multipart `file` OR JSON { dataUrl, name, mimeType }.
+   */
+  app.post('/api/kb/folders/:id/media', supabaseAuth, kbUpload.single('file'), async (req: any, res: Response) => {
+    try {
+      let buffer: Buffer | null = null;
+      let mimetype = "application/octet-stream";
+      let originalname = "media.bin";
+
+      if (req.file) {
+        buffer = req.file.buffer;
+        mimetype = req.file.mimetype || mimetype;
+        originalname = req.file.originalname || originalname;
+      } else if (req.body?.dataUrl && typeof req.body.dataUrl === "string") {
+        const match = String(req.body.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+        if (!match) return res.status(400).json({ message: "Invalid dataUrl" });
+        mimetype = match[1] || "image/jpeg";
+        buffer = Buffer.from(match[2], "base64");
+        originalname = req.body.name || `board-${Date.now()}.jpg`;
+      } else {
+        return res.status(400).json({ message: "No file or dataUrl provided" });
+      }
+
+      const room = await assertFolderStorageRoom(req.params.id, buffer.length);
+      if (!room.ok) {
+        return res.status(413).json({ message: room.message, error: "STORAGE_FULL", used: room.used });
+      }
+
+      const publicUrl = await uploadKbMediaBuffer(buffer, mimetype, originalname, req.userId, req.params.id);
+      if (!publicUrl) {
+        return res.status(500).json({ message: "Storage upload failed. Check Supabase storage is configured." });
+      }
+
+      let fileType = "upload";
+      if (mimetype.startsWith("image/")) fileType = "image";
+      else if (mimetype.startsWith("audio/")) fileType = "audio";
+      else if (mimetype.startsWith("video/")) fileType = "video";
+
+      const topicId = req.body?.topicId || null;
+      const label = req.body?.label || originalname;
+
+      const file = await storage.createKBFile({
+        folder_id: req.params.id,
+        user_id: req.userId,
+        name: label,
+        file_type: fileType,
+        mime_type: mimetype,
+        file_size: buffer.length,
+        extracted_text: topicId ? JSON.stringify({ topicId, role: req.body?.role || "board_photo" }) : null,
+        full_text_url: publicUrl,
+        source_type: "write_my_note_media",
+      });
+
+      res.status(201).json({
+        id: file.id,
+        name: file.name,
+        url: publicUrl,
+        full_text_url: publicUrl,
+        file_type: fileType,
+        mime_type: mimetype,
+        file_size: buffer.length,
+      });
+    } catch (error) {
+      console.error("KB MEDIA UPLOAD ERROR:", error);
+      res.status(500).json({ message: "Failed to store media permanently" });
+    }
   });
   app.post('/api/kb/folders/:id/files/url', supabaseAuth, async (req: any, res: Response) => {
     try {
