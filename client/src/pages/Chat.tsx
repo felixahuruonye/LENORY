@@ -717,7 +717,13 @@ export default function Chat() {
           queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
           setCurrentSessionId(session.id);
           setActiveFolder({ id: newFolderSessionId, name: newFolderSessionName || "Folder" });
+          setMessage("");
           setLocation(`/chat?sessionId=${session.id}`, { replace: true } as any);
+          setTimeout(() => textareaRef.current?.focus(), 100);
+          toast({
+            title: `Chatting about ${newFolderSessionName || "this notebook"}`,
+            description: "Ask anything — Lenory will search this folder's notes and files.",
+          });
         } catch {
           toast({ title: "Couldn't start folder chat", variant: "destructive" });
         }

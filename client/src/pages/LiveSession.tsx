@@ -412,37 +412,108 @@ export default function LiveSession() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token || "";
-      const chunks = splitBlob(fullBlob);
-      const allTexts: string[] = []; const allSegments: TranscriptSegment[] = [];
-      let timeOffset = 0; let lang = "";
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]; const form = new FormData();
-        const ext = chunk.type.includes("mp4") ? "mp4" : chunk.type.includes("mp3") || chunk.type.includes("mpeg") ? "mp3" : "webm";
-        form.append("audio", chunk, `part${i + 1}.${ext}`);
+      const authHeaders: Record<string, string> = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+
+      const pollJob = async (jobId: string): Promise<any> => {
+        const maxAttempts = 180; // up to ~6 min
+        for (let i = 0; i < maxAttempts; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const res = await fetch(`/api/jobs/${jobId}`, { headers: authHeaders });
+          if (!res.ok) continue;
+          const job = await res.json();
+          if (job.status === "done") return job.result;
+          if (job.status === "failed") throw new Error(job.error || "Transcription job failed");
+        }
+        throw new Error("Transcription is taking too long. Please try again or use a shorter clip.");
+      };
+
+      const uploadOne = async (chunk: Blob, name: string): Promise<any> => {
+        const form = new FormData();
+        form.append("audio", chunk, name);
         form.append("language", "auto");
-        const res = await fetch("/api/groq/transcribe", {
-          method: "POST", body: form,
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-        });
+        let res: Response;
+        try {
+          res = await fetch("/api/groq/transcribe", {
+            method: "POST",
+            body: form,
+            headers: authHeaders,
+          });
+        } catch (netErr: any) {
+          // Retry once on network failure
+          await new Promise((r) => setTimeout(r, 1500));
+          try {
+            res = await fetch("/api/groq/transcribe", {
+              method: "POST",
+              body: form,
+              headers: authHeaders,
+            });
+          } catch {
+            throw new Error("Network error — check your connection and try again. Long files need a stable signal.");
+          }
+        }
+        if (res.status === 202) {
+          const { jobId } = await res.json();
+          if (!jobId) throw new Error("Server queued the job but returned no id");
+          return pollJob(jobId);
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Unknown error" }));
           throw new Error(err.message || err.error || err.detail || "Transcription failed");
         }
-        const data = await res.json();
-        if (data.text) allTexts.push(data.text.trim());
-        if (data.language && !lang) lang = data.language;
-        if (data.segments) {
-          allSegments.push(...data.segments.map((s: TranscriptSegment) => ({ ...s, start: (s.start || 0) + timeOffset, end: (s.end || 0) + timeOffset })));
-          if (data.duration) timeOffset += data.duration;
+        return res.json();
+      };
+
+      // Prefer one upload for whole file — server converts, splits, and may run async
+      const mime = fullBlob.type || "audio/webm";
+      const ext = mime.includes("mp4") ? "mp4" : mime.includes("mp3") || mime.includes("mpeg") ? "mp3" : mime.includes("wav") ? "wav" : "webm";
+      let data: any;
+      try {
+        data = await uploadOne(fullBlob, `recording.${ext}`);
+      } catch (e: any) {
+        // Fallback: try smaller byte chunks if full upload failed (network)
+        if (fullBlob.size > 3 * 1024 * 1024) {
+          const chunks = splitBlob(fullBlob, 3 * 1024 * 1024);
+          const allTexts: string[] = [];
+          const allSegments: TranscriptSegment[] = [];
+          let timeOffset = 0;
+          let lang = "";
+          for (let i = 0; i < chunks.length; i++) {
+            const part = await uploadOne(chunks[i], `part${i + 1}.${ext}`);
+            if (part.text) allTexts.push(part.text.trim());
+            if (part.language && !lang) lang = part.language;
+            if (part.segments) {
+              allSegments.push(...part.segments.map((s: TranscriptSegment) => ({
+                ...s,
+                start: (s.start || 0) + timeOffset,
+                end: (s.end || 0) + timeOffset,
+              })));
+            }
+            if (part.duration) timeOffset += part.duration;
+          }
+          data = { text: allTexts.join(" "), segments: allSegments, language: lang };
+        } else {
+          throw e;
         }
       }
-      const fullText = allTexts.join(" ");
-      setTranscript(fullText); setSegments(allSegments); setDetectedLanguage(lang);
+
+      const fullText = (data.text || "").trim();
+      setTranscript(fullText);
+      setSegments(data.segments || []);
+      setDetectedLanguage(data.language || "");
       if (fullText) toast({ title: "Transcription complete" });
       else toast({ title: "No speech detected", variant: "destructive" });
     } catch (err: any) {
-      toast({ title: "Transcription failed", description: err?.message || "Could not transcribe", variant: "destructive" });
-    } finally { setIsTranscribing(false); }
+      const msg = err?.message || "Could not transcribe";
+      toast({
+        title: "Transcription failed",
+        description: msg === "Failed to fetch"
+          ? "Network error — the upload was interrupted. Try Wi‑Fi or a shorter file."
+          : msg,
+        variant: "destructive",
+      });
+    } finally {
+      setIsTranscribing(false);
+    }
   }, [audioBlobs, toast]);
 
   const formatNotes = useCallback(async () => {
@@ -514,7 +585,12 @@ export default function LiveSession() {
     else if (target === "telegram") window.open(`https://t.me/share/url?url=${encodeURIComponent(shareLink)}`, "_blank");
   };
 
-  const askLenory = () => { if (!selectedNotebook) return; setLocation(`/chat?folder=${selectedNotebook.id}&ask=1`); };
+  const askLenory = () => {
+    if (!selectedNotebook) return;
+    const name = encodeURIComponent(selectedNotebook.name || "Notebook");
+    // Chat expects newFolderSession + folderName to create a KB-scoped session
+    setLocation(`/chat?newFolderSession=${selectedNotebook.id}&folderName=${name}`);
+  };
 
   if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   if (!user) return (
