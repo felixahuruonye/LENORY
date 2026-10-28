@@ -11,6 +11,7 @@ import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions, getActiveUsers, getPlatformHealth, getTotalPlatformCredits, getUserActivity, getUserCohorts, getUserCreditHistory, getUserCredits } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits, getFeatureCost, getAllFeatureCosts, setFeatureCost, DEFAULT_FEATURE_COSTS } from "./creditsStore";
 import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueue";
+import { runAssistantOrchestrator, classifyAssistantRequest } from "./assistant/orchestrator";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -583,6 +584,71 @@ You have FULL access to the system. You can:
 ${EXAM_BOOKLET_MODE_PROMPT}`;
 
       let searchSources: { title: string; link: string; snippet: string; rawContent?: string }[] = [];
+
+      // ── Tool-enabled path (files, explicit research+KB, generate deliverables) ──
+      try {
+        const plan = classifyAssistantRequest(content);
+        if (plan.needsFile || plan.needsKbList || (plan.needsSearch && plan.needsKbRead)) {
+          sendStatus("planning", 8);
+          const historyMsgs = history.slice(-16).map((m: any) => ({
+            role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+            content: String(m.content || ""),
+          }));
+          const orch = await runAssistantOrchestrator({
+            userId,
+            userEmail: user?.email,
+            userName: user?.firstName || userName,
+            content,
+            sessionId,
+            isAdvanced: !!isAdvanced,
+            isAdmin: !!isAdminUser,
+            history: historyMsgs,
+            kbFolderContext: kbFolderContext || undefined,
+            extraSystem: isAdminUser ? "Admin user session." : undefined,
+            onStatus: (st) => sendStatus(st, 6),
+          });
+          let aiResponse = orch.answer || "Done.";
+          const attachments: any = orch.artifacts?.length
+            ? {
+                artifacts: orch.artifacts,
+                sources: orch.citations?.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet })),
+              }
+            : null;
+          await storage.createChatMessage({
+            userId,
+            sessionId: sessionId || null,
+            role: "assistant",
+            content: aiResponse,
+            attachments,
+          });
+          if (sessionId) {
+            try {
+              const session = await storage.getChatSession(sessionId);
+              if (session && (session.title === "New Chat" || session.title.startsWith("Chat "))) {
+                const updatedHistory = await storage.getChatMessagesBySession(sessionId);
+                const smartTitle = await generateSmartChatTitle(updatedHistory.map((msg: any) => ({ role: msg.role, content: msg.content })));
+                await storage.updateChatSession(sessionId, { title: smartTitle });
+              }
+            } catch {}
+          }
+          logApiUsage(orch.modelUsed || "assistant-orchestrator", userId, "/api/chat/send");
+          const finalPayload = {
+            success: true,
+            message: aiResponse,
+            sources: orch.citations?.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet })),
+            artifacts: orch.artifacts,
+            toolsUsed: orch.toolsUsed,
+          };
+          if (wantsStream) {
+            res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
+            return res.end();
+          }
+          return res.json(finalPayload);
+        }
+      } catch (orchErr) {
+        console.error("Assistant orchestrator failed, falling back to standard chat:", orchErr);
+      }
+
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
       const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
       if (wantsSearch) {
@@ -780,6 +846,106 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         return;
       }
       res.status(500).json({ message: "Failed to send message. Please try again." });
+    }
+  });
+
+
+  // ─── SHARED ASSISTANT ORCHESTRATOR (Chat + Live AI) ─────────────────────────
+  app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => {
+    const wantsStream = req.body?.stream === true;
+    const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
+      if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
+    };
+    if (wantsStream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+    }
+    try {
+      const userId = req.userId;
+      const { content, sessionId, isAdvanced } = req.body || {};
+      if (!content?.trim()) {
+        if (wantsStream) {
+          res.write(`data: ${JSON.stringify({ type: "error", message: "Message content is required" })}\n\n`);
+          return res.end();
+        }
+        return res.status(400).json({ message: "Message content is required" });
+      }
+      const user = await storage.getUser(userId);
+      const isAdminUser = user?.email === REAL_ADMIN_EMAIL;
+      const tier = (user as any)?.subscriptionTier || "free";
+      const advanced = !!isAdvanced && (tier === "premium" || isAdminUser);
+      if (!isAdminUser) {
+        const cost = advanced ? 4 : 2;
+        const credits = await getOrCreateCredits(userId, tier);
+        if (credits.balance < cost) {
+          if (wantsStream) {
+            res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits" })}\n\n`);
+            return res.end();
+          }
+          return res.status(402).json({ error: "Insufficient credits", message: "You need more credits." });
+        }
+        await deductCredits(userId, cost);
+      }
+      let historyMsgs: any[] = [];
+      if (sessionId) {
+        const session = await storage.getChatSession(sessionId);
+        if (session && session.userId === userId) {
+          const msgs = await storage.getChatMessagesBySession(sessionId);
+          historyMsgs = (msgs || []).slice(-16).map((m: any) => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: String(m.content || ""),
+          }));
+        }
+      }
+      const orch = await runAssistantOrchestrator({
+        userId,
+        userEmail: user?.email,
+        userName: user?.firstName || "Friend",
+        content,
+        sessionId,
+        isAdvanced: advanced,
+        isAdmin: isAdminUser,
+        history: historyMsgs,
+        onStatus: (st) => sendStatus(st, 6),
+      });
+      if (sessionId) {
+        try {
+          await storage.createChatMessage({ userId, sessionId, role: "user", content, attachments: null });
+          await storage.createChatMessage({
+            userId,
+            sessionId,
+            role: "assistant",
+            content: orch.answer,
+            attachments: orch.artifacts?.length ? { artifacts: orch.artifacts } : null,
+          });
+        } catch {}
+      }
+      const payload = {
+        success: true,
+        message: orch.answer,
+        sources: orch.citations,
+        artifacts: orch.artifacts,
+        toolsUsed: orch.toolsUsed,
+        status: orch.status,
+      };
+      if (wantsStream) {
+        res.write(`data: ${JSON.stringify({ type: "done", ...payload })}\n\n`);
+        return res.end();
+      }
+      res.json(payload);
+    } catch (error) {
+      console.error("/api/assistant/run error:", error);
+      logAdminError("/api/assistant/run", error);
+      if (wantsStream) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: "error", message: "Assistant failed" })}\n\n`);
+          res.end();
+        } catch {}
+        return;
+      }
+      res.status(500).json({ message: "Assistant failed" });
     }
   });
 

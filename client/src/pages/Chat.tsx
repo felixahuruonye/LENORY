@@ -82,11 +82,20 @@ const AI_MODELS = [
 
 // ─── Typing animation ──────────────────────────────────────────────────────────
 const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
+  understanding: { label: "Understanding your request...", icon: Brain },
   thinking: { label: "LENORY is thinking...", icon: Brain },
+  planning: { label: "Planning the task...", icon: Brain },
   searching: { label: "Searching the web...", icon: Search },
-  writing: { label: "Writing response...", icon: PenLine },
+  reading_files: { label: "Reading your notes...", icon: Brain },
   reading_file: { label: "Reading your file...", icon: Brain },
+  using_feature: { label: "Using a LENORY feature...", icon: Brain },
+  generating_file: { label: "Generating your file...", icon: PenLine },
+  validating: { label: "Validating the result...", icon: Brain },
+  saving: { label: "Saving to your account...", icon: Brain },
+  writing: { label: "Writing response...", icon: PenLine },
   verifying: { label: "Double-checking the answer...", icon: Brain },
+  completed: { label: "Done", icon: Brain },
+  failed: { label: "Something went wrong...", icon: Brain },
 };
 
 function TypingIndicator({ action }: { action?: string | null }) {
@@ -291,6 +300,7 @@ export default function Chat() {
   const [selectedChatsForDelete, setSelectedChatsForDelete] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<any>(null);
   const [latestSources, setLatestSources] = useState<{ title: string; link: string; snippet: string; rawContent?: string }[] | null>(null);
+  const [latestArtifacts, setLatestArtifacts] = useState<any[] | null>(null);
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -1061,7 +1071,7 @@ export default function Chat() {
 
     try {
       setIsLoading(true);
-      setLatestSources(null);
+      setLatestSources(null); setLatestArtifacts(null);
       setChatAction(null);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
@@ -1115,7 +1125,7 @@ export default function Chat() {
           try {
             const evt = JSON.parse(part.slice(6));
             if (evt.type === "status") setChatAction(evt.status);
-            else if (evt.type === "done") finalSources = evt.sources || null;
+            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts) setLatestArtifacts(evt.artifacts); }
             else if (evt.type === "error") {
               streamErrored = true;
               toast({ title: "Message failed", description: evt.message || "Something went wrong.", variant: "destructive" });
@@ -1456,6 +1466,31 @@ export default function Chat() {
                         </div>
                       ) : (
                         <div className="text-sm">
+                          {Array.isArray(msg.attachments?.artifacts) && msg.attachments.artifacts.length > 0 && (
+                            <div className="mb-3 space-y-2">
+                              {msg.attachments.artifacts.map((art: any, idx: number) => (
+                                <a
+                                  key={art.id || idx}
+                                  href={art.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download={art.name}
+                                  className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50 transition"
+                                  data-testid={`artifact-download-${idx}`}
+                                >
+                                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-bold text-primary uppercase">
+                                    {(art.format || art.name?.split(".").pop() || "file").slice(0, 4)}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium truncate">{art.name || "Download file"}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {art.size ? `${Math.max(1, Math.round(art.size / 1024))} KB` : "File"} · tap to download
+                                    </p>
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          )}
                           {msg.attachments?.images?.map((img: any, idx: number) => (
                             <div key={idx} className="mb-3 rounded-lg overflow-hidden">
                               <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-64 object-cover rounded-lg" loading="lazy" />
@@ -1499,6 +1534,17 @@ export default function Chat() {
                   </div>
                 ))}
 
+                {latestArtifacts && latestArtifacts.length > 0 && !isLoading && (
+                  <div className="pl-10 -mt-1 mb-2 space-y-2 max-w-lg">
+                    {latestArtifacts.map((art: any, i: number) => (
+                      <a key={art.id || i} href={art.url} target="_blank" rel="noopener noreferrer" download={art.name}
+                        className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50">
+                        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary uppercase">{(art.format || "file").slice(0, 4)}</div>
+                        <div className="min-w-0"><p className="text-sm font-medium truncate">{art.name}</p><p className="text-xs text-muted-foreground">Download file</p></div>
+                      </a>
+                    ))}
+                  </div>
+                )}
                 {/* Web search sources for the latest response */}
                 {latestSources && latestSources.length > 0 && !isLoading && (
                   <div className="flex flex-wrap gap-2 pl-10 -mt-2">
