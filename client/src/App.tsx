@@ -21,6 +21,7 @@ import MemoryPanel from "@/pages/MemoryPanel";
 import StudyPlans from "@/pages/StudyPlans";
 import Pricing from "@/pages/Pricing";
 import SettingsPanel from "@/pages/SettingsPanel";
+import Capabilities from "@/pages/Capabilities";
 import AudioSystem from "@/pages/AudioSystem";
 import AgentsPanel from "@/pages/AgentsPanel";
 import LiveSession from "@/pages/LiveSession";
@@ -123,6 +124,7 @@ function Router() {
       <Route path="/languages" component={Languages} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/settings" component={SettingsPanel} />
+      <Route path="/capabilities" component={Capabilities} />
       <Route path="/audio" component={AudioSystem} />
       <Route path="/agents" component={AgentsPanel} />
       <Route path="/website-generator" component={WebsiteGenerator} />

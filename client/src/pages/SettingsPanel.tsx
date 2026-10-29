@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "@/components/ThemeProvider";
 import { Link } from "wouter";
+// capabilities entry
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Settings, Bell, Lock, Keyboard, Volume2, User, Coins, 
@@ -18,7 +19,7 @@ import {
 import { useVoice, AVAILABLE_VOICES } from "@/lib/useVoice";
 import { apiRequest } from "@/lib/queryClient";
 
-type TabId = "profile" | "appearance" | "notifications" | "privacy" | "voice" | "shortcuts" | "credits";
+type TabId = "profile" | "appearance" | "notifications" | "privacy" | "voice" | "shortcuts" | "credits" | "capabilities";
 
 export default function SettingsPanel() {
   const { user, isLoading: authLoading } = useAuth();
@@ -86,7 +87,12 @@ export default function SettingsPanel() {
                 <h1 className="text-2xl font-bold">Settings</h1>
               </div>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/capabilities">Capabilities</Link>
+              </Button>
+              <ThemeToggle />
+            </div>
           </div>
         </div>
       </header>

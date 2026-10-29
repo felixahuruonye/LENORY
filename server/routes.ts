@@ -13,6 +13,8 @@ import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCred
 import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueue";
 import { runAssistantOrchestrator, classifyAssistantRequest } from "./assistant/orchestrator";
 import { isFileGenerationRequest, runQuickFileGeneration } from "./assistant/quickFile";
+import { runCapabilityAgent } from "./assistant/agentLoop";
+import { getUserCapabilities, setUserCapabilities, DEFAULT_CAPABILITIES } from "./assistant/capabilities";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -413,7 +415,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
+  
+  // ── User Capabilities (Claude-style toggles) ─────────────────────────────
+  app.get("/api/capabilities", requireAuth, async (req: any, res) => {
+    try {
+      const caps = getUserCapabilities(req.userId);
+      res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message });
+    }
+  });
+  app.put("/api/capabilities", requireAuth, async (req: any, res) => {
+    try {
+      const caps = setUserCapabilities(req.userId, req.body || {});
+      res.json({ success: true, capabilities: caps });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message });
+    }
+  });
+
+app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
     const wantsStream = req.body?.stream === true;
     const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
       if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
@@ -437,10 +458,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If the user asked for a real downloadable file, generate it here and
       // return immediately. Never let the general LLM say "I cannot create PDFs".
       try {
-        if (isFileGenerationRequest(content)) {
+        if (isFileGenerationRequest(content) || /\b(knowledge base|create (a )?folder|research)\b/i.test(content)) {
           const earlyUser = await storage.getUser(userId);
           const earlyName = earlyUser?.firstName || "Friend";
-          // light credit gate for non-admin
           const isAdminEarly = earlyUser?.email === REAL_ADMIN_EMAIL;
           if (!isAdminEarly) {
             try {
@@ -456,13 +476,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
               await deductCredits(userId, 1);
             } catch {}
           }
-          sendStatus("generating_file", 8);
-          const quick = await runQuickFileGeneration({
-            userId,
-            content,
-            userName: earlyName,
-            onStatus: (st) => sendStatus(st, 6),
-          });
+          const clientCaps = req.body?.capabilities || null;
+          // Email assignment stays on fast deterministic path; everything else uses the capability agent
+          const isEmailOnly =
+            /email account|creating an email|steps for creating an email/i.test(content) &&
+            !/java|research|powerpoint|pptx|knowledge base|folder/i.test(content);
+          let quick: any;
+          if (isEmailOnly) {
+            sendStatus("generating_file", 8);
+            quick = await runQuickFileGeneration({
+              userId,
+              content,
+              userName: earlyName,
+              onStatus: (st) => sendStatus(st, 6),
+            });
+          } else {
+            sendStatus("planning", 8);
+            const agent = await runCapabilityAgent({
+              userId,
+              content,
+              userName: earlyName,
+              isAdvanced: !!isAdvanced,
+              capabilities: clientCaps,
+              onStatus: (st) => sendStatus(st, 6),
+            });
+            quick = { answer: agent.answer, artifacts: agent.artifacts, folder: agent.folder };
+          }
           // ensure session exists for message save
           let sid = sessionId || null;
           if (sid) {

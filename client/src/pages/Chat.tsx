@@ -1116,6 +1116,7 @@ export default function Chat() {
           isAdvanced: advancedMode,
           isLongPaste: !!pastedFile,
           stream: true,
+          capabilities: (() => { try { return JSON.parse(localStorage.getItem("lenory_capabilities") || "null"); } catch { return null; } })(),
         }),
       });
 
