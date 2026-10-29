@@ -47,9 +47,9 @@ function detectPlan(content: string, kbFolderContext?: string): Plan {
       t
     );
   const fileHints =
-    /\b(pdf|docx?|pptx?|xlsx?|csv|rtf|markdown|\.md\b|html|generate (a |an )?(file|document|report|slides|presentation|spreadsheet|worksheet)|downloadable|create (a |an )?(pdf|word|excel|powerpoint|doc))\b/i.test(
+    /\b(pdf|docx?|pptx?|xlsx?|csv|rtf|markdown|\.md\b|html|generate (a |an )?(file|document|report|slides|presentation|spreadsheet|worksheet|assignment)|downloadable|create (a |an )?(pdf|word|excel|powerpoint|doc)|export (as |to )?pdf|make (a |me )?(a )?pdf|as a pdf|in pdf form)\b/i.test(
       t
-    );
+    ) || (/\bassignment\b/i.test(t) && /\b(pdf|document|file|download)\b/i.test(t));
   const kbHints =
     /\b(knowledge base|my (notes|folder|notebook)|kb folder|write my note|from my notes)\b/i.test(t);
 
@@ -185,58 +185,108 @@ export async function runAssistantOrchestrator(input: OrchestratorInput): Promis
       toolBlocks.push(`[${r.tool}] ${r.summary}`);
     }
 
-    // File generation: first draft content with model if needed, then generate
+    // File generation: draft clean body, then always produce a real file
+    let fileBodyPreview = "";
     if (plan.needsFile) {
       emit(input, "writing", "drafting file content");
       const draftMsgs: AssistantMessage[] = [
         {
           role: "system",
-          content: `You write clean document body content for file generation. Output ONLY the document body (no preamble). Format: plain text or markdown suitable for conversion to ${plan.fileFormat}. Title idea: ${plan.fileTitle}`,
+          content: `You write clean academic document body content for a real ${plan.fileFormat || "pdf"} file.
+Rules:
+- Output ONLY the document body. No preamble like "Here is..." or "You can copy this...".
+- No instructions about how to export to PDF or open Word — the system will generate the file.
+- Use clear headings and numbered steps.
+- Include placeholders like [Your Full Name] and [Your Matric Number] when relevant.
+- Plain text / light markdown only. Do NOT wrap keyboard shortcuts in code fences.
+- Title theme: ${plan.fileTitle}`,
         },
-        ...(input.history || []).slice(-6),
+        ...(input.history || []).slice(-4),
         {
           role: "user",
-          content: `Create the full content for this request:\n${input.content}\n\nTool context:\n${toolBlocks.join("\n\n") || "(none)"}`,
+          content: `Write the full assignment/document content for:\n${input.content}`,
         },
       ];
       let body = "";
       try {
         const draft = await runModel(draftMsgs, input.isAdvanced);
-        body = draft.text;
+        body = draft.text
+          .replace(/^```[a-z]*\n?/i, "")
+          .replace(/\n?```$/i, "")
+          .trim();
       } catch {
-        body = input.content;
+        body = "";
       }
-      if (!body.trim()) body = input.content;
+      if (!body.trim()) {
+        body = `${plan.fileTitle}\n\nName: [Your Full Name]\nMatric Number: [Your Matric Number]\n\n${input.content}`;
+      }
+      fileBodyPreview = body.slice(0, 1200);
+
+      // Sensible file name
+      const safeName =
+        (plan.fileTitle || "LENORY_document")
+          .replace(/[^\w\s\-]+/g, "")
+          .trim()
+          .replace(/\s+/g, "_")
+          .slice(0, 60) || "LENORY_document";
 
       const fileResult = await toolGenerateFile(ctx, {
         format: plan.fileFormat || "pdf",
-        title: plan.fileTitle,
+        title: plan.fileTitle || "LENORY document",
         content: body,
-        fileName: plan.fileTitle,
+        fileName: safeName,
       });
       toolsUsed.push(fileResult.tool);
       toolBlocks.push(`[${fileResult.tool}] ${fileResult.summary}`);
-      if (fileResult.artifacts) artifacts.push(...fileResult.artifacts);
+      if (fileResult.artifacts?.length) {
+        artifacts.push(...fileResult.artifacts);
+      }
+    }
+
+    // When a real file was produced, do NOT ask the model to invent workarounds.
+    // Return a clean, short answer + download metadata for the UI.
+    if (artifacts.length) {
+      emit(input, "completed");
+      const lines = artifacts.map(
+        (a) => `- **${a.name}** (${Math.max(1, Math.round(a.size / 1024))} KB)`
+      );
+      const answer =
+        `Your **${plan.fileFormat?.toUpperCase() || "file"}** is ready.\n\n` +
+        `Tap **Download** on the file card below to save it to your device.\n\n` +
+        lines.join("\n") +
+        (fileBodyPreview
+          ? `\n\n### Preview\n\n${fileBodyPreview}${fileBodyPreview.length >= 1200 ? "…" : ""}`
+          : "");
+      return {
+        answer,
+        status: "completed",
+        citations,
+        artifacts,
+        toolsUsed,
+        modelUsed: "assistant-file",
+      };
     }
 
     emit(input, "writing");
     const system = buildSystem(input, toolBlocks.join("\n\n"), artifacts);
+    // Formatting rules (additive)
+    const formatRules = `
+
+## Clean formatting (mandatory)
+- Write like a polished study assistant: clear headings, short paragraphs, numbered lists.
+- Do NOT put single keyboard shortcuts (Ctrl+C, Cmd+P) alone inside code fences.
+- Do NOT tell the user to manually create a PDF/DOCX if a file tool was supposed to run — say the tool failed honestly instead.
+- Prefer tables for step lists when helpful.
+- Never invent a download URL.
+`;
     const messages: AssistantMessage[] = [
-      { role: "system", content: system },
+      { role: "system", content: system + formatRules },
       ...(input.history || []).slice(-16),
       { role: "user", content: input.content },
     ];
 
     const { text, modelUsed } = await runModel(messages, input.isAdvanced);
     let answer = text;
-    if (artifacts.length) {
-      const linkBlock =
-        "\n\n---\n**Downloadable files**\n" +
-        artifacts.map((a) => `- [${a.name}](${a.url}) (${Math.round(a.size / 1024)} KB)`).join("\n");
-      if (!artifacts.some((a) => answer.includes(a.url))) {
-        answer = answer + linkBlock;
-      }
-    }
     if (citations.length) {
       const citeBlock =
         "\n\n**Sources**\n" +
@@ -244,7 +294,7 @@ export async function runAssistantOrchestrator(input: OrchestratorInput): Promis
           .slice(0, 6)
           .map((c, i) => `${i + 1}. [${c.title}](${c.url})`)
           .join("\n");
-      if (!/https?:\/\//.test(answer) || citations.some((c) => !answer.includes(c.url))) {
+      if (!citations.every((c) => answer.includes(c.url))) {
         answer = answer + citeBlock;
       }
     }

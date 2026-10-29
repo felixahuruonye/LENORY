@@ -21,18 +21,26 @@ function safeBaseName(name: string): string {
     .slice(0, 80) || "lenory-file";
 }
 
-/** Minimal PDF 1.4 with multi-line text (Helvetica). */
+/** Multi-page PDF 1.4 with Helvetica text. */
 export function generatePdf(title: string, body: string): Buffer {
+  const maxLen = 88;
   const lines: string[] = [];
-  const maxLen = 90;
   const pushWrapped = (text: string) => {
     const paragraphs = String(text || "").replace(/\r/g, "").split("\n");
     for (const p of paragraphs) {
-      if (!p) {
+      if (!p.trim()) {
         lines.push("");
         continue;
       }
-      let rest = p;
+      // Strip markdown markers for cleaner PDF body
+      let rest = p
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/\*(.*?)\*/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/\|/g, " ")
+        .replace(/^-{3,}$/g, "")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
       while (rest.length > maxLen) {
         let cut = rest.lastIndexOf(" ", maxLen);
         if (cut < 40) cut = maxLen;
@@ -48,44 +56,88 @@ export function generatePdf(title: string, body: string): Buffer {
   }
   pushWrapped(body);
 
-  const contentLines: string[] = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"];
-  let first = true;
-  for (const line of lines.slice(0, 60)) {
-    const escaped = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-    if (first) {
-      contentLines.push(`(${escaped}) Tj`);
-      first = false;
-    } else {
-      contentLines.push("T*");
-      contentLines.push(`(${escaped}) Tj`);
-    }
+  const LINES_PER_PAGE = 48;
+  const pages: string[][] = [];
+  for (let i = 0; i < lines.length; i += LINES_PER_PAGE) {
+    pages.push(lines.slice(i, i + LINES_PER_PAGE));
   }
-  contentLines.push("ET");
-  const stream = contentLines.join("\n");
-  const streamBuf = Buffer.from(stream, "utf8");
+  if (!pages.length) pages.push([title || "LENORY document"]);
 
   const objects: string[] = [];
-  objects.push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-  objects.push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
-  objects.push(
-    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n"
-  );
-  objects.push(`4 0 obj\n<< /Length ${streamBuf.length} >>\nstream\n${stream}\nendstream\nendobj\n`);
-  objects.push("5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+  // obj 1 catalog, 2 pages tree — filled later
+  objects.push(""); // placeholder index 0 unused in 1-based pdf objs we'll build list carefully
+
+  const fontObjNum = 3 + pages.length * 2; // after pages
+  // Build content streams and page objects
+  const pageObjNums: number[] = [];
+  const contentObjNums: number[] = [];
+  let nextObj = 3;
+  const contentBodies: string[] = [];
+
+  for (const pageLines of pages) {
+    const contentLines: string[] = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"];
+    let first = true;
+    for (const line of pageLines) {
+      const escaped = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+      if (first) {
+        contentLines.push(`(${escaped}) Tj`);
+        first = false;
+      } else {
+        contentLines.push("T*");
+        contentLines.push(`(${escaped}) Tj`);
+      }
+    }
+    contentLines.push("ET");
+    contentBodies.push(contentLines.join("\n"));
+    contentObjNums.push(nextObj);
+    nextObj++;
+    pageObjNums.push(nextObj);
+    nextObj++;
+  }
+  const fontObj = nextObj;
+  nextObj++;
+
+  // Assemble PDF objects in order: 1 catalog, 2 pages, then pairs of content+page, then font
+  const pdfObjects: { num: number; body: string }[] = [];
+  const kids = pageObjNums.map((n) => `${n} 0 R`).join(" ");
+  pdfObjects.push({ num: 1, body: `<< /Type /Catalog /Pages 2 0 R >>` });
+  pdfObjects.push({ num: 2, body: `<< /Type /Pages /Kids [${kids}] /Count ${pageObjNums.length} >>` });
+
+  for (let i = 0; i < pages.length; i++) {
+    const cNum = contentObjNums[i];
+    const pNum = pageObjNums[i];
+    const stream = contentBodies[i];
+    const streamLen = Buffer.byteLength(stream, "utf8");
+    pdfObjects.push({
+      num: cNum,
+      body: `<< /Length ${streamLen} >>\nstream\n${stream}\nendstream`,
+    });
+    pdfObjects.push({
+      num: pNum,
+      body: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${cNum} 0 R /Resources << /Font << /F1 ${fontObj} 0 R >> >> >>`,
+    });
+  }
+  pdfObjects.push({
+    num: fontObj,
+    body: `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`,
+  });
+  pdfObjects.sort((a, b) => a.num - b.num);
 
   let pdf = "%PDF-1.4\n";
   const offsets: number[] = [0];
-  for (const obj of objects) {
-    offsets.push(Buffer.byteLength(pdf, "utf8"));
-    pdf += obj;
+  for (const obj of pdfObjects) {
+    offsets[obj.num] = Buffer.byteLength(pdf, "utf8");
+    pdf += `${obj.num} 0 obj\n${obj.body}\nendobj\n`;
   }
   const xrefPos = Buffer.byteLength(pdf, "utf8");
-  pdf += `xref\n0 ${objects.length + 1}\n`;
+  const maxObj = Math.max(...pdfObjects.map((o) => o.num));
+  pdf += `xref\n0 ${maxObj + 1}\n`;
   pdf += "0000000000 65535 f \n";
-  for (let i = 1; i <= objects.length; i++) {
-    pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  for (let i = 1; i <= maxObj; i++) {
+    const off = offsets[i] || 0;
+    pdf += `${String(off).padStart(10, "0")} 00000 n \n`;
   }
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
+  pdf += `trailer\n<< /Size ${maxObj + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
   return Buffer.from(pdf, "utf8");
 }
 

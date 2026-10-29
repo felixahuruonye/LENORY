@@ -1591,25 +1591,26 @@ export default function Chat() {
                       ) : (
                         <div className="text-sm">
                           {Array.isArray(msg.attachments?.artifacts) && msg.attachments.artifacts.length > 0 && (
-                            <div className="mb-3 space-y-2">
+                            <div className="mb-4 space-y-2">
                               {msg.attachments.artifacts.map((art: any, idx: number) => (
-                                <a
+                                <button
+                                  type="button"
                                   key={art.id || idx}
-                                  href={art.url}
-                                  onClick={(e) => { e.preventDefault(); downloadAssistantArtifact(art); }}
-                                  className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50 transition cursor-pointer"
+                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); downloadAssistantArtifact(art); }}
+                                  className="w-full flex items-center gap-3 rounded-xl border-2 border-primary/40 bg-primary/10 px-3 py-3 hover:bg-primary/20 transition cursor-pointer text-left"
                                   data-testid={`artifact-download-${idx}`}
                                 >
-                                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-bold text-primary uppercase">
+                                  <div className="w-11 h-11 rounded-lg bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold uppercase shrink-0">
                                     {(art.format || art.name?.split(".").pop() || "file").slice(0, 4)}
                                   </div>
                                   <div className="min-w-0 flex-1">
-                                    <p className="text-sm font-medium truncate">{art.name || "Download file"}</p>
+                                    <p className="text-sm font-semibold truncate">{art.name || "Download file"}</p>
                                     <p className="text-xs text-muted-foreground">
-                                      {art.size ? `${Math.max(1, Math.round(art.size / 1024))} KB` : "File"} · tap to download
+                                      {art.size ? `${Math.max(1, Math.round(art.size / 1024))} KB` : "File"} · tap to save to your device
                                     </p>
                                   </div>
-                                </a>
+                                  <span className="text-xs font-bold text-primary shrink-0 px-2 py-1 rounded-md bg-primary/20">Download</span>
+                                </button>
                               ))}
                             </div>
                           )}
