@@ -1154,7 +1154,33 @@ export default function Chat() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
   };
 
+  const downloadAssistantArtifact = async (art: { url?: string; name?: string; mimeType?: string }) => {
+    if (!art?.url) return;
+    try {
+      // Same-origin /api/assistant/artifacts needs auth header
+      if (art.url.startsWith("/api/assistant/artifacts/")) {
+        const headers = await getAuthHeaders();
+        const res = await fetch(art.url, { headers });
+        if (!res.ok) throw new Error("Download failed");
+        const blob = await res.blob();
+        const obj = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = obj;
+        a.download = art.name || "lenory-file";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(obj);
+        return;
+      }
+      window.open(art.url, "_blank", "noopener,noreferrer");
+    } catch (e: any) {
+      toast({ title: "Download failed", description: e?.message || "Try again", variant: "destructive" });
+    }
+  };
+
   const copyMessage = async (content: string, msgId: string) => {
+
     await navigator.clipboard.writeText(content);
     setCopiedMsgId(msgId);
     setTimeout(() => setCopiedMsgId(null), 2000);
@@ -1472,10 +1498,8 @@ export default function Chat() {
                                 <a
                                   key={art.id || idx}
                                   href={art.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  download={art.name}
-                                  className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50 transition"
+                                  onClick={(e) => { e.preventDefault(); downloadAssistantArtifact(art); }}
+                                  className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50 transition cursor-pointer"
                                   data-testid={`artifact-download-${idx}`}
                                 >
                                   <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-bold text-primary uppercase">
@@ -1537,8 +1561,8 @@ export default function Chat() {
                 {latestArtifacts && latestArtifacts.length > 0 && !isLoading && (
                   <div className="pl-10 -mt-1 mb-2 space-y-2 max-w-lg">
                     {latestArtifacts.map((art: any, i: number) => (
-                      <a key={art.id || i} href={art.url} target="_blank" rel="noopener noreferrer" download={art.name}
-                        className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50">
+                      <a key={art.id || i} href={art.url} onClick={(e) => { e.preventDefault(); downloadAssistantArtifact(art); }}
+                        className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2 hover:bg-muted/50 cursor-pointer">
                         <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary uppercase">{(art.format || "file").slice(0, 4)}</div>
                         <div className="min-w-0"><p className="text-sm font-medium truncate">{art.name}</p><p className="text-xs text-muted-foreground">Download file</p></div>
                       </a>

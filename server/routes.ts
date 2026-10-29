@@ -574,6 +574,9 @@ You have FULL access to the system. You can:
 5. **Do not refuse** a request without offering a helpful alternative.
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.
+8. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
+9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (```text ... ```) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
+10. **Assignments**: Prefer generating a real PDF/DOCX via tools when the user asks for a file. After tools succeed, lead with the download, then optional preview.
 
 ## 🧮 MATH & CALCULATIONS FORMATTING (mandatory):
 - Wrap ALL math in LaTeX dollar-sign delimiters so it renders properly: inline math as $x^2 + 2x$, standalone equations/steps as their own $$...$$ block on their own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac, \\text{} in plain parentheses or as bare text — outside $ or $$ delimiters they show up as literal unreadable code to the user, not a formatted equation.
@@ -851,7 +854,26 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
 
 
   // ─── SHARED ASSISTANT ORCHESTRATOR (Chat + Live AI) ─────────────────────────
-  app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => {
+  
+  // Authenticated download for locally stored assistant artifacts
+  app.get("/api/assistant/artifacts/:id", supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const { readLocalArtifact } = await import("./assistant/artifactStore");
+      const result = readLocalArtifact(req.params.id, req.userId);
+      if (!result) return res.status(404).json({ message: "File not found or expired" });
+      const { art, buffer } = result;
+      res.setHeader("Content-Type", art.mimeType || "application/octet-stream");
+      res.setHeader("Content-Disposition", `attachment; filename="${art.fileName.replace(/"/g, "")}"`);
+      res.setHeader("Content-Length", String(buffer.length));
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      return res.send(buffer);
+    } catch (e) {
+      console.error("artifact download error:", e);
+      return res.status(500).json({ message: "Download failed" });
+    }
+  });
+
+app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => {
     const wantsStream = req.body?.stream === true;
     const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
       if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
