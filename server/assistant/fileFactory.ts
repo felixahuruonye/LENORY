@@ -625,33 +625,41 @@ export function generateFile(opts: {
       // Vector image deliverable (opens in browsers and many apps)
       buffer = generateSvg(title, content);
       break;
-    case "ods": {
+        case "ods": {
       // Minimal OpenDocument Spreadsheet
       const rows = String(content || "")
         .split(/\n/)
         .filter((l) => l.trim())
         .slice(0, 100)
         .map((line) => {
-          const cells = line.split(/,|\t/).map((c) => `<table:table-cell office:value-type="string"><text:p>${xmlEscape(c.trim())}</text:p></table:table-cell>`).join("");
+          const cells = line
+            .split(/,|\t/)
+            .map((c) => `<table:table-cell office:value-type="string"><text:p>${xmlEscape(c.trim())}</text:p></table:table-cell>`)
+            .join("");
           return `<table:table-row>${cells}</table:table-row>`;
         })
         .join("");
-      const contentXml = `<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
-  <office:body><office:spreadsheet><table:table table:name="Sheet1">${rows || "<table:table-row><table:table-cell office:value-type=\\"string\\"><text:p>Empty</text:p></table:table-cell></table:table-row>"}</table:table></office:spreadsheet></office:body>
-</office:document-content>`;
-      const manifest = `<?xml version="1.0" encoding="UTF-8"?>
-<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
-  <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>
-  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
-</manifest:manifest>`;
+      const emptyRow =
+        '<table:table-row><table:table-cell office:value-type="string"><text:p>Empty</text:p></table:table-cell></table:table-row>';
+      const contentXml =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">' +
+        '<office:body><office:spreadsheet><table:table table:name="Sheet1">' +
+        (rows || emptyRow) +
+        "</table:table></office:spreadsheet></office:body></office:document-content>";
+      const manifest =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">' +
+        '<manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>' +
+        '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>' +
+        "</manifest:manifest>";
       buffer = zipStore([
         { name: "META-INF/manifest.xml", data: Buffer.from(manifest, "utf8") },
         { name: "content.xml", data: Buffer.from(contentXml, "utf8") },
       ]);
       break;
     }
-    default:
+default:
       buffer = Buffer.from(title ? `# ${title}\n\n${content}` : content, "utf8");
   }
 
