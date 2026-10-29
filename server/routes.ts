@@ -626,7 +626,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
                     {
                       role: "system",
                       content:
-                        "Write ONLY the full academic document body for a PDF. No preamble. Include Name and Matric placeholders when relevant. Clear numbered steps.",
+                        "Write a SHORT student assignment for a PDF (about one page). Style: Name, Department, title, 8-12 short numbered steps, brief conclusion. Plain ASCII only. NO tables, NO HTML, NO 'how to convert to PDF', NO long essays.",
                     },
                     { role: "user", content },
                   ] as any,
@@ -637,11 +637,11 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
                   .replace(new RegExp("\\n?`{3}$", "i"), "")
                   .trim();
               } catch {}
-              const safeName = (plan.fileTitle || "LENORY_document")
+              const safeName = (plan.fileTitle || "Assignment")
                 .replace(/[^\w\s\-]+/g, "")
                 .trim()
                 .replace(/\s+/g, "_")
-                .slice(0, 60) || "LENORY_document";
+                .slice(0, 60) || "Assignment";
               const fileResult = await toolGenerateFile(
                 { userId, onStatus: (st) => sendStatus(st, 6) },
                 {
@@ -734,7 +734,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
           if (plan.needsFile) {
             const { toolGenerateFile } = await import("./assistant/tools/index");
             sendStatus("generating_file", 8);
-            const safeName = "LENORY_document";
+            const safeName = "Assignment";
             const fileResult = await toolGenerateFile(
               { userId, onStatus: (st) => sendStatus(st, 6) },
               {

@@ -21,18 +21,31 @@ function safeBaseName(name: string): string {
     .slice(0, 80) || "lenory-file";
 }
 
-/** Multi-page PDF 1.4 with Helvetica text. */
+/** Sanitize text to WinAnsi-safe ASCII for Helvetica PDF fonts. */
+function pdfSafeText(s: string): string {
+  return String(s || "")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/[\u00A0\u202F]/g, " ")
+    .replace(/\u2022/g, "-")
+    .replace(/[\uFB00-\uFB06]/g, "") // fi/fl ligatures
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ""); // drop other non-ASCII
+}
+
+/** Multi-page PDF 1.4 — clean student-assignment layout (Helvetica). */
 export function generatePdf(title: string, body: string): Buffer {
-  const maxLen = 88;
+  const maxLen = 85;
   const lines: string[] = [];
-  const pushWrapped = (text: string) => {
-    const paragraphs = String(text || "").replace(/\r/g, "").split("\n");
+  const pushWrapped = (raw: string, indent = 0) => {
+    const pad = " ".repeat(indent);
+    const paragraphs = pdfSafeText(raw).replace(/\r/g, "").split("\n");
     for (const p of paragraphs) {
       if (!p.trim()) {
         lines.push("");
         continue;
       }
-      // Strip markdown markers for cleaner PDF body
       let rest = p
         .replace(/^#{1,6}\s+/, "")
         .replace(/\*\*(.*?)\*\*/g, "$1")
@@ -40,42 +53,63 @@ export function generatePdf(title: string, body: string): Buffer {
         .replace(/`([^`]+)`/g, "$1")
         .replace(/\|/g, " ")
         .replace(/^-{3,}$/g, "")
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
-      while (rest.length > maxLen) {
-        let cut = rest.lastIndexOf(" ", maxLen);
-        if (cut < 40) cut = maxLen;
-        lines.push(rest.slice(0, cut));
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/<br\s*\/?>/gi, " ")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/[ \t]+/g, " ")
+        .trim();
+      if (!rest) continue;
+      const width = maxLen - indent;
+      while (rest.length > width) {
+        let cut = rest.lastIndexOf(" ", width);
+        if (cut < 30) cut = width;
+        lines.push(pad + rest.slice(0, cut));
         rest = rest.slice(cut).trimStart();
       }
-      if (rest) lines.push(rest);
+      if (rest) lines.push(pad + rest);
     }
   };
-  if (title) {
-    pushWrapped(title);
+
+  // Prefer body-only; avoid duplicating a generic "LENORY document" title
+  const cleanTitle = pdfSafeText(title || "").trim();
+  const cleanBody = pdfSafeText(body || "").trim();
+  // Strip meta instructions the model sometimes injects
+  let bodyForPdf = cleanBody
+    .replace(/below is the complete text[\s\S]*?(?=\n[A-Z]|\nName:|\nIFT|\nSteps)/i, "")
+    .replace(/replace the placeholders[^\n]*/gi, "")
+    .replace(/before converting the document to PDF[^\n]*/gi, "")
+    .replace(/quick guide to convert[\s\S]*/gi, "")
+    .replace(/how to convert this text into a pdf[\s\S]*/gi, "")
+    .replace(/platform\s+steps[\s\S]*/gi, "")
+    .trim();
+
+  if (cleanTitle && !/^lenory document$/i.test(cleanTitle) && !bodyForPdf.startsWith(cleanTitle)) {
+    pushWrapped(cleanTitle);
     lines.push("");
   }
-  pushWrapped(body);
+  pushWrapped(bodyForPdf);
 
-  const LINES_PER_PAGE = 48;
+  const LINES_PER_PAGE = 45;
   const pages: string[][] = [];
-  for (let i = 0; i < lines.length; i += LINES_PER_PAGE) {
+  for (let i = 0; i < Math.max(lines.length, 1); i += LINES_PER_PAGE) {
     pages.push(lines.slice(i, i + LINES_PER_PAGE));
   }
-  if (!pages.length) pages.push([title || "LENORY document"]);
+  if (!pages.length || (pages.length === 1 && !pages[0].length)) {
+    pages.length = 0;
+    pages.push([cleanTitle || "Document"]);
+  }
 
-  const objects: string[] = [];
-  // obj 1 catalog, 2 pages tree — filled later
-  objects.push(""); // placeholder index 0 unused in 1-based pdf objs we'll build list carefully
-
-  const fontObjNum = 3 + pages.length * 2; // after pages
-  // Build content streams and page objects
   const pageObjNums: number[] = [];
   const contentObjNums: number[] = [];
   let nextObj = 3;
   const contentBodies: string[] = [];
 
   for (const pageLines of pages) {
-    const contentLines: string[] = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"];
+    const contentLines: string[] = ["BT", "/F1 12 Tf", "54 780 Td", "16 TL"];
     let first = true;
     for (const line of pageLines) {
       const escaped = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
@@ -95,9 +129,7 @@ export function generatePdf(title: string, body: string): Buffer {
     nextObj++;
   }
   const fontObj = nextObj;
-  nextObj++;
 
-  // Assemble PDF objects in order: 1 catalog, 2 pages, then pairs of content+page, then font
   const pdfObjects: { num: number; body: string }[] = [];
   const kids = pageObjNums.map((n) => `${n} 0 R`).join(" ");
   pdfObjects.push({ num: 1, body: `<< /Type /Catalog /Pages 2 0 R >>` });

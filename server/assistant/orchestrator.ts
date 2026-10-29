@@ -66,10 +66,15 @@ function detectPlan(content: string, kbFolderContext?: string): Plan {
   else if (/\bpdf\b/i.test(t)) fileFormat = "pdf";
   else if (fileHints) fileFormat = "pdf";
 
-  // Extract title-ish phrase
-  let fileTitle = "LENORY document";
+  // Extract title-ish phrase from the user request
+  let fileTitle = "Assignment";
   const titleMatch = content.match(/(?:titled|title[:\s]+|called)\s*[“"']?([^"'\n]{3,60})/i);
   if (titleMatch) fileTitle = titleMatch[1].trim();
+  else if (/\bsteps for creating an email account\b/i.test(content)) fileTitle = "Steps for Creating an Email Account";
+  else if (/\bassignment\b/i.test(content)) {
+    const m = content.match(/(?:assignment[:\s]+|for (?:my |the )?)([A-Za-z0-9][^.\n]{5,50})/i);
+    if (m) fileTitle = m[1].replace(/\b(pdf|docx?|file)\b/ig, "").trim() || "Assignment";
+  }
 
   const plan: Plan = {
     needsSearch: searchHints,
@@ -192,19 +197,35 @@ export async function runAssistantOrchestrator(input: OrchestratorInput): Promis
       const draftMsgs: AssistantMessage[] = [
         {
           role: "system",
-          content: `You write clean academic document body content for a real ${plan.fileFormat || "pdf"} file.
-Rules:
-- Output ONLY the document body. No preamble like "Here is..." or "You can copy this...".
-- No instructions about how to export to PDF or open Word — the system will generate the file.
-- Use clear headings and numbered steps.
-- Include placeholders like [Your Full Name] and [Your Matric Number] when relevant.
-- Plain text / light markdown only. Do NOT wrap keyboard shortcuts in code fences.
+          content: `You write SHORT student assignment documents for a real ${plan.fileFormat || "pdf"} file.
+
+CRITICAL STYLE (match this exactly — simple Nigerian polytechnic/university homework):
+Name: [Your Full Name]
+Department: [Department or Course]
+
+Steps for Creating an Email Account
+
+1. Open Google Chrome or any web browser on your phone or computer.
+2. Go to www.gmail.com.
+3. Click Create Account.
+... (about 8-12 short numbered steps)
+Conclusion: One or two simple sentences.
+
+RULES:
+- Output ONLY the document body. Nothing else.
+- Keep it to roughly ONE page. Short sentences. Numbered steps.
+- NO tables. NO markdown tables. NO HTML tags.
+- NO "Below is the complete text". NO "Replace the placeholders".
+- NO "how to convert to PDF". NO Google Docs/Word export instructions.
+- NO long academic essays, prerequisites sections, or multi-page guides.
+- Use plain ASCII only (no fancy dashes or smart quotes).
+- If the user gave a name, department, or matric number, use those exact values.
 - Title theme: ${plan.fileTitle}`,
         },
         ...(input.history || []).slice(-4),
         {
           role: "user",
-          content: `Write the full assignment/document content for:\n${input.content}`,
+          content: `Write a short, clean assignment document for:\n${input.content}`,
         },
       ];
       let body = "";
@@ -224,15 +245,15 @@ Rules:
 
       // Sensible file name
       const safeName =
-        (plan.fileTitle || "LENORY_document")
+        (plan.fileTitle || "Assignment")
           .replace(/[^\w\s\-]+/g, "")
           .trim()
           .replace(/\s+/g, "_")
-          .slice(0, 60) || "LENORY_document";
+          .slice(0, 60) || "Assignment";
 
       const fileResult = await toolGenerateFile(ctx, {
         format: plan.fileFormat || "pdf",
-        title: plan.fileTitle || "LENORY document",
+        title: plan.fileTitle || "Assignment",
         content: body,
         fileName: safeName,
       });
@@ -251,12 +272,9 @@ Rules:
         (a) => `- **${a.name}** (${Math.max(1, Math.round(a.size / 1024))} KB)`
       );
       const answer =
-        `Your **${plan.fileFormat?.toUpperCase() || "file"}** is ready.\n\n` +
+        `Your **${(plan.fileFormat || "pdf").toUpperCase()}** is ready.\n\n` +
         `Tap **Download** on the file card below to save it to your device.\n\n` +
-        lines.join("\n") +
-        (fileBodyPreview
-          ? `\n\n### Preview\n\n${fileBodyPreview}${fileBodyPreview.length >= 1200 ? "…" : ""}`
-          : "");
+        lines.join("\n");
       return {
         answer,
         status: "completed",

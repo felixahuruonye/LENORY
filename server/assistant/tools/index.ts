@@ -235,10 +235,21 @@ export async function toolGenerateFile(
     if (!args.content || !String(args.content).trim()) {
       return { tool: "generate_file", success: false, summary: "No content provided for file", error: "EMPTY" };
     }
+    // Clean model output before packaging
+    let cleanContent = String(args.content || "")
+      .replace(/below is the complete text[\s\S]*?(?=\n[A-Z]|\nName:|\nIFT|\nSteps)/i, "")
+      .replace(/quick guide to convert[\s\S]*/gi, "")
+      .replace(/how to convert this text into a pdf[\s\S]*/gi, "")
+      .replace(/platform\s+steps[\s\S]*/gi, "")
+      .replace(/before converting the document to PDF[^\n]*/gi, "")
+      .replace(/replace the placeholders[^\n]*/gi, "")
+      .trim();
+    if (!cleanContent) cleanContent = String(args.content || "");
+
     const generated = generateFile({
       format: args.format,
       title: args.title,
-      content: args.content,
+      content: cleanContent,
       fileName: args.fileName,
     });
     if (!generated.buffer?.length) {
