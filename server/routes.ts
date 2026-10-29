@@ -494,8 +494,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             success: true,
             message: quick.answer,
             artifacts: quick.artifacts,
+            folder: (quick as any).folder || null,
             sessionId: sid,
-            toolsUsed: ["generate_file"],
+            toolsUsed: ["generate_file", "kb_create_folder"],
           };
           if (wantsStream) {
             res.write(`data: ${JSON.stringify({ type: "done", ...payload })}\n\n`);
@@ -651,7 +652,7 @@ You have FULL access to the system. You can:
 5. **Do not refuse** a request without offering a helpful alternative.
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.
-8. **File generation is LIVE in LENORY**: You HAVE a working server-side file tool for PDF, DOCX, PPTX, XLSX and more. NEVER say you cannot create files, NEVER say there is no file tool, NEVER tell the user to use Google Docs or Word to make a PDF when they asked LENORY to generate one. If a file card/attachment is present, point them to Download only.
+8. **File generation is LIVE in LENORY**: You HAVE a working server-side file tool for PDF, DOCX, PPTX, XLSX and more. Multi-file requests (e.g. PDF + PowerPoint) and Knowledge Base folder creation are handled by the server task path. NEVER say you cannot create files, NEVER say there is no file tool, NEVER tell the user to use Google Docs or Word to make a PDF when they asked LENORY to generate one. If a file card/attachment is present, point them to Download only.
 8b. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
 9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (triple-backtick fence with language text) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
 10. **Assignments**: Prefer generating a real PDF/DOCX via tools when the user asks for a file. After tools succeed, lead with the download, then optional preview.
