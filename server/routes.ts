@@ -12,6 +12,7 @@ import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRec
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits, getFeatureCost, getAllFeatureCosts, setFeatureCost, DEFAULT_FEATURE_COSTS } from "./creditsStore";
 import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueue";
 import { runAssistantOrchestrator, classifyAssistantRequest } from "./assistant/orchestrator";
+import { isFileGenerationRequest, runQuickFileGeneration } from "./assistant/quickFile";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -431,6 +432,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Message content is required" });
       }
       sendStatus("thinking", 5);
+
+      // ── HARD FILE PATH (before any chat model can deny capability) ──────────
+      // If the user asked for a real downloadable file, generate it here and
+      // return immediately. Never let the general LLM say "I cannot create PDFs".
+      try {
+        if (isFileGenerationRequest(content)) {
+          const earlyUser = await storage.getUser(userId);
+          const earlyName = earlyUser?.firstName || "Friend";
+          // light credit gate for non-admin
+          const isAdminEarly = earlyUser?.email === REAL_ADMIN_EMAIL;
+          if (!isAdminEarly) {
+            try {
+              const tier = (earlyUser as any)?.subscriptionTier || "free";
+              const credits = await getOrCreateCredits(userId, tier);
+              if (credits.balance < 1) {
+                if (wantsStream) {
+                  res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits" })}\n\n`);
+                  return res.end();
+                }
+                return res.status(402).json({ error: "Insufficient credits" });
+              }
+              await deductCredits(userId, 1);
+            } catch {}
+          }
+          sendStatus("generating_file", 8);
+          const quick = await runQuickFileGeneration({
+            userId,
+            content,
+            userName: earlyName,
+            onStatus: (st) => sendStatus(st, 6),
+          });
+          // ensure session exists for message save
+          let sid = sessionId || null;
+          if (sid) {
+            try {
+              const s = await storage.getChatSession(sid);
+              if (!s) sid = null;
+            } catch { sid = null; }
+          }
+          if (!sid) {
+            try {
+              const ns = await storage.createChatSession({ userId, title: content.slice(0, 60) || "File", mode: "chat", summary: "" });
+              sid = ns.id;
+              sessionId = ns.id;
+            } catch {}
+          }
+          try {
+            await storage.createChatMessage({ userId, sessionId: sid, role: "user", content, attachments: null });
+            await storage.createChatMessage({
+              userId,
+              sessionId: sid,
+              role: "assistant",
+              content: quick.answer,
+              attachments: { artifacts: quick.artifacts },
+            });
+          } catch (e) {
+            console.error("quick file message save:", e);
+          }
+          const payload = {
+            success: true,
+            message: quick.answer,
+            artifacts: quick.artifacts,
+            sessionId: sid,
+            toolsUsed: ["generate_file"],
+          };
+          if (wantsStream) {
+            res.write(`data: ${JSON.stringify({ type: "done", ...payload })}\n\n`);
+            return res.end();
+          }
+          return res.json(payload);
+        }
+      } catch (quickErr) {
+        console.error("Early file generation failed, will try orchestrator path:", quickErr);
+        // fall through — orchestrator / force path still runs later
+      }
+
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
       // Credit check moved below (see "Tier-aware credit check" further down) —
@@ -574,7 +651,8 @@ You have FULL access to the system. You can:
 5. **Do not refuse** a request without offering a helpful alternative.
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.
-8. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
+8. **File generation is LIVE in LENORY**: You HAVE a working server-side file tool for PDF, DOCX, PPTX, XLSX and more. NEVER say you cannot create files, NEVER say there is no file tool, NEVER tell the user to use Google Docs or Word to make a PDF when they asked LENORY to generate one. If a file card/attachment is present, point them to Download only.
+8b. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
 9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (triple-backtick fence with language text) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
 10. **Assignments**: Prefer generating a real PDF/DOCX via tools when the user asks for a file. After tools succeed, lead with the download, then optional preview.
 11. **Clean chat formatting**: Use proper headings, numbered lists, and tables. Never place a single keyboard shortcut alone in a code block. Never dump long "copy this into Word to make a PDF" instructions when the user asked LENORY to generate the file — the file tool handles that.

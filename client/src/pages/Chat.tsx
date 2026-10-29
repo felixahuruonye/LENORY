@@ -1151,7 +1151,7 @@ export default function Chat() {
           try {
             const evt = JSON.parse(part.slice(6));
             if (evt.type === "status") setChatAction(evt.status);
-            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts) setLatestArtifacts(evt.artifacts); (window as any).__lenoryLastStreamDone = evt; }
+            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts?.length) { setLatestArtifacts(evt.artifacts); (window as any).__lenoryPendingArtifacts = evt.artifacts; } (window as any).__lenoryLastStreamDone = evt; }
             else if (evt.type === "error") {
               streamErrored = true;
               toast({ title: "Message failed", description: evt.message || "Something went wrong.", variant: "destructive" });

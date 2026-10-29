@@ -18,6 +18,7 @@ import {
   toolReadKbFolder,
   toolWebSearch,
 } from "./tools/index";
+import { isFileGenerationRequest } from "./quickFile";
 
 function emit(input: OrchestratorInput, status: AssistantStatus, detail?: string) {
   try {
@@ -81,7 +82,7 @@ function detectPlan(content: string, kbFolderContext?: string): Plan {
     searchQuery: searchHints ? content.slice(0, 300) : undefined,
     needsKbList: kbHints && !kbFolderContext,
     needsKbRead: !!kbFolderContext || kbHints,
-    needsFile: fileHints,
+    needsFile: fileHints || isFileGenerationRequest(content),
     fileFormat,
     fileTitle,
     complex: searchHints || fileHints || kbHints,
