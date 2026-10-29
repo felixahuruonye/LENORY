@@ -28,14 +28,7 @@ const DEFAULTS: Caps = {
 
 export default function Capabilities() {
   const { toast } = useToast();
-  const [caps, setCaps] = useState<Caps>(() => {
-    try {
-      const raw = localStorage.getItem("lenory_capabilities");
-      return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : DEFAULTS;
-    } catch {
-      return DEFAULTS;
-    }
-  });
+  const [caps, setCaps] = useState<Caps>(DEFAULTS);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -52,7 +45,6 @@ export default function Capabilities() {
 
   const save = async (next: Caps) => {
     setCaps(next);
-    localStorage.setItem("lenory_capabilities", JSON.stringify(next));
     setSaving(true);
     try {
       await apiRequest("PUT", "/api/capabilities", next);

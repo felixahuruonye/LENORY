@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "@/components/ThemeProvider";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 // capabilities entry
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -22,6 +22,7 @@ import { apiRequest } from "@/lib/queryClient";
 type TabId = "profile" | "appearance" | "notifications" | "privacy" | "voice" | "shortcuts" | "credits" | "capabilities";
 
 export default function SettingsPanel() {
+  const [, setLocation] = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const { credits, topup, isTopupPending } = useCredits();
   const { selectedVoice, setSelectedVoice, speak } = useVoice();
@@ -107,7 +108,7 @@ export default function SettingsPanel() {
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => tab.id === "capabilities" ? (window.location.href = "/capabilities") : setActiveTab(tab.id)}
+                    onClick={() => tab.id === "capabilities" ? setLocation("/capabilities") : setActiveTab(tab.id)}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all hover-elevate ${activeTab === tab.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                     data-testid={`button-settings-tab-${tab.id}`}
                   >

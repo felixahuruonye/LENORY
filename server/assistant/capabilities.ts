@@ -1,8 +1,9 @@
 /**
- * Claude-style capability flags for LENORY.
- * Stored per-user; Chat/Live AI load them each request and only expose
- * tools the student has enabled.
+ * Claude-style capability switches for LENORY, persisted per user in the
+ * existing memory_entries table (type = "capabilities") so they survive
+ * Render restarts. No new table / migration required.
  */
+import { storage } from "../storage";
 
 export type ToolAccessMode = "auto" | "on_demand" | "always";
 
@@ -13,7 +14,7 @@ export interface UserCapabilities {
   memory: boolean;
   knowledgeBase: boolean;
   toolAccess: ToolAccessMode;
-  /** When true, model may create KB folders and attach files */
+  /** When true, the model may create KB folders and add notes/files to them */
   kbWrite: boolean;
 }
 
@@ -27,105 +28,46 @@ export const DEFAULT_CAPABILITIES: UserCapabilities = {
   kbWrite: true,
 };
 
-/** In-memory store (per process). Prefer client localStorage + request body; DB optional later. */
-const mem = new Map<string, UserCapabilities>();
+const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite"] as const;
+
+/** Accept only known keys with the right types (never trust raw client JSON). */
+export function sanitizeCapabilities(input: any): Partial<UserCapabilities> {
+  const out: Partial<UserCapabilities> = {};
+  if (!input || typeof input !== "object") return out;
+  for (const k of BOOL_KEYS) if (typeof input[k] === "boolean") (out as any)[k] = input[k];
+  if (["auto", "on_demand", "always"].includes(input.toolAccess)) out.toolAccess = input.toolAccess;
+  return out;
+}
+
+const cache = new Map<string, { caps: UserCapabilities; at: number }>();
+const TTL = 60_000;
 
 export function getUserCapabilities(userId: string, override?: Partial<UserCapabilities> | null): UserCapabilities {
-  const base = { ...DEFAULT_CAPABILITIES, ...(mem.get(userId) || {}) };
-  if (override) Object.assign(base, override);
-  return base;
+  const base = { ...DEFAULT_CAPABILITIES, ...(cache.get(userId)?.caps || {}) };
+  return override ? { ...base, ...sanitizeCapabilities(override) } : base;
 }
 
-export function setUserCapabilities(userId: string, next: Partial<UserCapabilities>): UserCapabilities {
-  const merged = { ...getUserCapabilities(userId), ...next };
-  mem.set(userId, merged);
+/** Loads the saved capabilities from the database (cached for a minute). */
+export async function loadUserCapabilities(userId: string): Promise<UserCapabilities> {
+  const hit = cache.get(userId);
+  if (hit && Date.now() - hit.at < TTL) return hit.caps;
+  let caps = { ...DEFAULT_CAPABILITIES };
+  try {
+    const rows = await storage.getMemoryEntriesByUser(userId);
+    const row = (rows || []).find((r: any) => r.type === "capabilities");
+    if (row?.data) caps = { ...caps, ...sanitizeCapabilities(row.data) };
+  } catch (e) {
+    console.warn("[capabilities] load failed, using defaults:", (e as any)?.message);
+  }
+  cache.set(userId, { caps, at: Date.now() });
+  return caps;
+}
+
+export async function saveUserCapabilities(userId: string, next: any): Promise<UserCapabilities> {
+  const merged = { ...(await loadUserCapabilities(userId)), ...sanitizeCapabilities(next) };
+  await storage.createMemoryEntry({ userId, type: "capabilities", data: merged as any });
+  cache.set(userId, { caps: merged, at: Date.now() });
   return merged;
 }
-
-export interface ToolDef {
-  name: string;
-  description: string;
-  parameters: Record<string, string>;
-  capability: keyof UserCapabilities | "always";
-}
-
-export const TOOL_CATALOG: ToolDef[] = [
-  {
-    name: "web_search",
-    description: "Search the live web for current information. Returns titles, URLs, snippets.",
-    parameters: { query: "string - search query" },
-    capability: "webSearch",
-  },
-  {
-    name: "generate_file",
-    description:
-      "Create a real downloadable file (pdf, docx, pptx, xlsx, csv, txt, rtf, md, html, json). Returns a working download artifact. NEVER claim success without calling this.",
-    parameters: {
-      format: "pdf|docx|pptx|xlsx|csv|txt|rtf|md|html|json",
-      title: "string",
-      content: "string - full document body, plain text",
-      fileName: "string optional",
-    },
-    capability: "fileCreation",
-  },
-  {
-    name: "kb_list_folders",
-    description: "List the student's Knowledge Base / notebook folders.",
-    parameters: {},
-    capability: "knowledgeBase",
-  },
-  {
-    name: "kb_read_folder",
-    description: "Read files and text from one of the student's KB folders (must own it).",
-    parameters: { folderId: "string" },
-    capability: "knowledgeBase",
-  },
-  {
-    name: "kb_create_folder",
-    description: "Create a new Knowledge Base folder for the student.",
-    parameters: { name: "string", description: "string optional" },
-    capability: "kbWrite",
-  },
-];
-
-export function toolsForCapabilities(caps: UserCapabilities): ToolDef[] {
-  return TOOL_CATALOG.filter((t) => {
-    if (t.capability === "always") return true;
-    return !!(caps as any)[t.capability];
-  });
-}
-
-/** System prompt block the model sees — real tools, not marketing. */
-export function buildToolsSystemBlock(caps: UserCapabilities): string {
-  const tools = toolsForCapabilities(caps);
-  if (!tools.length) {
-    return "No external tools are enabled for this user. Answer from knowledge only. Do not claim you generated files or searched the web.";
-  }
-
-  const lines = tools.map(
-    (t) =>
-      `- ${t.name}: ${t.description}\n  params: ${JSON.stringify(t.parameters)}`
-  );
-
-  return `## ENABLED TOOLS (you must use these to complete tasks)
-${lines.join("\n")}
-
-### How to call a tool
-When you need a tool, output EXACTLY one block:
-
-TOOL_CALL
-{"name":"tool_name","arguments":{...}}
-END_TOOL_CALL
-
-Then stop. The server will run the tool and send TOOL_RESULT back.
-You may call multiple tools across turns.
-When finished, write the final user-facing answer WITHOUT claiming a file exists unless a TOOL_RESULT included a real artifact URL.
-
-### Rules
-- File requests (PDF, PPTX, DOCX, etc.): ALWAYS call generate_file. Never tell the user to use Google Docs/Word instead.
-- Multiple files: call generate_file once per file.
-- Knowledge Base folder: call kb_create_folder then mention the folder name.
-- Web research when current info is needed: call web_search first.
-- Never invent download links. Never say a tool is unavailable if it is listed above.
-- Simple questions: answer directly with no tools.`;
-}
+// Back-compat name used by routes
+export const setUserCapabilities = saveUserCapabilities;

@@ -205,3 +205,102 @@ export function getProviderCooldownStatus() {
   }
   return rows;
 }
+
+// ─── NATIVE TOOL CALLING ────────────────────────────────────────────────
+// Same provider chains and cooldowns as chatCompletionWithFailover, but sends
+// OpenAI-style `tools` and returns structured tool calls. Providers that fail
+// or ignore tools are skipped. There is NO text-parsing fallback and NO
+// Gemini fallback here: if no provider can do tool calling, we say so.
+
+export interface ToolSchema {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, any> };
+}
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: any; // parsed JSON (or {} if the model sent invalid JSON)
+  argumentsRaw: string;
+}
+export type AgentMsg =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: any[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+async function callOpenAICompatibleTools(
+  baseUrl: string,
+  apiKey: string,
+  spec: ModelSpec,
+  messages: AgentMsg[],
+  tools: ToolSchema[],
+  extraHeaders?: Record<string, string>,
+): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
+  const body: any = { model: spec.model, messages, temperature: 0.4, max_tokens: 6000 };
+  if (tools.length) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...(extraHeaders || {}) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 429 || res.status === 402 || res.status === 403) {
+      const retryAfter = res.status === 429 ? parseRetryAfterSeconds(res.headers) : null;
+      setCooldown(spec, retryAfter, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const msg = data.choices?.[0]?.message;
+  const content: string = msg?.content || "";
+  const toolCalls: ToolCall[] = (msg?.tool_calls || [])
+    .filter((c: any) => c?.function?.name)
+    .map((c: any, i: number) => {
+      const raw = String(c.function.arguments || "{}");
+      let parsed: any = {};
+      try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+      return { id: c.id || `call_${Date.now()}_${i}`, name: c.function.name, arguments: parsed, argumentsRaw: raw };
+    });
+  if (!content.trim() && toolCalls.length === 0) throw new Error(`${spec.label} returned an empty response`);
+  return {
+    content,
+    toolCalls,
+    rawAssistant: {
+      role: "assistant",
+      content: content || null,
+      ...(toolCalls.length
+        ? { tool_calls: toolCalls.map((t) => ({ id: t.id, type: "function", function: { name: t.name, arguments: t.argumentsRaw } })) }
+        : {}),
+    },
+  };
+}
+
+export async function chatWithToolsFailover(
+  messages: AgentMsg[],
+  tools: ToolSchema[],
+  tier: "ultra" | "fast" = "fast",
+): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any; modelUsed: string }> {
+  const trail: string[] = [];
+  const chains = tier === "ultra" ? [ULTRA_CHAIN, FAST_CHAIN] : [FAST_CHAIN, ULTRA_CHAIN];
+  for (const chain of chains) {
+    for (const spec of chain) {
+      if (isOnCooldown(spec)) { trail.push(`${spec.label} (cooling down)`); continue; }
+      try {
+        const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
+        if (!key) throw new Error(`No ${spec.provider.toUpperCase()}_API_KEY configured`);
+        const base = spec.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.groq.com/openai/v1";
+        const extra = spec.provider === "openrouter" ? { "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" } : undefined;
+        const out = await callOpenAICompatibleTools(base, key, spec, messages, tools, extra);
+        return { ...out, modelUsed: spec.label };
+      } catch (e: any) {
+        trail.push(`${spec.label} (failed: ${String(e?.message || "").slice(0, 80)})`);
+        console.warn(`[tools] model failed, trying next — ${spec.label}:`, e?.message);
+      }
+    }
+  }
+  console.error(`🔥 No provider could run the tool agent. Tried: ${trail.join(" → ")}`);
+  throw new Error("All AI providers are currently unavailable");
+}

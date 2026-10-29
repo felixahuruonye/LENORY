@@ -11,10 +11,11 @@ import multer from "multer";
 import { ADMIN_EMAIL as REAL_ADMIN_EMAIL, getApiKeyStatus, logAdminError, getRecentErrors, getAdminOverview, buildAdminContextBlock, logApiUsage, getApiUsageSummary, getStabilityBalance, getModelUsageByTier, getProviderBalances, getPaystackTransactions, getActiveUsers, getPlatformHealth, getTotalPlatformCredits, getUserActivity, getUserCohorts, getUserCreditHistory, getUserCredits } from "./adminTools";
 import { getOrCreateCredits, deductCredits, addCredits, getTierLimits, checkCreditGate, resetMonthlyCredits, resetDailyCredits, setTierLimits, getAllTierLimits, getFeatureCost, getAllFeatureCosts, setFeatureCost, DEFAULT_FEATURE_COSTS } from "./creditsStore";
 import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueue";
-import { runAssistantOrchestrator, classifyAssistantRequest } from "./assistant/orchestrator";
-import { isFileGenerationRequest, runQuickFileGeneration } from "./assistant/quickFile";
-import { runCapabilityAgent } from "./assistant/agentLoop";
-import { getUserCapabilities, setUserCapabilities, DEFAULT_CAPABILITIES } from "./assistant/capabilities";
+
+
+
+import { loadUserCapabilities, saveUserCapabilities, DEFAULT_CAPABILITIES, sanitizeCapabilities } from "./assistant/capabilities";
+import { runToolAgent } from "./assistant/agentLoop";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
@@ -419,7 +420,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── User Capabilities (Claude-style toggles) ─────────────────────────────
   app.get("/api/capabilities", requireAuth, async (req: any, res) => {
     try {
-      const caps = getUserCapabilities(req.userId);
+      const caps = await loadUserCapabilities(req.userId);
       res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e?.message });
@@ -427,7 +428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   app.put("/api/capabilities", requireAuth, async (req: any, res) => {
     try {
-      const caps = setUserCapabilities(req.userId, req.body || {});
+      const caps = await saveUserCapabilities(req.userId, req.body || {});
       res.json({ success: true, capabilities: caps });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e?.message });
@@ -457,96 +458,6 @@ app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
       // ── HARD FILE PATH (before any chat model can deny capability) ──────────
       // If the user asked for a real downloadable file, generate it here and
       // return immediately. Never let the general LLM say "I cannot create PDFs".
-      try {
-        if (isFileGenerationRequest(content) || /\b(knowledge base|create (a )?folder|research)\b/i.test(content)) {
-          const earlyUser = await storage.getUser(userId);
-          const earlyName = earlyUser?.firstName || "Friend";
-          const isAdminEarly = earlyUser?.email === REAL_ADMIN_EMAIL;
-          if (!isAdminEarly) {
-            try {
-              const tier = (earlyUser as any)?.subscriptionTier || "free";
-              const credits = await getOrCreateCredits(userId, tier);
-              if (credits.balance < 1) {
-                if (wantsStream) {
-                  res.write(`data: ${JSON.stringify({ type: "error", message: "Insufficient credits" })}\n\n`);
-                  return res.end();
-                }
-                return res.status(402).json({ error: "Insufficient credits" });
-              }
-              await deductCredits(userId, 1);
-            } catch {}
-          }
-          const clientCaps = req.body?.capabilities || null;
-          // Email assignment stays on fast deterministic path; everything else uses the capability agent
-          const isEmailOnly =
-            /email account|creating an email|steps for creating an email/i.test(content) &&
-            !/java|research|powerpoint|pptx|knowledge base|folder/i.test(content);
-          let quick: any;
-          if (isEmailOnly) {
-            sendStatus("generating_file", 8);
-            quick = await runQuickFileGeneration({
-              userId,
-              content,
-              userName: earlyName,
-              onStatus: (st) => sendStatus(st, 6),
-            });
-          } else {
-            sendStatus("planning", 8);
-            const agent = await runCapabilityAgent({
-              userId,
-              content,
-              userName: earlyName,
-              isAdvanced: !!isAdvanced,
-              capabilities: clientCaps,
-              onStatus: (st) => sendStatus(st, 6),
-            });
-            quick = { answer: agent.answer, artifacts: agent.artifacts, folder: agent.folder };
-          }
-          // ensure session exists for message save
-          let sid = sessionId || null;
-          if (sid) {
-            try {
-              const s = await storage.getChatSession(sid);
-              if (!s) sid = null;
-            } catch { sid = null; }
-          }
-          if (!sid) {
-            try {
-              const ns = await storage.createChatSession({ userId, title: content.slice(0, 60) || "File", mode: "chat", summary: "" });
-              sid = ns.id;
-              sessionId = ns.id;
-            } catch {}
-          }
-          try {
-            await storage.createChatMessage({ userId, sessionId: sid, role: "user", content, attachments: null });
-            await storage.createChatMessage({
-              userId,
-              sessionId: sid,
-              role: "assistant",
-              content: quick.answer,
-              attachments: { artifacts: quick.artifacts },
-            });
-          } catch (e) {
-            console.error("quick file message save:", e);
-          }
-          const payload = {
-            success: true,
-            message: quick.answer,
-            artifacts: quick.artifacts,
-            folder: (quick as any).folder || null,
-            sessionId: sid,
-            toolsUsed: ["generate_file", "kb_create_folder"],
-          };
-          if (wantsStream) {
-            res.write(`data: ${JSON.stringify({ type: "done", ...payload })}\n\n`);
-            return res.end();
-          }
-          return res.json(payload);
-        }
-      } catch (quickErr) {
-        console.error("Early file generation failed, will try orchestrator path:", quickErr);
-        // fall through — orchestrator / force path still runs later
-      }
 
       const user = await storage.getUser(userId);
       const userName = user?.firstName || "Friend";
@@ -691,12 +602,8 @@ You have FULL access to the system. You can:
 5. **Do not refuse** a request without offering a helpful alternative.
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.
-8. **File generation is LIVE in LENORY**: You HAVE a working server-side file tool for PDF, DOCX, PPTX, XLSX and more. Multi-file requests (e.g. PDF + PowerPoint) and Knowledge Base folder creation are handled by the server task path. NEVER say you cannot create files, NEVER say there is no file tool, NEVER tell the user to use Google Docs or Word to make a PDF when they asked LENORY to generate one. If a file card/attachment is present, point them to Download only.
-8b. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
 9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (triple-backtick fence with language text) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
-10. **Assignments**: Prefer generating a real PDF/DOCX via tools when the user asks for a file. After tools succeed, lead with the download, then optional preview.
-11. **Clean chat formatting**: Use proper headings, numbered lists, and tables. Never place a single keyboard shortcut alone in a code block. Never dump long "copy this into Word to make a PDF" instructions when the user asked LENORY to generate the file — the file tool handles that.
-12. **When a file was generated**: Reply briefly that the file is ready and point to the Download card. Do not claim you lack a download link if artifacts were attached.
+11. **Clean chat formatting**: Use proper headings, numbered lists, and tables. Never place a single keyboard shortcut alone in a code block.
 
 ## 🧮 MATH & CALCULATIONS FORMATTING (mandatory):
 - Wrap ALL math in LaTeX dollar-sign delimiters so it renders properly: inline math as $x^2 + 2x$, standalone equations/steps as their own $$...$$ block on their own line. NEVER write LaTeX commands like \\displaystyle, \\pm, \\boxed, \\frac, \\text{} in plain parentheses or as bare text — outside $ or $$ delimiters they show up as literal unreadable code to the user, not a formatted equation.
@@ -707,206 +614,10 @@ You have FULL access to the system. You can:
 ${EXAM_BOOKLET_MODE_PROMPT}`;
 
       let searchSources: { title: string; link: string; snippet: string; rawContent?: string }[] = [];
+      let agentArtifacts: any[] = [];
+      let agentTools: string[] = [];
+      let agentFolders: any[] = [];
 
-      // ── Tool-enabled path (files, explicit research+KB, generate deliverables) ──
-      try {
-        const plan = classifyAssistantRequest(content);
-        if (plan.needsFile || plan.needsKbList || (plan.needsSearch && plan.needsKbRead)) {
-          sendStatus("planning", 8);
-          const historyMsgs = history.slice(-16).map((m: any) => ({
-            role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
-            content: String(m.content || ""),
-          }));
-          let orch = await runAssistantOrchestrator({
-            userId,
-            userEmail: user?.email,
-            userName: user?.firstName || userName,
-            content,
-            sessionId,
-            isAdvanced: !!isAdvanced,
-            isAdmin: !!isAdminUser,
-            history: historyMsgs,
-            kbFolderContext: kbFolderContext || undefined,
-            extraSystem: isAdminUser ? "Admin user session." : undefined,
-            onStatus: (st) => sendStatus(st, 6),
-          });
-
-          // Hard guarantee: if user asked for a file and orch returned none, force-generate once
-          if (plan.needsFile && !(orch.artifacts && orch.artifacts.length)) {
-            sendStatus("generating_file", 8);
-            try {
-              const { toolGenerateFile } = await import("./assistant/tools/index");
-              const { chatCompletionWithFailover } = await import("./aiRouter");
-              let body = content;
-              try {
-                const draft = await chatCompletionWithFailover(
-                  [
-                    {
-                      role: "system",
-                      content:
-                        "Write a SHORT student assignment for a PDF (about one page). Style: Name, Department, title, 8-12 short numbered steps, brief conclusion. Plain ASCII only. NO tables, NO HTML, NO 'how to convert to PDF', NO long essays.",
-                    },
-                    { role: "user", content },
-                  ] as any,
-                  isAdvanced ? "ultra" : "fast"
-                );
-                body = (draft?.text || content)
-                  .replace(new RegExp("^`{3}[a-z]*\\n?", "i"), "")
-                  .replace(new RegExp("\\n?`{3}$", "i"), "")
-                  .trim();
-              } catch {}
-              const safeName = (plan.fileTitle || "Assignment")
-                .replace(/[^\w\s\-]+/g, "")
-                .trim()
-                .replace(/\s+/g, "_")
-                .slice(0, 60) || "Assignment";
-              const fileResult = await toolGenerateFile(
-                { userId, onStatus: (st) => sendStatus(st, 6) },
-                {
-                  format: plan.fileFormat || "pdf",
-                  title: plan.fileTitle || "LENORY document",
-                  content: body,
-                  fileName: safeName,
-                }
-              );
-              if (fileResult.artifacts?.length) {
-                orch = {
-                  ...orch,
-                  artifacts: fileResult.artifacts,
-                  toolsUsed: [...(orch.toolsUsed || []), "generate_file"],
-                  answer:
-                    `Your **${(plan.fileFormat || "pdf").toUpperCase()}** is ready.\n\n` +
-                    `Tap **Download** on the file card below to save it to your device.\n\n` +
-                    fileResult.artifacts.map((a: any) => `- **${a.name}** (${Math.max(1, Math.round(a.size / 1024))} KB)`).join("\n") +
-                    `\n\n### Preview\n\n${body.slice(0, 1200)}${body.length > 1200 ? "…" : ""}`,
-                  status: "completed",
-                };
-              }
-            } catch (forceErr) {
-              console.error("Force file generate failed:", forceErr);
-            }
-          }
-
-          // If we still have a file request with no artifact, do NOT fall into normal chat
-          // (models invent "Supabase storage failed" stories). Return an honest short error.
-          if (plan.needsFile && !(orch.artifacts && orch.artifacts.length)) {
-            const failMsg =
-              "I generated the content but could not package the downloadable file this time. Please tap send again — your request was saved. If it keeps failing, try DOCX format: “Generate a DOCX of …”";
-            await storage.createChatMessage({
-              userId,
-              sessionId: sessionId || null,
-              role: "assistant",
-              content: failMsg,
-              attachments: null,
-            });
-            if (wantsStream) {
-              res.write(`data: ${JSON.stringify({ type: "done", success: false, message: failMsg })}\n\n`);
-              return res.end();
-            }
-            return res.json({ success: false, message: failMsg });
-          }
-
-          let aiResponse = orch.answer || "Done.";
-          const attachments: any = orch.artifacts?.length
-            ? {
-                artifacts: orch.artifacts,
-                sources: orch.citations?.map((c: any) => ({ title: c.title, link: c.url, snippet: c.snippet })),
-              }
-            : null;
-          await storage.createChatMessage({
-            userId,
-            sessionId: sessionId || null,
-            role: "assistant",
-            content: aiResponse,
-            attachments,
-          });
-          if (sessionId) {
-            try {
-              const session = await storage.getChatSession(sessionId);
-              if (session && (session.title === "New Chat" || session.title.startsWith("Chat "))) {
-                const updatedHistory = await storage.getChatMessagesBySession(sessionId);
-                const smartTitle = await generateSmartChatTitle(updatedHistory.map((msg: any) => ({ role: msg.role, content: msg.content })));
-                await storage.updateChatSession(sessionId, { title: smartTitle });
-              }
-            } catch {}
-          }
-          logApiUsage(orch.modelUsed || "assistant-orchestrator", userId, "/api/chat/send");
-          const finalPayload = {
-            success: true,
-            message: aiResponse,
-            sources: orch.citations?.map((c: any) => ({ title: c.title, link: c.url, snippet: c.snippet })),
-            artifacts: orch.artifacts,
-            toolsUsed: orch.toolsUsed,
-          };
-          if (wantsStream) {
-            res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
-            return res.end();
-          }
-          return res.json(finalPayload);
-        }
-      } catch (orchErr) {
-        console.error("Assistant orchestrator failed:", orchErr);
-        // For file requests, do not silently fall into standard chat (causes fake storage-error stories)
-        try {
-          const plan = classifyAssistantRequest(content);
-          if (plan.needsFile) {
-            const { toolGenerateFile } = await import("./assistant/tools/index");
-            sendStatus("generating_file", 8);
-            const safeName = "Assignment";
-            const fileResult = await toolGenerateFile(
-              { userId, onStatus: (st) => sendStatus(st, 6) },
-              {
-                format: plan.fileFormat || "pdf",
-                title: plan.fileTitle || "LENORY document",
-                content: content,
-                fileName: safeName,
-              }
-            );
-            if (fileResult.artifacts?.length) {
-              const aiResponse =
-                `Your **${(plan.fileFormat || "pdf").toUpperCase()}** is ready.\n\nTap **Download** on the file card below.`;
-              await storage.createChatMessage({
-                userId,
-                sessionId: sessionId || null,
-                role: "assistant",
-                content: aiResponse,
-                attachments: { artifacts: fileResult.artifacts },
-              });
-              const finalPayload = { success: true, message: aiResponse, artifacts: fileResult.artifacts };
-              if (wantsStream) {
-                res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
-                return res.end();
-              }
-              return res.json(finalPayload);
-            }
-          }
-        } catch (e2) {
-          console.error("Emergency file path failed:", e2);
-        }
-      }
-
-
-
-      const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
-      const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
-      if (wantsSearch) {
-        sendStatus("searching", 8);
-        try {
-          const { searchInternetWithGemini } = await import('./gemini');
-          const searchData = await searchInternetWithGemini(content);
-          if (searchData.results?.length > 0) {
-            searchSources = searchData.results.map((r: any) => ({ title: r.title, link: r.link, snippet: r.snippet, rawContent: r.rawContent }));
-            const searchSummary = searchData.results.map((r: any) => `- ${r.title} (${r.link}): ${r.snippet}`).join("\n");
-            systemMessage += `\n\n## 🔎 LIVE WEB SEARCH RESULTS (use these to answer accurately, and mention that you searched the web):\n${searchSummary}`;
-            logApiUsage("tavily", userId, "/api/chat/send");
-            if (user?.email !== REAL_ADMIN_EMAIL) {
-              await deductCredits(userId, 1);
-            }
-          }
-        } catch (searchErr) {
-          console.warn("Chat search failed, continuing without it:", searchErr);
-        }
-      }
       if (examResults.length > 0) {
         const lastExam = examResults[0];
         systemMessage += `\n\n## Recent Performance:\n- Last exam: ${lastExam.examName} (${lastExam.score}%)`;
@@ -985,7 +696,20 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       } else {
         try {
           const tier = isAdvanced ? "ultra" : "fast";
-          const result = await chatCompletionWithFailover(messages as any, tier);
+          const agentRes = await runToolAgent({
+            userId,
+            systemMessage,
+            history: history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })) as any,
+            tier,
+            capabilities: sanitizeCapabilities(req.body?.capabilities),
+            sessionId,
+            onStatus: (st) => sendStatus(st, 6),
+          });
+          const result = { text: agentRes.answer, modelUsed: agentRes.modelUsed };
+          agentArtifacts = agentRes.artifacts;
+          agentTools = agentRes.toolsUsed;
+          agentFolders = agentRes.folders;
+          searchSources = agentRes.citations.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet || "" }));
           aiResponse = result.text;
           modelUsedForLog = result.modelUsed;
           if (!aiResponse || aiResponse.trim() === "") aiResponse = "I received your message but had trouble formulating a response. Please try again.";
@@ -994,7 +718,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
           // selected, only for answer-sensitive questions (math, accounting,
           // stats, physics, chemistry, engineering, programming/code) so
           // ordinary conversation never pays the extra latency/cost.
-          if (isAnswerSensitiveQuestion(content)) {
+          if (isAnswerSensitiveQuestion(content) && agentArtifacts.length === 0 && agentTools.length === 0) {
             sendStatus("verifying", 6);
             try {
               const verificationMessages = buildVerificationPrompt(content, aiResponse);
@@ -1055,6 +779,9 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
           attachments = { images: [{ url: image.url, title: "Visual Explanation" }] };
         } catch (imgErr) {}
       }
+      if (agentArtifacts.length || searchSources.length) {
+        attachments = { ...(attachments || {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
+      }
 
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "assistant", content: aiResponse, attachments });
 
@@ -1070,7 +797,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       }
 
       logApiUsage(modelUsedForLog, userId, "/api/chat/send");
-      const finalPayload = { success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined };
+      const finalPayload = { success: true, message: aiResponse, sources: searchSources.length > 0 ? searchSources : undefined, artifacts: agentArtifacts.length ? agentArtifacts : undefined, toolsUsed: agentTools.length ? agentTools : undefined, folders: agentFolders.length ? agentFolders : undefined };
       if (wantsStream) {
         res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
         return res.end();
@@ -1156,17 +883,16 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
           }));
         }
       }
-      const orch = await runAssistantOrchestrator({
+      const orch0 = await runToolAgent({
         userId,
-        userEmail: user?.email,
-        userName: user?.firstName || "Friend",
-        content,
+        systemMessage: `You are LENORY, an AI learning assistant for Nigerian students. Be clear, accurate and concise unless asked for detail. The student is ${user?.firstName || "Friend"}.`,
+        history: [...historyMsgs, { role: "user" as const, content }],
+        tier: advanced ? "ultra" : "fast",
+        capabilities: sanitizeCapabilities(req.body?.capabilities),
         sessionId,
-        isAdvanced: advanced,
-        isAdmin: isAdminUser,
-        history: historyMsgs,
         onStatus: (st) => sendStatus(st, 6),
       });
+      const orch = { answer: orch0.answer, citations: orch0.citations, artifacts: orch0.artifacts, toolsUsed: orch0.toolsUsed, status: orch0.failedTools.length && !orch0.artifacts.length ? "failed" : "completed" };
       if (sessionId) {
         try {
           await storage.createChatMessage({ userId, sessionId, role: "user", content, attachments: null });
@@ -2620,7 +2346,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   // ─── MEMORY ENTRIES ─────────────────────────────────────────────────────────
 
   app.get('/api/memory/entries', supabaseAuth, async (req: any, res: Response) => {
-    try { res.json(await storage.getMemoryEntriesByUser(req.userId)); } catch (error) { res.status(500).json({ message: "Failed to fetch memory entries" }); }
+    try { res.json((await storage.getMemoryEntriesByUser(req.userId)).filter((m: any) => m.type !== 'capabilities')); } catch (error) { res.status(500).json({ message: "Failed to fetch memory entries" }); }
   });
 
   // ─── GENERATE LESSON ────────────────────────────────────────────────────────

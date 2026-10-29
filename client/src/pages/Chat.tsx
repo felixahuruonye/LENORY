@@ -64,6 +64,7 @@ import {
 } from "lucide-react";
 import { FolderOpen, CheckCircle2, Layers, ChevronRight } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
+import { navigate as navigateInApp } from "wouter/use-browser-location";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
@@ -239,6 +240,24 @@ function LenoryMarkdown({ content }: { content: string }) {
                   {children}
                   <ExternalLink className="w-3 h-3 inline" />
                 </button>
+              );
+            }
+            if (!href || href === "#" || href.startsWith("#")) {
+              return <span className="text-primary">{children}</span>;
+            }
+            if (href.startsWith("/") && !href.startsWith("//")) {
+              return (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey) return;
+                    e.preventDefault();
+                    navigateInApp(href);
+                  }}
+                  className="text-primary underline underline-offset-2 hover:text-primary/80 inline-flex items-center gap-0.5"
+                >
+                  {children}
+                </a>
               );
             }
             return (
@@ -1116,7 +1135,6 @@ export default function Chat() {
           isAdvanced: advancedMode,
           isLongPaste: !!pastedFile,
           stream: true,
-          capabilities: (() => { try { return JSON.parse(localStorage.getItem("lenory_capabilities") || "null"); } catch { return null; } })(),
         }),
       });
 
@@ -1238,10 +1256,12 @@ export default function Chat() {
           ? new URL(art.url).pathname
           : art.url;
         const headers = await getAuthHeaders();
-        const res = await fetch(path, { headers, credentials: "include" });
+        let res = await fetch(path, { headers, credentials: "include" });
+        if (!res.ok && (art as any).fallbackUrl) {
+          res = await fetch((art as any).fallbackUrl, { mode: "cors" });
+        }
         if (!res.ok) {
-          const errText = await res.text().catch(() => "");
-          throw new Error(errText || `Download failed (${res.status})`);
+          throw new Error(res.status === 404 ? "This file is no longer available. Ask LENORY to create it again." : `Download failed (${res.status})`);
         }
         const blob = await res.blob();
         const obj = URL.createObjectURL(blob);

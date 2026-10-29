@@ -244,6 +244,8 @@ export interface ChatMessageWithAttachments {
       url: string;
       title?: string;
     }>;
+    artifacts?: any[];
+    sources?: any[];
   } | null;
   createdAt: Date;
 }
