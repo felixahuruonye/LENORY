@@ -575,7 +575,7 @@ You have FULL access to the system. You can:
 6. **Cite your reasoning** – show your work so the user can follow.
 7. **If you don't know something, say so** — don't fabricate information.
 8. **File deliverables**: When a real download link is provided in TOOL RESULTS or attachments, ALWAYS give the student that link / tell them to use the Download button. NEVER say storage failed if a link exists. NEVER invent fake download URLs.
-9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (```text ... ```) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
+9. **Copyable step boxes**: For numbered procedures (assignments, how-to steps), put the steps the student may need to copy into a fenced code block (triple-backtick fence with language text) so one tap copies only the steps—not your whole reply. Keep intro/outro outside the box.
 10. **Assignments**: Prefer generating a real PDF/DOCX via tools when the user asks for a file. After tools succeed, lead with the download, then optional preview.
 11. **Clean chat formatting**: Use proper headings, numbered lists, and tables. Never place a single keyboard shortcut alone in a code block. Never dump long "copy this into Word to make a PDF" instructions when the user asked LENORY to generate the file — the file tool handles that.
 12. **When a file was generated**: Reply briefly that the file is ready and point to the Download card. Do not claim you lack a download link if artifacts were attached.
@@ -633,8 +633,8 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
                   isAdvanced ? "ultra" : "fast"
                 );
                 body = (draft?.text || content)
-                  .replace(/^```[a-z]*\n?/i, "")
-                  .replace(/\n?```$/i, "")
+                  .replace(new RegExp("^`{3}[a-z]*\\n?", "i"), "")
+                  .replace(new RegExp("\\n?`{3}$", "i"), "")
                   .trim();
               } catch {}
               const safeName = (plan.fileTitle || "LENORY_document")

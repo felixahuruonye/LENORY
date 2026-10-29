@@ -130,7 +130,7 @@ function buildSystem(
 - Never invent download links. Only use URLs provided in TOOL RESULTS.
 - If a tool FAILED with no URL, say so honestly. If a Download link EXISTS in TOOL RESULTS, lead with it and NEVER claim storage failed.
 - Prefer actionable deliverables over meta instructions when tools already produced results.
-- For step-by-step assignment content the student may need to copy, put those steps in a single fenced code block (```text ... ```) so they can copy the box only—not the whole message.
+- For step-by-step assignment content the student may need to copy, put those steps in a single fenced code block (triple-backtick fence labeled text) so they can copy the box only—not the whole message.
 
 ## App routes (for navigation tips only)
 - Chat: /chat · Live AI: /live-ai · Write My Note: /live-session · Knowledge Base: /knowledge-base · Dashboard: /dashboard
@@ -211,8 +211,8 @@ Rules:
       try {
         const draft = await runModel(draftMsgs, input.isAdvanced);
         body = draft.text
-          .replace(/^```[a-z]*\n?/i, "")
-          .replace(/\n?```$/i, "")
+          .replace(new RegExp("^`{3}[a-z]*\\n?", "i"), "")
+          .replace(new RegExp("\\n?`{3}$", "i"), "")
           .trim();
       } catch {
         body = "";
