@@ -56,6 +56,19 @@ function detectFormats(content: string): string[] {
   if (/\bcsv\b/.test(t)) formats.push("csv");
   if (/\btxt\b/.test(t)) formats.push("txt");
   if (/\bmarkdown|\.md\b/.test(t)) formats.push("md");
+  if (/\brtf\b/.test(t)) formats.push("rtf");
+  if (/\bhtml\b/.test(t)) formats.push("html");
+  if (/\bjson\b/.test(t)) formats.push("json");
+  if (/\bxml\b/.test(t)) formats.push("xml");
+  if (/\byaml|\.yml\b/.test(t)) formats.push("yaml");
+  if (/\bcss\b/.test(t)) formats.push("css");
+  if (/\b(javascript|\.js)\b/.test(t)) formats.push("js");
+  if (/\b(typescript|\.ts)\b/.test(t)) formats.push("ts");
+  if (/\b(python|\.py)\b/.test(t)) formats.push("py");
+  if (/\bsql\b/.test(t)) formats.push("sql");
+  if (/\bzip\b/.test(t)) formats.push("zip");
+  if (/\bsvg|\bpng|\bjpe?g|\bwebp\b/.test(t)) formats.push("svg");
+  if (/\bods\b/.test(t)) formats.push("ods");
   if (!formats.length && /\b(generate|create|download|file|document)\b/.test(t)) formats.push("pdf");
   return [...new Set(formats)];
 }

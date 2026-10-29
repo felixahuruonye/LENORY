@@ -305,76 +305,114 @@ export function generateDocx(title: string, body: string): Buffer {
   ]);
 }
 
-/** Minimal PPTX: one title slide + content slide. */
+/** Multi-slide PPTX that opens in PowerPoint / WPS / Google Slides. */
 export function generatePptx(title: string, body: string): Buffer {
-  const bullets = String(body || "")
-    .split(/\n/)
-    .filter((l) => l.trim())
-    .slice(0, 12)
-    .map((l, i) => {
-      const y = 1500000 + i * 500000;
-      return `<a:p><a:pPr marL="0"/><a:r><a:rPr lang="en-US" sz="1600"/><a:t>${xmlEscape(l.slice(0, 200))}</a:t></a:r></a:p>`;
-    })
-    .join("");
+  // Parse "Slide N: Title" sections; fallback to chunked lines
+  const raw = String(body || "").replace(/\r/g, "");
+  const sections: { title: string; bullets: string[] }[] = [];
+  const slideSplit = raw.split(/(?=^Slide\s*\d+\s*[:.\-–—])/im).filter((s) => s.trim());
+  if (slideSplit.length >= 2) {
+    for (const block of slideSplit) {
+      const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (!lines.length) continue;
+      const head = lines[0].replace(/^Slide\s*\d+\s*[:.\-–—]\s*/i, "").trim() || lines[0];
+      const bullets = lines.slice(1).map((l) => l.replace(/^[-•*]\s*/, "").trim()).filter(Boolean).slice(0, 8);
+      sections.push({ title: head.slice(0, 80), bullets });
+    }
+  }
+  if (!sections.length) {
+    const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+    sections.push({ title: (title || "LENORY").slice(0, 80), bullets: lines.slice(0, 6) });
+    for (let i = 6; i < Math.min(lines.length, 48); i += 6) {
+      sections.push({ title: `Continued (${Math.floor(i / 6) + 1})`, bullets: lines.slice(i, i + 6) });
+    }
+  }
+  // Cap slides for package size
+  const slides = sections.slice(0, 16);
+  if (!slides.length) slides.push({ title: title || "LENORY", bullets: ["Content"] });
 
-  const slide1 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  const slideXml = (sTitle: string, bullets: string[], idx: number) => {
+    const paras = [
+      `<a:p><a:pPr/><a:r><a:rPr lang="en-US" sz="2800" b="1" dirty="0"/><a:t>${xmlEscape(sTitle)}</a:t></a:r></a:p>`,
+      `<a:p><a:pPr/><a:endParaRPr lang="en-US"/></a:p>`,
+      ...bullets.map(
+        (b) =>
+          `<a:p><a:pPr marL="342900" indent="-342900"><a:buFont typeface="Arial"/><a:buChar char="•"/></a:pPr><a:r><a:rPr lang="en-US" sz="1800" dirty="0"/><a:t>${xmlEscape(b.slice(0, 180))}</a:t></a:r></a:p>`
+      ),
+    ].join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld><p:spTree>
-    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
-    <p:grpSpPr/><p:sp>
-      <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
-      <p:spPr><a:xfrm><a:off x="457200" y="2746380"/><a:ext cx="8229600" cy="1143000"/></a:xfrm></p:spPr>
-      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="3200" b="1"/><a:t>${xmlEscape(title || "LENORY")}</a:t></a:r></a:p></p:txBody>
-    </p:sp>
-  </p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+  <p:cSld>
+    <p:bg><p:bgPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="Content"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+        <p:spPr>
+          <a:xfrm><a:off x="457200" y="457200"/><a:ext cx="8229600" cy="5943600"/></a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          <a:noFill/>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0"/>
+          <a:lstStyle/>
+          ${paras}
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
 </p:sld>`;
+  };
 
-  const slide2 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld><p:spTree>
-    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
-    <p:grpSpPr/><p:sp>
-      <p:nvSpPr><p:cNvPr id="2" name="Content"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
-      <p:spPr><a:xfrm><a:off x="457200" y="685800"/><a:ext cx="8229600" cy="5715000"/></a:xfrm></p:spPr>
-      <p:txBody><a:bodyPr/><a:lstStyle/>${bullets || "<a:p><a:r><a:t> </a:t></a:r></a:p>"}</p:txBody>
-    </p:sp>
-  </p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
-</p:sld>`;
-
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
+  const overrides = slides
+    .map(
+      (_, i) =>
+        `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`
+    )
+    .join("\n  ");
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
-  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
-  <Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+  ${overrides}
 </Types>`;
-  const rels = `<?xml version="1.0" encoding="UTF-8"?>
+
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
 </Relationships>`;
-  const pres = `<?xml version="1.0" encoding="UTF-8"?>
-<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:sldIdLst>
-    <p:sldId id="256" r:id="rId1"/>
-    <p:sldId id="257" r:id="rId2"/>
-  </p:sldIdLst>
-  <p:sldSz cx="9144000" cy="6858000"/>
+
+  const sldIdLst = slides
+    .map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`)
+    .join("");
+  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1">
+  <p:sldIdLst>${sldIdLst}</p:sldIdLst>
+  <p:sldSz cx="9144000" cy="6858000" type="screen16x9"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>`;
-  const presRels = `<?xml version="1.0" encoding="UTF-8"?>
+
+  const presRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+${slides.map((_, i) => `  <Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`).join("\n")}
 </Relationships>`;
 
-  return zipStore([
+  const files: { name: string; data: Buffer }[] = [
     { name: "[Content_Types].xml", data: Buffer.from(contentTypes, "utf8") },
-    { name: "_rels/.rels", data: Buffer.from(rels, "utf8") },
-    { name: "ppt/presentation.xml", data: Buffer.from(pres, "utf8") },
+    { name: "_rels/.rels", data: Buffer.from(rootRels, "utf8") },
+    { name: "ppt/presentation.xml", data: Buffer.from(presentation, "utf8") },
     { name: "ppt/_rels/presentation.xml.rels", data: Buffer.from(presRels, "utf8") },
-    { name: "ppt/slides/slide1.xml", data: Buffer.from(slide1, "utf8") },
-    { name: "ppt/slides/slide2.xml", data: Buffer.from(slide2, "utf8") },
-  ]);
+  ];
+  slides.forEach((s, i) => {
+    files.push({
+      name: `ppt/slides/slide${i + 1}.xml`,
+      data: Buffer.from(slideXml(s.title, s.bullets, i), "utf8"),
+    });
+  });
+  return zipStore(files);
 }
 
 /** SpreadsheetML XLSX (single sheet). */
@@ -480,6 +518,11 @@ const MIME: Record<string, { mime: string; ext: string }> = {
   sql: { mime: "application/sql", ext: "sql" },
   zip: { mime: "application/zip", ext: "zip" },
   svg: { mime: "image/svg+xml", ext: "svg" },
+  png: { mime: "image/svg+xml", ext: "svg" },
+  jpeg: { mime: "image/svg+xml", ext: "svg" },
+  jpg: { mime: "image/svg+xml", ext: "svg" },
+  webp: { mime: "image/svg+xml", ext: "svg" },
+  ods: { mime: "application/vnd.oasis.opendocument.spreadsheet", ext: "ods" },
 };
 
 export function generateFile(opts: {
@@ -537,11 +580,79 @@ export function generateFile(opts: {
       buffer = zipStore([{ name: `${safeBaseName(title)}.txt`, data: inner }]);
       break;
     }
-    default:
+    case "xml":
       buffer = Buffer.from(
-        title ? `# ${title}\n\n${content}` : content,
+        `<?xml version="1.0" encoding="UTF-8"?>\n<document title="${title.replace(/"/g, "")}">\n${content
+          .split("\n")
+          .map((l) => `  <line>${l.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</line>`)
+          .join("\n")}\n</document>\n`,
         "utf8"
       );
+      break;
+    case "yaml":
+    case "yml":
+      buffer = Buffer.from(`title: ${JSON.stringify(title)}\nbody: |\n  ${content.replace(/\n/g, "\n  ")}\n`, "utf8");
+      break;
+    case "md":
+    case "markdown":
+      buffer = Buffer.from(title ? `# ${title}\n\n${content}` : content, "utf8");
+      break;
+    case "txt":
+      buffer = Buffer.from(title ? `${title}\n\n${content}` : content, "utf8");
+      break;
+    case "css":
+      buffer = Buffer.from(`/* ${title} */\n${content || "body { font-family: system-ui; }"}\n`, "utf8");
+      break;
+    case "js":
+    case "javascript":
+      buffer = Buffer.from(`// ${title}\n${content || "console.log('LENORY');"}\n`, "utf8");
+      break;
+    case "ts":
+    case "typescript":
+      buffer = Buffer.from(`// ${title}\n${content || "export {};"}\n`, "utf8");
+      break;
+    case "py":
+    case "python":
+      buffer = Buffer.from(`# ${title}\n${content || "print('LENORY')"}\n`, "utf8");
+      break;
+    case "sql":
+      buffer = Buffer.from(`-- ${title}\n${content || "SELECT 1;"}\n`, "utf8");
+      break;
+    case "png":
+    case "jpeg":
+    case "jpg":
+    case "webp":
+      // Vector image deliverable (opens in browsers and many apps)
+      buffer = generateSvg(title, content);
+      break;
+    case "ods": {
+      // Minimal OpenDocument Spreadsheet
+      const rows = String(content || "")
+        .split(/\n/)
+        .filter((l) => l.trim())
+        .slice(0, 100)
+        .map((line) => {
+          const cells = line.split(/,|\t/).map((c) => `<table:table-cell office:value-type="string"><text:p>${xmlEscape(c.trim())}</text:p></table:table-cell>`).join("");
+          return `<table:table-row>${cells}</table:table-row>`;
+        })
+        .join("");
+      const contentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body><office:spreadsheet><table:table table:name="Sheet1">${rows || "<table:table-row><table:table-cell office:value-type=\\"string\\"><text:p>Empty</text:p></table:table-cell></table:table-row>"}</table:table></office:spreadsheet></office:body>
+</office:document-content>`;
+      const manifest = `<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>
+  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>`;
+      buffer = zipStore([
+        { name: "META-INF/manifest.xml", data: Buffer.from(manifest, "utf8") },
+        { name: "content.xml", data: Buffer.from(contentXml, "utf8") },
+      ]);
+      break;
+    }
+    default:
+      buffer = Buffer.from(title ? `# ${title}\n\n${content}` : content, "utf8");
   }
 
   const base = safeBaseName(opts.fileName || title);
