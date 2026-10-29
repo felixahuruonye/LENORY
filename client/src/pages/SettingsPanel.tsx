@@ -14,7 +14,7 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Settings, Bell, Lock, Keyboard, Volume2, User, Coins, 
-  Camera, CheckCircle2, Shield, Crown, Zap,
+  Camera, CheckCircle2, Shield, Crown, Zap, Sparkles,
 } from "lucide-react";
 import { useVoice, AVAILABLE_VOICES } from "@/lib/useVoice";
 import { apiRequest } from "@/lib/queryClient";
@@ -61,6 +61,7 @@ export default function SettingsPanel() {
 
   const tabs: { id: TabId; label: string; icon: any }[] = [
     { id: "profile", label: "Profile", icon: User },
+    { id: "capabilities", label: "Capabilities", icon: Sparkles },
     { id: "credits", label: "Credits", icon: Coins },
     { id: "appearance", label: "Appearance", icon: Settings },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -106,7 +107,7 @@ export default function SettingsPanel() {
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => tab.id === "capabilities" ? (window.location.href = "/capabilities") : setActiveTab(tab.id)}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all hover-elevate ${activeTab === tab.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                     data-testid={`button-settings-tab-${tab.id}`}
                   >

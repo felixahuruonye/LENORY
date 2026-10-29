@@ -243,6 +243,12 @@ export async function toolGenerateFile(
       .replace(/platform\s+steps[\s\S]*/gi, "")
       .replace(/before converting the document to PDF[^\n]*/gi, "")
       .replace(/replace the placeholders[^\n]*/gi, "")
+      .replace(/I can'?t create[\s\S]{0,200}/gi, "")
+      .replace(/I cannot create[\s\S]{0,200}/gi, "")
+      .replace(/as a text-based assistant[\s\S]{0,300}/gi, "")
+      .replace(/I don'?t have (a )?working file[\s\S]{0,200}/gi, "")
+      .replace(/use Google Docs[\s\S]{0,120}/gi, "")
+      .replace(/File > Download > PDF[\s\S]{0,80}/gi, "")
       .trim();
     if (!cleanContent) cleanContent = String(args.content || "");
 
