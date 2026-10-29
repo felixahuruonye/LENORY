@@ -215,6 +215,32 @@ function LenoryMarkdown({ content }: { content: string }) {
             );
           },
           a({ href, children }) {
+            const isArtifact =
+              !!href &&
+              (href.includes("/api/assistant/artifacts/") ||
+                href.startsWith("data:") ||
+                /\.(pdf|docx?|pptx?|xlsx?|csv|zip|txt|md)(\?|$)/i.test(href));
+            if (isArtifact) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const handler = (window as any).__lenoryDownloadArtifact;
+                    if (typeof handler === "function") {
+                      handler({ url: href, name: String(children || "download") });
+                    } else if (href?.startsWith("http")) {
+                      window.open(href, "_blank", "noopener,noreferrer");
+                    }
+                  }}
+                  className="text-primary underline underline-offset-2 hover:text-primary/80 inline-flex items-center gap-0.5 font-medium"
+                >
+                  {children}
+                  <ExternalLink className="w-3 h-3 inline" />
+                </button>
+              );
+            }
             return (
               <a href={href} target="_blank" rel="noopener noreferrer"
                 className="text-primary underline underline-offset-2 hover:text-primary/80 inline-flex items-center gap-0.5">
@@ -1125,7 +1151,7 @@ export default function Chat() {
           try {
             const evt = JSON.parse(part.slice(6));
             if (evt.type === "status") setChatAction(evt.status);
-            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts) setLatestArtifacts(evt.artifacts); }
+            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts) setLatestArtifacts(evt.artifacts); (window as any).__lenoryLastStreamDone = evt; }
             else if (evt.type === "error") {
               streamErrored = true;
               toast({ title: "Message failed", description: evt.message || "Something went wrong.", variant: "destructive" });
@@ -1139,6 +1165,14 @@ export default function Chat() {
 
       resetInput();
       setLatestSources(finalSources);
+      // Show finished answer immediately (don't wait only on refetch)
+      try {
+        const doneEvt = (window as any).__lenoryLastStreamDone;
+        if (doneEvt?.message || doneEvt?.artifacts) {
+          if (doneEvt.artifacts) setLatestArtifacts(doneEvt.artifacts);
+        }
+        (window as any).__lenoryLastStreamDone = null;
+      } catch {}
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
@@ -1154,30 +1188,94 @@ export default function Chat() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
   };
 
-  const downloadAssistantArtifact = async (art: { url?: string; name?: string; mimeType?: string }) => {
-    if (!art?.url) return;
+  const downloadAssistantArtifact = async (art: {
+    url?: string;
+    name?: string;
+    mimeType?: string;
+    dataBase64?: string;
+  }) => {
+    const fileName = art.name || "lenory-file";
     try {
-      // Same-origin /api/assistant/artifacts needs auth header
-      if (art.url.startsWith("/api/assistant/artifacts/")) {
+      // 1) Inline base64 (most reliable — no extra request)
+      if (art.dataBase64) {
+        const bin = atob(art.dataBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: art.mimeType || "application/octet-stream" });
+        const obj = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = obj;
+        a.download = fileName;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(obj), 1500);
+        toast({ title: "Download started", description: fileName });
+        return;
+      }
+
+      if (!art.url) throw new Error("No file URL");
+
+      // 2) Authenticated API artifact
+      const isApi =
+        art.url.startsWith("/api/assistant/artifacts/") ||
+        art.url.includes("/api/assistant/artifacts/");
+      if (isApi) {
+        const path = art.url.startsWith("http")
+          ? new URL(art.url).pathname
+          : art.url;
         const headers = await getAuthHeaders();
-        const res = await fetch(art.url, { headers });
-        if (!res.ok) throw new Error("Download failed");
+        const res = await fetch(path, { headers, credentials: "include" });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "");
+          throw new Error(errText || `Download failed (${res.status})`);
+        }
         const blob = await res.blob();
         const obj = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = obj;
-        a.download = art.name || "lenory-file";
+        a.download = fileName;
+        a.style.display = "none";
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(obj);
+        setTimeout(() => URL.revokeObjectURL(obj), 1500);
+        toast({ title: "Download started", description: fileName });
         return;
       }
+
+      // 3) Public URL (Supabase etc.) — force download via blob when possible
+      const res = await fetch(art.url, { mode: "cors" });
+      if (res.ok) {
+        const blob = await res.blob();
+        const obj = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = obj;
+        a.download = fileName;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(obj), 1500);
+        toast({ title: "Download started", description: fileName });
+        return;
+      }
+      // Fallback open
       window.open(art.url, "_blank", "noopener,noreferrer");
     } catch (e: any) {
+      console.error("download failed", e);
       toast({ title: "Download failed", description: e?.message || "Try again", variant: "destructive" });
     }
   };
+
+  // Expose for markdown link buttons (must not navigate / reload)
+  useEffect(() => {
+    (window as any).__lenoryDownloadArtifact = downloadAssistantArtifact;
+    return () => {
+      try { delete (window as any).__lenoryDownloadArtifact; } catch {}
+    };
+  });
 
   const copyMessage = async (content: string, msgId: string) => {
 

@@ -63,6 +63,8 @@ export interface ArtifactRef {
   size: number;
   url: string;
   createdAt: string;
+  /** Optional inline payload so the client can download without a second request */
+  dataBase64?: string;
 }
 
 export interface ToolResult {

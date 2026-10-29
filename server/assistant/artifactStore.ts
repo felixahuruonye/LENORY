@@ -1,6 +1,6 @@
 /**
- * Local durable-enough artifact store used when Supabase Storage is unavailable.
- * Files live under os.tmpdir() and are served via authenticated GET /api/assistant/artifacts/:id
+ * Local artifact store with disk-backed index.
+ * Served via authenticated GET /api/assistant/artifacts/:id
  */
 import fs from "fs";
 import path from "path";
@@ -18,30 +18,64 @@ export interface StoredArtifact {
   expiresAt: number;
 }
 
-const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ROOT = path.join(os.tmpdir(), "lenory-artifacts");
+const INDEX_PATH = path.join(ROOT, "index.json");
 const index = new Map<string, StoredArtifact>();
+let loaded = false;
 
 function ensureRoot() {
   if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true });
 }
 
+function loadIndex() {
+  if (loaded) return;
+  loaded = true;
+  try {
+    ensureRoot();
+    if (fs.existsSync(INDEX_PATH)) {
+      const rows = JSON.parse(fs.readFileSync(INDEX_PATH, "utf8")) as StoredArtifact[];
+      for (const row of rows) {
+        if (row?.id && row.path) index.set(row.id, row);
+      }
+    }
+  } catch (e) {
+    console.warn("[artifactStore] load index failed", e);
+  }
+}
+
+function persistIndex() {
+  try {
+    ensureRoot();
+    fs.writeFileSync(INDEX_PATH, JSON.stringify([...index.values()]));
+  } catch (e) {
+    console.warn("[artifactStore] persist index failed", e);
+  }
+}
+
 function prune() {
   const now = Date.now();
+  let changed = false;
   for (const [id, art] of index.entries()) {
-    if (art.expiresAt < now) {
-      try { fs.unlinkSync(art.path); } catch {}
+    if (art.expiresAt < now || !fs.existsSync(art.path)) {
+      try {
+        if (fs.existsSync(art.path)) fs.unlinkSync(art.path);
+      } catch {}
       index.delete(id);
+      changed = true;
     }
   }
-  // Cap map size
   if (index.size > 2000) {
     const oldest = [...index.values()].sort((a, b) => a.createdAt - b.createdAt).slice(0, 200);
     for (const art of oldest) {
-      try { fs.unlinkSync(art.path); } catch {}
+      try {
+        fs.unlinkSync(art.path);
+      } catch {}
       index.delete(art.id);
+      changed = true;
     }
   }
+  if (changed) persistIndex();
 }
 
 export function saveLocalArtifact(opts: {
@@ -50,6 +84,7 @@ export function saveLocalArtifact(opts: {
   mimeType: string;
   buffer: Buffer;
 }): StoredArtifact {
+  loadIndex();
   ensureRoot();
   prune();
   const id = `laf_${Date.now()}_${randomBytes(6).toString("hex")}`;
@@ -67,25 +102,34 @@ export function saveLocalArtifact(opts: {
     expiresAt: Date.now() + TTL_MS,
   };
   index.set(id, art);
+  persistIndex();
   return art;
 }
 
 export function getLocalArtifact(id: string): StoredArtifact | null {
+  loadIndex();
   const art = index.get(id);
   if (!art) return null;
   if (art.expiresAt < Date.now()) {
-    try { fs.unlinkSync(art.path); } catch {}
+    try {
+      fs.unlinkSync(art.path);
+    } catch {}
     index.delete(id);
+    persistIndex();
     return null;
   }
   if (!fs.existsSync(art.path)) {
     index.delete(id);
+    persistIndex();
     return null;
   }
   return art;
 }
 
-export function readLocalArtifact(id: string, userId: string): { art: StoredArtifact; buffer: Buffer } | null {
+export function readLocalArtifact(
+  id: string,
+  userId: string
+): { art: StoredArtifact; buffer: Buffer } | null {
   const art = getLocalArtifact(id);
   if (!art || art.userId !== userId) return null;
   return { art, buffer: fs.readFileSync(art.path) };
