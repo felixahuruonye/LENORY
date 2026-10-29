@@ -2,16 +2,82 @@ import type { ToolContext, ToolResult, Citation, ArtifactRef } from "../types";
 import { generateFile, randomArtifactId } from "../fileFactory";
 import { storage } from "../../storage";
 
+const BUCKET_CANDIDATES = ["lenory-kb-media", "generated-images", "assistant-files"];
+
+async function trySupabaseUpload(
+  buffer: Buffer,
+  mimeType: string,
+  fileName: string,
+  userId: string
+): Promise<string | null> {
+  try {
+    const { supabaseDb } = await import("../../db");
+    if (!supabaseDb) return null;
+
+    const safeName = fileName.replace(/[^\w.\-]+/g, "_").slice(0, 80);
+    const pathKey = `assistant/${userId}/${Date.now()}-${safeName}`;
+
+    for (const bucket of BUCKET_CANDIDATES) {
+      try {
+        // Ensure bucket exists + public
+        const { error: createErr } = await supabaseDb.storage.createBucket(bucket, {
+          public: true,
+          fileSizeLimit: 80 * 1024 * 1024,
+        });
+        if (createErr && !/already exists/i.test(createErr.message || "")) {
+          // try update anyway
+        }
+        try {
+          await (supabaseDb.storage as any).updateBucket(bucket, { public: true });
+        } catch {}
+
+        let { error } = await supabaseDb.storage
+          .from(bucket)
+          .upload(pathKey, buffer, { contentType: mimeType || "application/octet-stream", upsert: true });
+
+        if (error && /bucket not found/i.test(error.message || "")) {
+          await supabaseDb.storage.createBucket(bucket, { public: true }).catch(() => {});
+          ({ error } = await supabaseDb.storage
+            .from(bucket)
+            .upload(pathKey, buffer, { contentType: mimeType || "application/octet-stream", upsert: true }));
+        }
+
+        if (!error) {
+          const { data } = supabaseDb.storage.from(bucket).getPublicUrl(pathKey);
+          if (data?.publicUrl) {
+            console.log(`[assistant] uploaded to ${bucket}: ${data.publicUrl}`);
+            return data.publicUrl;
+          }
+        } else {
+          console.warn(`[assistant] upload to ${bucket} failed:`, error.message);
+        }
+      } catch (e: any) {
+        console.warn(`[assistant] bucket ${bucket} error:`, e?.message);
+      }
+    }
+  } catch (e: any) {
+    console.warn("[assistant] supabase upload unavailable:", e?.message);
+  }
+  return null;
+}
+
+/**
+ * Always returns an artifact when buffer is non-empty.
+ * Priority: Supabase public URL → local authenticated URL → data-only via base64
+ */
 async function uploadArtifact(
   userId: string,
   folderId: string | null,
   file: { buffer: Buffer; mimeType: string; fileName: string },
   label: string
 ): Promise<ArtifactRef | null> {
-  let publicUrl: string | null = null;
-  let artifactId = randomArtifactId();
+  if (!file.buffer?.length) return null;
 
-  // Always save locally first so same-instance download never fails
+  let publicUrl: string | null = null;
+  let localId: string | null = null;
+  const artifactId = randomArtifactId();
+
+  // 1) Local store first (always — same-instance download)
   try {
     const { saveLocalArtifact } = await import("../artifactStore");
     const local = saveLocalArtifact({
@@ -20,49 +86,34 @@ async function uploadArtifact(
       mimeType: file.mimeType,
       buffer: file.buffer,
     });
-    artifactId = local.id;
+    localId = local.id;
     publicUrl = `/api/assistant/artifacts/${local.id}`;
   } catch (e: any) {
-    console.error("[assistant] local artifact store failed:", e?.message);
+    console.error("[assistant] local store failed:", e?.message);
   }
 
-  // Also try Supabase for a durable public URL (optional)
-  try {
-    const { supabaseDb } = await import("../../db");
-    if (supabaseDb) {
-      const bucket = "lenory-kb-media";
-      try {
-        await supabaseDb.storage.createBucket(bucket, { public: true, fileSizeLimit: 80 * 1024 * 1024 });
-      } catch {}
-      const pathKey = `${userId}/assistant/${Date.now()}-${file.fileName.replace(/[^\w.\-]+/g, "_")}`;
-      let { error } = await supabaseDb.storage
-        .from(bucket)
-        .upload(pathKey, file.buffer, { contentType: file.mimeType, upsert: true });
-      if (error && /bucket not found/i.test(error.message || "")) {
-        try {
-          await supabaseDb.storage.createBucket(bucket, { public: true });
-        } catch {}
-        ({ error } = await supabaseDb.storage
-          .from(bucket)
-          .upload(pathKey, file.buffer, { contentType: file.mimeType, upsert: true }));
-      }
-      if (!error) {
-        const { data } = supabaseDb.storage.from(bucket).getPublicUrl(pathKey);
-        // Prefer public URL when available; keep local id for fallback
-        // Keep authenticated local URL as primary download path (reliable on device).
-        // Supabase URL is still stored on the KB file row via full_text_url overwrite below.
-        if (data?.publicUrl) {
-          (file as any)._supabaseUrl = data.publicUrl;
-        }
-      } else {
-        console.warn("[assistant] supabase upload failed (local download still available):", error.message);
-      }
-    }
-  } catch (e: any) {
-    console.warn("[assistant] supabase unavailable:", e?.message);
+  // 2) Supabase (best-effort durable public URL)
+  const supabaseUrl = await trySupabaseUpload(file.buffer, file.mimeType, file.fileName, userId);
+  // Keep local path as primary for auth download reliability; expose supabase as optional
+  // But if local failed, use supabase URL as primary
+  if (!publicUrl && supabaseUrl) publicUrl = supabaseUrl;
+  // Prefer supabase public URL when available for cross-device durability
+  if (supabaseUrl) publicUrl = supabaseUrl;
+
+  // 3) Always embed base64 for client-side device download (most reliable)
+  const MAX_INLINE = 1_200_000;
+  const dataBase64 =
+    file.buffer.length <= MAX_INLINE ? file.buffer.toString("base64") : undefined;
+
+  // If we have no URL at all but have base64, use a data URL as last resort
+  if (!publicUrl && dataBase64) {
+    publicUrl = `data:${file.mimeType};base64,${dataBase64}`;
   }
 
-  if (!publicUrl) return null;
+  if (!publicUrl && !dataBase64) {
+    console.error("[assistant] no URL and no base64 — cannot deliver file");
+    return null;
+  }
 
   if (folderId) {
     try {
@@ -73,7 +124,7 @@ async function uploadArtifact(
         file_type: "assistant_artifact",
         mime_type: file.mimeType,
         file_size: file.buffer.length,
-        full_text_url: (file as any)._supabaseUrl || publicUrl,
+        full_text_url: publicUrl || supabaseUrl || "",
         source_type: "assistant_file",
         extracted_text: `Generated by LENORY assistant: ${file.fileName}`,
       });
@@ -82,16 +133,13 @@ async function uploadArtifact(
     }
   }
 
-  const MAX_INLINE = 900_000;
-  const dataBase64 = file.buffer.length <= MAX_INLINE ? file.buffer.toString("base64") : undefined;
-
   return {
-    id: artifactId,
+    id: localId || artifactId,
     name: file.fileName,
     mimeType: file.mimeType,
     format: file.fileName.split(".").pop() || "bin",
     size: file.buffer.length,
-    url: publicUrl,
+    url: publicUrl || `/api/assistant/artifacts/${localId || artifactId}`,
     createdAt: new Date().toISOString(),
     ...(dataBase64 ? { dataBase64 } : {}),
   } as any;
@@ -103,11 +151,14 @@ export async function toolWebSearch(ctx: ToolContext, query: string): Promise<To
     const { searchInternetWithGemini } = await import("../../gemini");
     const data = await searchInternetWithGemini(query);
     const results = data?.results || data?.items || [];
-    const citations: Citation[] = (results || []).slice(0, 8).map((r: any) => ({
-      title: r.title || "Source",
-      url: r.link || r.url || "",
-      snippet: r.snippet || r.content || "",
-    })).filter((c: Citation) => c.url);
+    const citations: Citation[] = (results || [])
+      .slice(0, 8)
+      .map((r: any) => ({
+        title: r.title || "Source",
+        url: r.link || r.url || "",
+        snippet: r.snippet || r.content || "",
+      }))
+      .filter((c: Citation) => c.url);
     const answer = data?.answer || "";
     const summary =
       (answer ? `Answer: ${answer}\n\n` : "") +
@@ -195,7 +246,6 @@ export async function toolGenerateFile(
     }
     ctx.onStatus?.("saving", generated.fileName);
 
-    // Ensure user has a folder for assistant outputs
     let folderId = args.folderId || null;
     if (!folderId) {
       try {
@@ -213,23 +263,24 @@ export async function toolGenerateFile(
     }
 
     const artifact = await uploadArtifact(ctx.userId, folderId, generated, generated.fileName);
-    if (!artifact?.url) {
+    if (!artifact?.url && !(artifact as any)?.dataBase64) {
       return {
         tool: "generate_file",
         success: false,
-        summary: "File was generated but could not be stored for download. Please try again.",
-        error: "STORAGE_FAILED",
+        summary: "File generation produced bytes but delivery setup failed. Please retry.",
+        error: "DELIVERY_FAILED",
       };
     }
-    ctx.onStatus?.("validating", artifact.name);
+    ctx.onStatus?.("validating", artifact!.name);
     return {
       tool: "generate_file",
       success: true,
-      summary: `Created **${artifact.name}** (${artifact.size} bytes).\nDownload link: ${artifact.url}\n\nTell the student to use the Download button/link. Do NOT say storage failed.`,
-      artifacts: [artifact],
-      data: { fileName: artifact.name, size: artifact.size, url: artifact.url },
+      summary: `SUCCESS: File ready for download.\nName: ${artifact!.name}\nSize: ${artifact!.size} bytes\nURL: ${artifact!.url}\n\nThe download button in the app will save this file. Never say storage failed.`,
+      artifacts: [artifact!],
+      data: { fileName: artifact!.name, size: artifact!.size, url: artifact!.url },
     };
   } catch (e: any) {
+    console.error("[assistant] toolGenerateFile error:", e);
     return { tool: "generate_file", success: false, summary: "File generation failed", error: e?.message || String(e) };
   }
 }

@@ -1215,6 +1215,17 @@ export default function Chat() {
         return;
       }
 
+      if (art.url?.startsWith("data:")) {
+        const a = document.createElement("a");
+        a.href = art.url;
+        a.download = fileName;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast({ title: "Download started", description: fileName });
+        return;
+      }
       if (!art.url) throw new Error("No file URL");
 
       // 2) Authenticated API artifact

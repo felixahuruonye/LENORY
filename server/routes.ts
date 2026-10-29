@@ -599,7 +599,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
             role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
             content: String(m.content || ""),
           }));
-          const orch = await runAssistantOrchestrator({
+          let orch = await runAssistantOrchestrator({
             userId,
             userEmail: user?.email,
             userName: user?.firstName || userName,
@@ -612,11 +612,87 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
             extraSystem: isAdminUser ? "Admin user session." : undefined,
             onStatus: (st) => sendStatus(st, 6),
           });
+
+          // Hard guarantee: if user asked for a file and orch returned none, force-generate once
+          if (plan.needsFile && !(orch.artifacts && orch.artifacts.length)) {
+            sendStatus("generating_file", 8);
+            try {
+              const { toolGenerateFile } = await import("./assistant/tools/index");
+              const { chatCompletionWithFailover } = await import("./aiRouter");
+              let body = content;
+              try {
+                const draft = await chatCompletionWithFailover(
+                  [
+                    {
+                      role: "system",
+                      content:
+                        "Write ONLY the full academic document body for a PDF. No preamble. Include Name and Matric placeholders when relevant. Clear numbered steps.",
+                    },
+                    { role: "user", content },
+                  ] as any,
+                  isAdvanced ? "ultra" : "fast"
+                );
+                body = (draft?.text || content)
+                  .replace(/^```[a-z]*\n?/i, "")
+                  .replace(/\n?```$/i, "")
+                  .trim();
+              } catch {}
+              const safeName = (plan.fileTitle || "LENORY_document")
+                .replace(/[^\w\s\-]+/g, "")
+                .trim()
+                .replace(/\s+/g, "_")
+                .slice(0, 60) || "LENORY_document";
+              const fileResult = await toolGenerateFile(
+                { userId, onStatus: (st) => sendStatus(st, 6) },
+                {
+                  format: plan.fileFormat || "pdf",
+                  title: plan.fileTitle || "LENORY document",
+                  content: body,
+                  fileName: safeName,
+                }
+              );
+              if (fileResult.artifacts?.length) {
+                orch = {
+                  ...orch,
+                  artifacts: fileResult.artifacts,
+                  toolsUsed: [...(orch.toolsUsed || []), "generate_file"],
+                  answer:
+                    `Your **${(plan.fileFormat || "pdf").toUpperCase()}** is ready.\n\n` +
+                    `Tap **Download** on the file card below to save it to your device.\n\n` +
+                    fileResult.artifacts.map((a: any) => `- **${a.name}** (${Math.max(1, Math.round(a.size / 1024))} KB)`).join("\n") +
+                    `\n\n### Preview\n\n${body.slice(0, 1200)}${body.length > 1200 ? "…" : ""}`,
+                  status: "completed",
+                };
+              }
+            } catch (forceErr) {
+              console.error("Force file generate failed:", forceErr);
+            }
+          }
+
+          // If we still have a file request with no artifact, do NOT fall into normal chat
+          // (models invent "Supabase storage failed" stories). Return an honest short error.
+          if (plan.needsFile && !(orch.artifacts && orch.artifacts.length)) {
+            const failMsg =
+              "I generated the content but could not package the downloadable file this time. Please tap send again — your request was saved. If it keeps failing, try DOCX format: “Generate a DOCX of …”";
+            await storage.createChatMessage({
+              userId,
+              sessionId: sessionId || null,
+              role: "assistant",
+              content: failMsg,
+              attachments: null,
+            });
+            if (wantsStream) {
+              res.write(`data: ${JSON.stringify({ type: "done", success: false, message: failMsg })}\n\n`);
+              return res.end();
+            }
+            return res.json({ success: false, message: failMsg });
+          }
+
           let aiResponse = orch.answer || "Done.";
           const attachments: any = orch.artifacts?.length
             ? {
                 artifacts: orch.artifacts,
-                sources: orch.citations?.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet })),
+                sources: orch.citations?.map((c: any) => ({ title: c.title, link: c.url, snippet: c.snippet })),
               }
             : null;
           await storage.createChatMessage({
@@ -640,7 +716,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
           const finalPayload = {
             success: true,
             message: aiResponse,
-            sources: orch.citations?.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet })),
+            sources: orch.citations?.map((c: any) => ({ title: c.title, link: c.url, snippet: c.snippet })),
             artifacts: orch.artifacts,
             toolsUsed: orch.toolsUsed,
           };
@@ -651,8 +727,47 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
           return res.json(finalPayload);
         }
       } catch (orchErr) {
-        console.error("Assistant orchestrator failed, falling back to standard chat:", orchErr);
+        console.error("Assistant orchestrator failed:", orchErr);
+        // For file requests, do not silently fall into standard chat (causes fake storage-error stories)
+        try {
+          const plan = classifyAssistantRequest(content);
+          if (plan.needsFile) {
+            const { toolGenerateFile } = await import("./assistant/tools/index");
+            sendStatus("generating_file", 8);
+            const safeName = "LENORY_document";
+            const fileResult = await toolGenerateFile(
+              { userId, onStatus: (st) => sendStatus(st, 6) },
+              {
+                format: plan.fileFormat || "pdf",
+                title: plan.fileTitle || "LENORY document",
+                content: content,
+                fileName: safeName,
+              }
+            );
+            if (fileResult.artifacts?.length) {
+              const aiResponse =
+                `Your **${(plan.fileFormat || "pdf").toUpperCase()}** is ready.\n\nTap **Download** on the file card below.`;
+              await storage.createChatMessage({
+                userId,
+                sessionId: sessionId || null,
+                role: "assistant",
+                content: aiResponse,
+                attachments: { artifacts: fileResult.artifacts },
+              });
+              const finalPayload = { success: true, message: aiResponse, artifacts: fileResult.artifacts };
+              if (wantsStream) {
+                res.write(`data: ${JSON.stringify({ type: "done", ...finalPayload })}\n\n`);
+                return res.end();
+              }
+              return res.json(finalPayload);
+            }
+          }
+        } catch (e2) {
+          console.error("Emergency file path failed:", e2);
+        }
       }
+
+
 
       const searchTriggerWords = ["search for", "look up", "latest", "current", "today", "news about", "recent", "what is happening", "who is the current"];
       const wantsSearch = searchTriggerWords.some((kw) => content.toLowerCase().includes(kw));
