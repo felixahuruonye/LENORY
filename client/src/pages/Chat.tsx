@@ -86,11 +86,14 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   understanding: { label: "Understanding your request...", icon: Brain },
   thinking: { label: "LENORY is thinking...", icon: Brain },
   planning: { label: "Planning the task...", icon: Brain },
-  searching: { label: "Searching the web...", icon: Search },
+  searching: { label: "Searching the web", icon: Search },
   reading_files: { label: "Reading your notes...", icon: Brain },
   reading_file: { label: "Reading your file...", icon: Brain },
   using_feature: { label: "Using a LENORY feature...", icon: Brain },
-  generating_file: { label: "Generating your file...", icon: PenLine },
+  generating_file: { label: "Creating file", icon: PenLine },
+  reading_sources: { label: "Reading source", icon: Search },
+  running_code: { label: "Running code", icon: Brain },
+  cancelled: { label: "Stopped", icon: Brain },
   validating: { label: "Validating the result...", icon: Brain },
   saving: { label: "Saving to your account...", icon: Brain },
   writing: { label: "Writing response...", icon: PenLine },
@@ -99,20 +102,28 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   failed: { label: "Something went wrong...", icon: Brain },
 };
 
-function TypingIndicator({ action }: { action?: string | null }) {
-  const info = ACTION_LABELS[action || "writing"] || ACTION_LABELS.writing;
-  const Icon = info.icon;
+function TypingIndicator({ action, steps }: { action?: string | null; steps?: { status: string; detail?: string }[] }) {
+  const list = (steps && steps.length ? steps : [{ status: action || "writing" }]).slice(-5);
   return (
-    <div className="flex items-center gap-3 py-2 px-1" data-testid="chat-action-indicator">
-      <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center flex-shrink-0">
-        <Icon className="w-4 h-4 text-primary animate-pulse" />
-      </div>
-      <div className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} />
-        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} />
-        <span className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} />
-        <span className="ml-2 text-sm text-muted-foreground italic">{info.label}</span>
-      </div>
+    <div className="py-2 px-1 space-y-1.5" data-testid="chat-action-indicator" aria-live="polite">
+      {list.map((st, i) => {
+        const info = ACTION_LABELS[st.status] || ACTION_LABELS.writing;
+        const Icon = info.icon;
+        const active = i === list.length - 1;
+        const terminal = st.status === "completed" || st.status === "failed" || st.status === "cancelled";
+        return (
+          <div key={`${st.status}-${i}`} className={`flex items-center gap-2.5 text-sm ${active ? "text-foreground" : "text-muted-foreground"}`}>
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${active ? "bg-primary/15" : "bg-muted"}`}>
+              {active && !terminal ? <Icon className="w-3.5 h-3.5 text-primary animate-pulse" /> : <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+            </div>
+            <span className="min-w-0 truncate">
+              <span className={active ? "font-medium" : ""}>{info.label}</span>
+              {st.detail ? <span className="text-muted-foreground"> — {st.detail}</span> : null}
+              {active && !terminal ? <span className="ml-1 inline-flex gap-0.5 align-middle"><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} /><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} /><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} /></span> : null}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -348,6 +359,8 @@ export default function Chat() {
   const [latestArtifacts, setLatestArtifacts] = useState<any[] | null>(null);
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -1118,12 +1131,15 @@ export default function Chat() {
       setIsLoading(true);
       setLatestSources(null); setLatestArtifacts(null);
       setChatAction(null);
+      setChatSteps([]);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();
 
       const authHeaders = await getAuthHeaders();
+      abortRef.current = new AbortController();
       const streamRes = await fetch("/api/chat/send", {
+        signal: abortRef.current.signal,
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
         credentials: "include",
@@ -1169,7 +1185,7 @@ export default function Chat() {
           if (!part.startsWith("data: ")) continue;
           try {
             const evt = JSON.parse(part.slice(6));
-            if (evt.type === "status") setChatAction(evt.status);
+            if (evt.type === "status") { setChatAction(evt.status); setChatSteps((prev) => (prev.length && prev[prev.length - 1].status === evt.status && prev[prev.length - 1].detail === evt.detail ? prev : [...prev, { status: evt.status, detail: evt.detail }].slice(-12))); }
             else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts?.length) { setLatestArtifacts(evt.artifacts); (window as any).__lenoryPendingArtifacts = evt.artifacts; } (window as any).__lenoryLastStreamDone = evt; }
             else if (evt.type === "error") {
               streamErrored = true;
@@ -1195,9 +1211,11 @@ export default function Chat() {
       await refetchMessages();
       queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/credits"] });
-    } catch {
-      toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
+    } catch (err: any) {
+      if (err?.name === "AbortError") toast({ title: "Stopped", description: "You stopped this request." });
+      else toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
     } finally {
+      abortRef.current = null;
       setIsLoading(false);
       setChatAction(null);
     }
@@ -1738,7 +1756,7 @@ export default function Chat() {
                 )}
 
                 {/* Writing / typing indicator */}
-                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} />}
+                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} steps={chatSteps} />}
 
                 <div ref={messagesEndRef} />
               </div>
@@ -2030,10 +2048,10 @@ export default function Chat() {
 
                   {/* Send */}
                   <button
-                    onClick={handleSendMessage}
-                    disabled={(!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching}
+                    onClick={isLoading ? () => abortRef.current?.abort() : handleSendMessage}
+                    disabled={isLoading ? false : (!message.trim() && !pastedFile && pendingFiles.length === 0) || isSearching}
                     className={`p-2 rounded-xl transition-all ${
-                      (!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading || isSearching
+                      isLoading ? "bg-destructive text-destructive-foreground" : (!message.trim() && !pastedFile && pendingFiles.length === 0) || isSearching
                         ? "text-muted-foreground/30 cursor-not-allowed"
                         : videoMode
                           ? "bg-purple-600 text-white"
@@ -2041,7 +2059,9 @@ export default function Chat() {
                     }`}
                     data-testid="button-send"
                   >
-                    {isLoading || isSearching ? (
+                    {isLoading ? (
+                      <Square className="w-5 h-5 fill-current" aria-label="Stop" />
+                    ) : isSearching ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
                     ) : videoMode ? (
                       <Film className="w-5 h-5" />

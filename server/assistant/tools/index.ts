@@ -1,7 +1,8 @@
 import type { ToolContext, ToolResult, Citation, ArtifactRef } from "../types";
 import { generateFile, randomArtifactId } from "../fileFactory";
 import { saveLocalArtifact, readLocalArtifact } from "../artifactStore";
-import { renderDocx, renderPptx, renderXlsx, validateGenerated } from "../docRender";
+import { renderDocx, renderPptx, renderXlsx, validateGenerated, parseMarkdown, stripInline } from "../docRender";
+import { ALL_FORMATS, FORMAT_INFO, normalizeFormat, renderOther, renderImage } from "../formats";
 import { storage } from "../../storage";
 
 const BUCKET_CANDIDATES = ["lenory-kb-media", "generated-images", "assistant-files"];
@@ -64,8 +65,7 @@ async function trySupabaseUpload(
 }
 
 
-const TEXT_FORMATS = ["txt","md","markdown","csv","json","xml","yaml","yml","html","css","js","javascript","ts","typescript","py","python","sql","svg","rtf"];
-export const SUPPORTED_FORMATS = ["pdf","docx","pptx","xlsx", ...TEXT_FORMATS];
+export const SUPPORTED_FORMATS = [...ALL_FORMATS, "markdown", "jpg", "yml", "javascript", "typescript", "python"];
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 /** Save the file for the user: authenticated local copy + durable Supabase copy + KB record. */
@@ -243,35 +243,43 @@ export async function toolMemoryList(ctx: ToolContext): Promise<ToolResult> {
 
 export async function toolGenerateFile(
   ctx: ToolContext,
-  args: { format: string; title?: string; content: string; fileName?: string; folderId?: string },
+  args: { format: string; title?: string; content: string; fileName?: string; folderId?: string; illustrations?: boolean },
 ): Promise<ToolResult> {
-  const format = String(args?.format || "").toLowerCase().replace(/^\./, "");
-  ctx.onStatus?.("generating_file", format);
+  const format = normalizeFormat(String(args?.format || ""));
+  ctx.onStatus?.("generating_file", `${format.toUpperCase()}${args?.title ? ` — ${String(args.title).slice(0, 60)}` : ""}`);
   try {
     if (!SUPPORTED_FORMATS.includes(format)) {
       return { tool: "generate_file", success: false, summary: `Unsupported format "${format}". Supported: ${SUPPORTED_FORMATS.join(", ")}`, error: "UNSUPPORTED_FORMAT" };
     }
     const content = String(args?.content || "");
-    if (content.trim().length < 20) {
+    if (content.trim().length < (['pdf','docx','pptx','txt','rtf','md','html'].includes(format) ? 20 : 2)) {
       return { tool: "generate_file", success: false, summary: "The content is empty or too short to make a real document. Write the full document text first, then call generate_file again with it.", error: "EMPTY_CONTENT" };
     }
     const title = String(args?.title || "LENORY document").slice(0, 150);
     let buffer: Buffer;
     let mimeType: string;
     let fileName: string;
+    const base = String(args?.fileName || title).replace(/\.[a-z0-9]+$/i, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 60) || "LENORY_document";
     if (format === "docx" || format === "pptx" || format === "xlsx") {
-      buffer = format === "docx" ? await renderDocx(title, content) : format === "pptx" ? await renderPptx(title, content) : await renderXlsx(title, content);
-      mimeType = { docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }[format]!;
-      const base = String(args?.fileName || title).replace(/\.[a-z0-9]+$/i, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 60) || "LENORY_document";
-      fileName = `${base}.${format}`;
+      let images: Buffer[] = [];
+      if (format === "pptx" && args?.illustrations && process.env.STABILITY_API_KEY) {
+        ctx.onStatus?.("generating_file", "Creating slide illustrations");
+        const heads = [title, ...parseMarkdown(content).filter((b) => b.t === "h" && b.level <= 2).map((b: any) => stripInline(b.text))].slice(0, 3);
+        for (const h of heads) {
+          try { images.push(await renderImage("png", `Clean flat educational illustration, no text, about: ${h}`)); } catch (e: any) { console.warn("[assistant] slide image skipped:", e?.message); }
+        }
+      }
+      buffer = format === "docx" ? await renderDocx(title, content) : format === "pptx" ? await renderPptx(title, content, { images }) : await renderXlsx(title, content);
+      mimeType = FORMAT_INFO[format].mime;
+      fileName = `${base}.${FORMAT_INFO[format].ext}`;
     } else {
-      const g = generateFile({ format, title, content, fileName: args?.fileName });
-      buffer = g.buffer; mimeType = g.mimeType; fileName = g.fileName;
+      const r = await renderOther(format, title, content);
+      buffer = r.buffer; mimeType = r.mimeType; fileName = `${base}.${r.ext}`;
     }
     if (buffer.length > MAX_FILE_BYTES) return { tool: "generate_file", success: false, summary: "The file is too large.", error: "TOO_LARGE" };
 
     ctx.onStatus?.("validating", fileName);
-    const v = await validateGenerated(format, buffer, content);
+    const v = ["docx", "pptx", "xlsx"].includes(format) ? await validateGenerated(format, buffer, content) : { ok: true as boolean, reason: undefined as string | undefined };
     if (!v.ok) return { tool: "generate_file", success: false, summary: `The generated ${format.toUpperCase()} failed validation: ${v.reason}. No file was delivered.`, error: "VALIDATION_FAILED" };
 
     ctx.onStatus?.("saving", fileName);

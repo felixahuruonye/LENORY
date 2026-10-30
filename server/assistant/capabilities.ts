@@ -16,6 +16,10 @@ export interface UserCapabilities {
   toolAccess: ToolAccessMode;
   /** When true, the model may create KB folders and add notes/files to them */
   kbWrite: boolean;
+  /** Run code in an isolated remote sandbox (only works when the server has CODE_SANDBOX_URL) */
+  codeExecution: boolean;
+  /** Let LENORY read/create items in the Project Workspace */
+  projects: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: UserCapabilities = {
@@ -26,9 +30,11 @@ export const DEFAULT_CAPABILITIES: UserCapabilities = {
   knowledgeBase: true,
   toolAccess: "auto",
   kbWrite: true,
+  codeExecution: false,
+  projects: true,
 };
 
-const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite"] as const;
+const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite", "codeExecution", "projects"] as const;
 
 /** Accept only known keys with the right types (never trust raw client JSON). */
 export function sanitizeCapabilities(input: any): Partial<UserCapabilities> {
@@ -71,3 +77,12 @@ export async function saveUserCapabilities(userId: string, next: any): Promise<U
 }
 // Back-compat name used by routes
 export const setUserCapabilities = saveUserCapabilities;
+
+/** What the server can actually do right now (shown on the Capabilities page, never faked). */
+export function capabilityAvailability() {
+  return {
+    codeExecution: !!process.env.CODE_SANDBOX_URL,
+    imageGeneration: !!process.env.STABILITY_API_KEY,
+    webSearch: !!(process.env.TAVILY_API_KEY || process.env.GEMINI_API_KEY),
+  };
+}

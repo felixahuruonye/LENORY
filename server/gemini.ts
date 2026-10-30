@@ -301,7 +301,7 @@ Analyze the answers and return ONLY valid JSON (no other text):
 // 2. Automatic fallback to Gemini grounding if Tavily fails
 // 3. Structured result format with clickable links
 // ─────────────────────────────────────────────────────────────────────
-export async function searchInternetWithGemini(query: string): Promise<WebSearchResponse> {
+export async function searchInternetWithGemini(query: string, opts: { depth?: 'basic' | 'advanced'; maxResults?: number } = {}): Promise<WebSearchResponse> {
   // Try Tavily first
   const tavilyKey = process.env.TAVILY_API_KEY;
   if (tavilyKey) {
@@ -313,8 +313,8 @@ export async function searchInternetWithGemini(query: string): Promise<WebSearch
         body: JSON.stringify({
           api_key: tavilyKey,
           query,
-          search_depth: 'basic',
-          max_results: 5,
+          search_depth: opts.depth || 'basic',
+          max_results: opts.maxResults || 5,
           include_answer: true,
           include_raw_content: 'text',
         }),

@@ -5,6 +5,8 @@ export type AssistantStatus =
   | "planning"
   | "searching"
   | "reading_files"
+  | "reading_sources"
+  | "running_code"
   | "using_feature"
   | "generating_file"
   | "validating"

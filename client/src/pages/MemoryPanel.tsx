@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useMemoryEntries } from "@/hooks/useSupabaseData";
@@ -27,6 +28,30 @@ import {
   HardDrive,
   RotateCcw,
 } from "lucide-react";
+
+
+function RememberedFacts() {
+  const { data, isLoading } = useQuery<{ facts: { id: string; text: string; createdAt?: string | null }[] }>({
+    queryKey: ["/api/memory/facts"],
+    queryFn: async () => (await apiRequest("GET", "/api/memory/facts")).json(),
+  });
+  const facts = data?.facts || [];
+  return (
+    <Card className="mb-8 p-6" data-testid="card-remembered-facts">
+      <h2 className="text-lg font-semibold mb-1">Remembered by LENORY</h2>
+      <p className="text-sm text-muted-foreground mb-4">Things you asked LENORY to remember in chat. These come straight from your saved memory.</p>
+      {isLoading ? <div className="text-sm text-muted-foreground">Loading...</div> : facts.length === 0 ? (
+        <div className="text-sm text-muted-foreground">Nothing saved yet. Say "remember that I study Computer Science" in chat and it will appear here.</div>
+      ) : (
+        <ul className="space-y-2">
+          {facts.map((f) => (
+            <li key={f.id} className="text-sm rounded-md border border-border/50 px-3 py-2">{f.text}</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
 export default function MemoryPanel() {
   const { user, isLoading: authLoading } = useAuth();
@@ -287,6 +312,7 @@ export default function MemoryPanel() {
           </div>
         </header>
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <RememberedFacts />
           <Skeleton className="h-24 w-full mb-8 rounded-lg" />
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[1,2,3,4,5,6].map(i => <Skeleton key={i} className="h-48 rounded-lg" />)}

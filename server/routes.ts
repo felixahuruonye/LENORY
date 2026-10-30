@@ -14,7 +14,7 @@ import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueu
 
 
 
-import { loadUserCapabilities, saveUserCapabilities, DEFAULT_CAPABILITIES, sanitizeCapabilities } from "./assistant/capabilities";
+import { loadUserCapabilities, saveUserCapabilities, DEFAULT_CAPABILITIES, sanitizeCapabilities, capabilityAvailability } from "./assistant/capabilities";
 import { runToolAgent } from "./assistant/agentLoop";
 import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
@@ -421,7 +421,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/capabilities", requireAuth, async (req: any, res) => {
     try {
       const caps = await loadUserCapabilities(req.userId);
-      res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES });
+      res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES, availability: capabilityAvailability() });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e?.message });
     }
@@ -437,8 +437,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
     const wantsStream = req.body?.stream === true;
-    const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
-      if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
+    let clientGone = false;
+    res.on("close", () => { if (!res.writableEnded) clientGone = true; });
+    const sendStatus = (status: string, estimatedTimeRemaining?: number, detail?: string) => {
+      if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "status", status, detail, estimatedTimeRemaining })}\n\n`);
     };
     if (wantsStream) {
       res.setHeader("Content-Type", "text/event-stream");
@@ -703,7 +705,8 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
             tier,
             capabilities: sanitizeCapabilities(req.body?.capabilities),
             sessionId,
-            onStatus: (st) => sendStatus(st, 6),
+            onStatus: (st, d) => sendStatus(st, 6, d),
+            isCancelled: () => clientGone,
           });
           const result = { text: agentRes.answer, modelUsed: agentRes.modelUsed };
           agentArtifacts = agentRes.artifacts;
@@ -837,8 +840,10 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
 
 app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => {
     const wantsStream = req.body?.stream === true;
-    const sendStatus = (status: string, estimatedTimeRemaining?: number) => {
-      if (wantsStream) res.write(`data: ${JSON.stringify({ type: "status", status, estimatedTimeRemaining })}\n\n`);
+    let clientGone = false;
+    res.on("close", () => { if (!res.writableEnded) clientGone = true; });
+    const sendStatus = (status: string, estimatedTimeRemaining?: number, detail?: string) => {
+      if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "status", status, detail, estimatedTimeRemaining })}\n\n`);
     };
     if (wantsStream) {
       res.setHeader("Content-Type", "text/event-stream");
@@ -890,7 +895,8 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
         tier: advanced ? "ultra" : "fast",
         capabilities: sanitizeCapabilities(req.body?.capabilities),
         sessionId,
-        onStatus: (st) => sendStatus(st, 6),
+        onStatus: (st, d) => sendStatus(st, 6, d),
+            isCancelled: () => clientGone,
       });
       const orch = { answer: orch0.answer, citations: orch0.citations, artifacts: orch0.artifacts, toolsUsed: orch0.toolsUsed, status: orch0.failedTools.length && !orch0.artifacts.length ? "failed" : "completed" };
       if (sessionId) {
@@ -1172,6 +1178,20 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   });
 
   // ─── MEMORY ROUTES ──────────────────────────────────────────────────────────
+
+  // Facts LENORY saved through the memory_save tool (what the Memory panel shows as "Remembered by LENORY")
+  app.get('/api/memory/facts', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const rows = await storage.getMemoryEntriesByUser(req.userId);
+      const facts = (rows || [])
+        .filter((r: any) => r.type === 'user_fact')
+        .map((r: any) => ({ id: r.id, text: String((r.data as any)?.text || '').slice(0, 600), createdAt: r.createdAt || (r.data as any)?.timestamp || null }))
+        .filter((f: any) => f.text);
+      res.json({ facts });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to load remembered facts' });
+    }
+  });
 
   app.get('/api/memory/export', supabaseAuth, async (req: any, res: Response) => {
     try {

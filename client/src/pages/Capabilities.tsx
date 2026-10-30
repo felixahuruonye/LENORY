@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { ArrowLeft, Globe, FileText, Brain, FolderOpen, Sparkles, Wrench } from "lucide-react";
+import { ArrowLeft, Globe, FileText, Brain, FolderOpen, Sparkles, Wrench, Terminal, Briefcase } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -14,7 +14,10 @@ type Caps = {
   knowledgeBase: boolean;
   toolAccess: "auto" | "on_demand" | "always";
   kbWrite: boolean;
+  codeExecution: boolean;
+  projects: boolean;
 };
+type Avail = { codeExecution: boolean; imageGeneration: boolean; webSearch: boolean };
 
 const DEFAULTS: Caps = {
   webSearch: true,
@@ -24,18 +27,22 @@ const DEFAULTS: Caps = {
   knowledgeBase: true,
   toolAccess: "auto",
   kbWrite: true,
+  codeExecution: false,
+  projects: true,
 };
 
 export default function Capabilities() {
   const { toast } = useToast();
   const [caps, setCaps] = useState<Caps>(DEFAULTS);
   const [saving, setSaving] = useState(false);
+  const [avail, setAvail] = useState<Avail | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await apiRequest("GET", "/api/capabilities");
         const data = await res.json();
+        if (data?.availability) setAvail(data.availability);
         if (data?.capabilities) {
           setCaps((c) => ({ ...c, ...data.capabilities }));
         }
@@ -121,6 +128,20 @@ export default function Capabilities() {
                 desc="Use and update memory from chats"
                 on={caps.memory}
                 onToggle={() => toggle("memory")}
+              />
+              <Row
+                icon={<Briefcase className="w-5 h-5" />}
+                title="Projects"
+                desc="Let LENORY list your projects and add files and tasks to them"
+                on={caps.projects}
+                onToggle={() => toggle("projects")}
+              />
+              <Row
+                icon={<Terminal className="w-5 h-5" />}
+                title="Code execution"
+                desc={avail && !avail.codeExecution ? "Run code in a safe sandbox. Not set up on this server yet (admin: set CODE_SANDBOX_URL), so it cannot run." : "Run code in an isolated sandbox and show the real output"}
+                on={caps.codeExecution && (avail ? avail.codeExecution : true)}
+                onToggle={() => { if (avail && !avail.codeExecution) { toast({ title: "Sandbox not set up", description: "An admin must set CODE_SANDBOX_URL first." }); return; } toggle("codeExecution"); }}
               />
             </CardContent>
           </Card>

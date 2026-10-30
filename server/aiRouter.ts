@@ -256,6 +256,12 @@ async function callOpenAICompatibleTools(
   const data = await res.json();
   const msg = data.choices?.[0]?.message;
   const content: string = msg?.content || "";
+  // Safety-flag switch: if this model's safety layer blocked or refused the reply,
+  // throw so the failover moves on to the NEXT model instead of showing a false refusal.
+  const finish = data.choices?.[0]?.finish_reason;
+  if (finish === "content_filter" || msg?.refusal || (!msg?.tool_calls?.length && content.length < 220 && /^(i'?m sorry,? but )?i (can(no|')t|am (not able|unable) to|won'?t) (help|assist|comply|do that|provide)/i.test(content.trim()))) {
+    throw new Error(`${spec.label} flagged/refused this request - switching model`);
+  }
   const toolCalls: ToolCall[] = (msg?.tool_calls || [])
     .filter((c: any) => c?.function?.name)
     .map((c: any, i: number) => {

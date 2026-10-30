@@ -24,8 +24,25 @@ export type Block =
   | { t: "code"; text: string }
   | { t: "table"; rows: string[][] };
 
+/** Make model text safe and readable for office documents: no emoji, no odd Unicode dashes/quotes. */
+export function cleanDocText(input: string): string {
+  return String(input || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201F\u2033]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/[\u00A0\u2007\u2009\u200A\u202F\u2002\u2003]/g, " ")
+    .replace(/[\u200B-\u200D\u2060\uFEFF\uFE0E\uFE0F]/g, "")
+    .replace(/[\u2018\u2019\u0060]{3}/g, "```")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/[ \t]+\n/g, "\n");
+}
+/** [text](url) -> text (url) so links stay readable in documents. */
+const flattenLinks = (t: string) => t.replace(/!?\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, a, u) => (a.trim() === u ? u : `${a} (${u})`));
+
 export function parseMarkdown(md: string): Block[] {
-  const lines = String(md || "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = cleanDocText(md).split("\n");
   const out: Block[] = [];
   let para: string[] = [];
   const flush = () => { if (para.length) { out.push({ t: "p", text: para.join(" ").trim() }); para = []; } };
@@ -40,8 +57,9 @@ export function parseMarkdown(md: string): Block[] {
       continue;
     }
     if (!line.trim()) { flush(); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); continue; } // horizontal rule
     const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) { flush(); out.push({ t: "h", level: h[1].length, text: h[2].trim() }); continue; }
+    if (h) { flush(); out.push({ t: "h", level: h[1].length, text: flattenLinks(h[2].replace(/\s+#+\s*$/, "").trim()) }); continue; }
     if (/^\s*\|.*\|\s*$/.test(line)) {
       flush();
       const rows: string[][] = [];
@@ -55,10 +73,10 @@ export function parseMarkdown(md: string): Block[] {
       continue;
     }
     const ul = line.match(/^\s*[-*•]\s+(.*)$/);
-    if (ul) { flush(); out.push({ t: "ul", text: ul[1].trim() }); continue; }
+    if (ul) { flush(); out.push({ t: "ul", text: flattenLinks(ul[1].trim()) }); continue; }
     const ol = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
-    if (ol) { flush(); out.push({ t: "ol", n: ol[1], text: ol[2].trim() }); continue; }
-    para.push(line.trim());
+    if (ol) { flush(); out.push({ t: "ol", n: ol[1], text: flattenLinks(ol[2].trim()) }); continue; }
+    para.push(flattenLinks(line.trim().replace(/^>\s?/, "")));
   }
   flush();
   return out;
@@ -123,45 +141,92 @@ export async function renderDocx(title: string, markdown: string): Promise<Buffe
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
-export async function renderPptx(title: string, markdown: string): Promise<Buffer> {
+export async function renderPptx(title: string, markdown: string, opts: { images?: Buffer[] } = {}): Promise<Buffer> {
   const blocks = parseMarkdown(markdown);
   const pptx = new PptxGenJS();
-  pptx.layout = "LAYOUT_16x9";
+  pptx.layout = "LAYOUT_WIDE"; // 13.33 x 7.5 in
+  pptx.author = "LENORY AI";
   pptx.title = title;
-  const title1 = pptx.addSlide();
-  title1.background = { color: "1F3A5F" };
-  title1.addText(title, { x: 0.6, y: 2.0, w: 8.8, h: 1.5, fontSize: 36, bold: true, color: "FFFFFF", fontFace: "Calibri" });
-  title1.addText("Created with LENORY AI", { x: 0.6, y: 3.7, w: 8.8, h: 0.5, fontSize: 16, color: "C9D6EA", fontFace: "Calibri" });
+  const NAVY = "1F3A5F", ACCENT = "F2A900", INK = "1E2933", MUTED = "5B6B7B", SOFT = "EEF3F9";
+  const FONT = "Calibri";
+  const imgs = (opts.images || []).map((b) => `data:image/png;base64,${b.toString("base64")}`);
+  let imgIdx = 0;
+  let slideNo = 0;
 
-  type Sec = { heading: string; bullets: string[]; table?: string[][] };
+  // ── Title slide
+  const t = pptx.addSlide();
+  t.background = { color: NAVY };
+  t.addShape(pptx.ShapeType.rect, { x: 0.7, y: 2.55, w: 0.12, h: 1.9, fill: { color: ACCENT }, line: { color: ACCENT } });
+  const titleW = imgs.length ? 6.4 : 11.5;
+  t.addText(title, { x: 1.0, y: 2.3, w: titleW, h: 1.9, fontSize: title.length > 40 ? 34 : 44, bold: true, color: "FFFFFF", fontFace: FONT, valign: "middle", fit: "shrink" });
+  t.addText("Created with LENORY AI", { x: 1.0, y: 4.3, w: titleW, h: 0.5, fontSize: 16, color: "C9D6EA", fontFace: FONT });
+  if (imgs.length) { t.addImage({ data: imgs[imgIdx++], x: 7.7, y: 1.0, w: 5.0, h: 5.5, sizing: { type: "cover", w: 5.0, h: 5.5 } }); }
+
+  // ── Group blocks into sections
+  type Sec = { heading: string; items: { kind: "bullet" | "code" | "table"; text?: string; rows?: string[][] }[] };
   const sections: Sec[] = [];
   let cur: Sec | null = null;
-  for (const b of blocks) {
-    if (b.t === "h" && b.level <= 2) { cur = { heading: stripInline(b.text), bullets: [] }; sections.push(cur); continue; }
-    if (!cur) { cur = { heading: title, bullets: [] }; sections.push(cur); }
-    if (b.t === "h") cur.bullets.push(stripInline(b.text));
-    else if (b.t === "p" || b.t === "ul" || b.t === "ol") cur.bullets.push(stripInline(b.text));
-    else if (b.t === "code") cur.bullets.push(b.text.slice(0, 200));
-    else if (b.t === "table") cur.table = b.rows.map((r) => r.map(stripInline));
-  }
-  const PER = 6;
-  for (const s of sections) {
-    const chunks: string[][] = [];
-    for (let i = 0; i < s.bullets.length; i += PER) chunks.push(s.bullets.slice(i, i + PER));
-    if (!chunks.length) chunks.push([]);
+  const first = blocks[0];
+  blocks.forEach((b, i) => {
+    if (i === 0 && b.t === "h" && b.level === 1 && stripInline(b.text).toLowerCase() === title.trim().toLowerCase()) return;
+    if (b.t === "h" && b.level <= 2) { cur = { heading: stripInline(b.text), items: [] }; sections.push(cur); return; }
+    if (!cur) { cur = { heading: "Overview", items: [] }; sections.push(cur); }
+    if (b.t === "h") cur.items.push({ kind: "bullet", text: stripInline(b.text) });
+    else if (b.t === "p") {
+      const txt = stripInline(b.text);
+      const sentences = txt.length > 220 ? txt.split(/(?<=[.!?])\s+/).filter(Boolean) : [txt];
+      sentences.forEach((x) => cur!.items.push({ kind: "bullet", text: x }));
+    } else if (b.t === "ul") cur.items.push({ kind: "bullet", text: stripInline(b.text) });
+    else if (b.t === "ol") cur.items.push({ kind: "bullet", text: `${b.n}. ${stripInline(b.text)}` });
+    else if (b.t === "code") cur.items.push({ kind: "code", text: b.text.split("\n").slice(0, 14).join("\n") });
+    else if (b.t === "table") cur.items.push({ kind: "table", rows: b.rows.map((r) => r.map(stripInline)) });
+  });
+  void first;
+
+  const frame = (slide: any, heading: string, label: string) => {
+    slideNo++;
+    slide.background = { color: "FFFFFF" };
+    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.33, h: 0.18, fill: { color: NAVY }, line: { color: NAVY } });
+    slide.addText(label.toUpperCase(), { x: 0.6, y: 0.4, w: 9, h: 0.3, fontSize: 11, bold: true, color: ACCENT, fontFace: FONT, charSpacing: 3 });
+    slide.addText(heading, { x: 0.6, y: 0.7, w: 12.1, h: 0.9, fontSize: heading.length > 45 ? 26 : 32, bold: true, color: NAVY, fontFace: FONT, fit: "shrink", valign: "middle" });
+    slide.addShape(pptx.ShapeType.rect, { x: 0.6, y: 1.65, w: 1.1, h: 0.06, fill: { color: ACCENT }, line: { color: ACCENT } });
+    slide.addText(`LENORY AI   |   ${slideNo}`, { x: 9.8, y: 7.0, w: 3.0, h: 0.3, fontSize: 10, color: MUTED, align: "right", fontFace: FONT });
+  };
+
+  sections.forEach((sec, si) => {
+    const label = `Section ${si + 1}`;
+    const bullets = sec.items.filter((x) => x.kind === "bullet").map((x) => x.text!);
+    const codes = sec.items.filter((x) => x.kind === "code");
+    const tables = sec.items.filter((x) => x.kind === "table");
+    const img = imgs[imgIdx] && bullets.length ? imgs[imgIdx++] : null;
+    // bullet slides, ~620 chars per slide
+    const chunks: string[][] = []; let curC: string[] = []; let len = 0;
+    for (const b of bullets) {
+      if (curC.length && (len + b.length > 620 || curC.length >= 6)) { chunks.push(curC); curC = []; len = 0; }
+      curC.push(b); len += b.length;
+    }
+    if (curC.length) chunks.push(curC);
     chunks.forEach((chunk, ci) => {
       const slide = pptx.addSlide();
-      slide.addText(ci === 0 ? s.heading : `${s.heading} (cont.)`, { x: 0.5, y: 0.3, w: 9, h: 0.8, fontSize: 28, bold: true, color: "1F3A5F", fontFace: "Calibri" });
-      if (chunk.length) {
-        slide.addText(chunk.map((t) => ({ text: t, options: { bullet: true, breakLine: true } })), { x: 0.6, y: 1.3, w: 8.8, h: 3.9, fontSize: 18, color: "222222", fontFace: "Calibri", valign: "top", paraSpaceAfter: 8 });
-      }
+      frame(slide, ci === 0 ? sec.heading : `${sec.heading} (continued)`, label);
+      const w = img && ci === 0 ? 7.4 : 12.1;
+      slide.addText(chunk.map((x) => ({ text: x, options: { ...(/^\d+\.\s/.test(x) ? {} : { bullet: { code: "25CF", indent: 22 } }), breakLine: true, paraSpaceAfter: 12 } })), { x: 0.6, y: 2.0, w, h: 4.7, fontSize: chunk.join("").length > 420 ? 18 : 22, color: INK, fontFace: FONT, valign: "top", fit: "shrink" });
+      if (img && ci === 0) slide.addImage({ data: `data:image/png;base64,${img.toString("base64")}`, x: 8.4, y: 2.0, w: 4.3, h: 4.6, sizing: { type: "cover", w: 4.3, h: 4.6 } });
     });
-    if (s.table) {
+    if (!chunks.length && !tables.length && !codes.length) { const slide = pptx.addSlide(); frame(slide, sec.heading, label); }
+    codes.forEach((c) => {
       const slide = pptx.addSlide();
-      slide.addText(`${s.heading} — table`, { x: 0.5, y: 0.3, w: 9, h: 0.8, fontSize: 26, bold: true, color: "1F3A5F" });
-      slide.addTable(s.table.map((r, ri) => r.map((c) => ({ text: c, options: { bold: ri === 0, fontSize: 14 } }))), { x: 0.6, y: 1.3, w: 8.8, border: { type: "solid", color: "BBBBBB", pt: 1 } });
-    }
-  }
+      frame(slide, `${sec.heading} - example`, label);
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 2.0, w: 12.1, h: 4.6, fill: { color: SOFT }, line: { color: "D5DEE9" }, rectRadius: 0.1 });
+      slide.addText(c.text || "", { x: 0.9, y: 2.15, w: 11.5, h: 4.3, fontSize: 16, fontFace: "Courier New", color: INK, valign: "top", fit: "shrink" });
+    });
+    tables.forEach((tb) => {
+      const slide = pptx.addSlide();
+      frame(slide, sec.heading, label);
+      const rows = tb.rows!;
+      slide.addTable(rows.map((r, ri) => r.map((c) => ({ text: c, options: ri === 0 ? { bold: true, color: "FFFFFF", fill: { color: NAVY }, fontSize: 16 } : { color: INK, fontSize: 15, fill: { color: rows.indexOf(r) % 2 ? "FFFFFF" : SOFT } } }))), { x: 0.6, y: 2.0, w: 12.1, fontFace: FONT, border: { type: "solid", color: "C9D6EA", pt: 0.75 }, valign: "middle", margin: 0.08 });
+    });
+  });
   const out = await pptx.write({ outputType: "nodebuffer" } as any);
   return Buffer.from(out as any);
 }
