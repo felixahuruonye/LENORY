@@ -13,6 +13,15 @@ import YAML from "yaml";
 import { XMLValidator } from "fast-xml-parser";
 import { parseMarkdown, stripInline, cleanDocText, type Block } from "./docRender";
 
+// Node 20 (Render) lacks Promise.withResolvers, which pdfjs-dist needs for reading PDFs back.
+if (typeof (Promise as any).withResolvers !== "function") {
+  (Promise as any).withResolvers = function <T>() {
+    let resolve!: (v: T | PromiseLike<T>) => void; let reject!: (e?: any) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+}
+
 const unwrap = (m: any) => (m && m.default ? m.default : m);
 const JSZip: any = unwrap(JSZipMod);
 const require_ = createRequire(import.meta.url);

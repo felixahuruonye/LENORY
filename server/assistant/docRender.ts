@@ -7,13 +7,15 @@ import JSZipMod from "jszip";
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType,
 } from "docx";
-import PptxGenMod from "pptxgenjs";
+import { createRequire } from "module";
 import ExcelMod from "exceljs";
 
 // CJS/ESM interop: under Node ESM the default import can be the module namespace.
 const unwrap = (m: any) => (m && m.default && (typeof m.default === "function" || typeof m.default === "object") ? m.default : m);
 const JSZip: any = unwrap(JSZipMod);
-const PptxGenJS: any = unwrap(PptxGenMod);
+// pptxgenjs's ESM entry is a .js file without "type":"module", which Node 20 refuses to load.
+// Load its CommonJS build explicitly so it works on every Node version.
+const PptxGenJS: any = unwrap(createRequire(import.meta.url)("pptxgenjs"));
 const ExcelJS: any = unwrap(ExcelMod);
 
 export type Block =

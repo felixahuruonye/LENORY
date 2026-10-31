@@ -418,7 +418,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   
   // ── User Capabilities (Claude-style toggles) ─────────────────────────────
-  app.get("/api/capabilities", requireAuth, async (req: any, res) => {
+  app.get("/api/capabilities", supabaseAuth, async (req: any, res) => {
     try {
       const caps = await loadUserCapabilities(req.userId);
       res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES, availability: capabilityAvailability() });
@@ -426,7 +426,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ success: false, message: e?.message });
     }
   });
-  app.put("/api/capabilities", requireAuth, async (req: any, res) => {
+  app.put("/api/capabilities", supabaseAuth, async (req: any, res) => {
     try {
       const caps = await saveUserCapabilities(req.userId, req.body || {});
       res.json({ success: true, capabilities: caps });
