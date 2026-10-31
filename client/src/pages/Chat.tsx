@@ -361,6 +361,16 @@ export default function Chat() {
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  // Default to Vision — the one model every tier has unlocked — until we know
+  // the user's real tier, then upgrade to their tier's actual default model
+  // (see effect below). Previously always defaulted to Ultra, so Free and Pro
+  // users landed on a model selector showing "LENORY Ultra" even though it
+  // was locked for them the moment they tried to send a message.
+  const [selectedModel, setSelectedModel] = useState(AI_MODELS.find(m => m.id === "lenory-vision") || AI_MODELS[0]);
   const aiStatus = useAiStatus();
   const selectedLane = aiStatus.laneOf(selectedModel.id);
   const laneBlocked = !!selectedLane && !selectedLane.available;
@@ -375,16 +385,6 @@ export default function Chat() {
       queryClient.invalidateQueries({ queryKey: ["/api/capabilities"] });
     } catch { toast({ title: "Could not change search", variant: "destructive" }); }
   };
-  const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
-  // Default to Vision — the one model every tier has unlocked — until we know
-  // the user's real tier, then upgrade to their tier's actual default model
-  // (see effect below). Previously always defaulted to Ultra, so Free and Pro
-  // users landed on a model selector showing "LENORY Ultra" even though it
-  // was locked for them the moment they tried to send a message.
-  const [selectedModel, setSelectedModel] = useState(AI_MODELS.find(m => m.id === "lenory-vision") || AI_MODELS[0]);
   const userPickedModelRef = useRef(false);
   // Header icon row (Live Session / Dashboard / Settings) auto-hides while
   // scrolling forward through messages to give more reading room, and comes
