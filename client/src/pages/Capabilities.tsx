@@ -36,6 +36,7 @@ export default function Capabilities() {
   const [caps, setCaps] = useState<Caps>(DEFAULTS);
   const [saving, setSaving] = useState(false);
   const [avail, setAvail] = useState<Avail | null>(null);
+  const [webLimit, setWebLimit] = useState<{ exhausted: boolean; resetsAt: string | null } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -43,6 +44,7 @@ export default function Capabilities() {
         const res = await apiRequest("GET", "/api/capabilities");
         const data = await res.json();
         if (data?.availability) setAvail(data.availability);
+        if (data?.webSearchLimit) setWebLimit(data.webSearchLimit);
         if (data?.capabilities) {
           setCaps((c) => ({ ...c, ...data.capabilities }));
         }
@@ -91,8 +93,8 @@ export default function Capabilities() {
                 icon={<Globe className="w-5 h-5" />}
                 title="Web search"
                 desc="Search the web when current information is needed"
-                on={caps.webSearch}
-                onToggle={() => toggle("webSearch")}
+                on={caps.webSearch && !webLimit?.exhausted}
+                onToggle={() => { if (webLimit?.exhausted) { toast({ title: "Web search is resting", description: `Provider limit used up. Back at ${webLimit.resetsAt ? new Date(webLimit.resetsAt).toLocaleString() : "the next reset"}.` }); return; } toggle("webSearch"); }}
               />
               <Row
                 icon={<FileText className="w-5 h-5" />}

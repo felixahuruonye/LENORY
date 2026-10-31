@@ -28,3 +28,11 @@ Open Settings > Capabilities first: Web search, File creation, Knowledge Base, K
 17. Make me a PDF with no content. (It must refuse or ask what to put in it, and must not show a download card.)
 18. Run this Python code and show the output: print(2**10). (If the sandbox is not set up it must say it cannot run code, not guess the answer as if it ran.)
 19. Tap the red Stop button during a long research request: the steps must stop and show Stopped.
+
+## Stage 3 checks (limits, memory, projects)
+20. Open the model menu and pick LENORY Vision, then send "Describe what a database index is". It should answer using Gemini. Pick LENORY Search: the Search checkbox beside the model name should switch on by itself.
+21. If a model is out of credits or rate-limited, a bar under the chat box shows "LENORY Ultra is resting - back in mm:ss", the send button disappears, and the timer stays even if you open a new chat. Pick a model that is not resting and the send button returns.
+22. Tick and untick the Search checkbox, then open Settings > Capabilities: the Web search switch must match. If web search is used up, both show off and a countdown.
+23. Memory page > Memory Preference: fill "Learning preference" with "Explain with simple Nigerian examples", "Writing style" with "Short sentences", press Save. Start a new chat and ask "Explain what an operating system is": the answer should follow those. Do the same in Live AI.
+24. Memory page > Saved Memory: say in chat "Remember that I write my exams in December". It should appear there; delete it with the bin icon.
+25. Project Workspace: create a project and a task, then ask in chat "List my projects". Redeploy or restart the server on Render and open Projects again: it must still be there.

@@ -2,6 +2,7 @@
 import { WebSocket as WS } from "ws";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { storage } from "./storage";
+import { prefsBlockFor } from "./assistant/memoryPrefs";
 import { getOrCreateCredits, deductCredits } from "./creditsStore";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -246,6 +247,9 @@ Guidelines:
 - Use the chat context below to maintain continuity with the conversation`;
 
     // ─── NEW: Inject chat context into system instruction ────────────────────
+    // The student's own Memory > Preferences (same "additional instructions" the text chat follows)
+    try { if (session.userId) systemInstruction += await prefsBlockFor(session.userId); } catch {}
+
     if (session.chatContext && session.chatContext.length > 0) {
       const contextText = session.chatContext.map((m: any) => 
         `${m.role === 'model' ? 'LENORY' : 'User'}: ${m.parts[0].text}`

@@ -9,6 +9,7 @@
  */
 import { chatWithToolsFailover, type AgentMsg, type ToolSchema } from "../aiRouter";
 import type { ArtifactRef, AssistantStatus, Citation, ToolContext, ToolResult } from "./types";
+import { isWebSearchExhausted } from "../aiRouter";
 import { loadUserCapabilities, sanitizeCapabilities, type UserCapabilities } from "./capabilities";
 import {
   SUPPORTED_FORMATS, toolWebSearch, toolListKbFolders, toolReadKbFolder, toolCreateKbFolder,
@@ -22,6 +23,8 @@ export interface AgentInput {
   systemMessage: string;
   history: { role: "user" | "assistant"; content: string }[];
   tier?: "fast" | "ultra";
+  /** The student picked this exact model: never silently switch tiers. */
+  strictLane?: boolean;
   capabilities?: Partial<UserCapabilities> | null;
   sessionId?: string | null;
   onStatus?: (status: AssistantStatus, detail?: string) => void;
@@ -105,6 +108,8 @@ You can call: ${names.join(", ")}.
 
 export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   const caps: UserCapabilities = { ...(await loadUserCapabilities(input.userId)), ...sanitizeCapabilities(input.capabilities) };
+  const webLimit = isWebSearchExhausted();
+  if (webLimit.exhausted) caps.webSearch = false; // provider limit used up: web access is off until it resets
   const lastUser = [...input.history].reverse().find((m) => m.role === "user")?.content || "";
 
   let defs = DEFS.filter((d) => caps[d.cap] && (d.schema.function.name !== "run_code" || sandboxConfigured()));
@@ -113,7 +118,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   const schemas = defs.map((d) => d.schema);
 
   const messages: AgentMsg[] = [
-    { role: "system", content: `${input.systemMessage}\n\n${toolsPolicyBlock(schemas.map((s) => s.function.name))}${caps.toolAccess === "always" && schemas.length ? "\nTool mode is ALWAYS: use a tool whenever one could help." : ""}` },
+    { role: "system", content: `${input.systemMessage}\n\n${toolsPolicyBlock(schemas.map((s) => s.function.name))}${caps.toolAccess === "always" && schemas.length ? "\nTool mode is ALWAYS: use a tool whenever one could help." : ""}${webLimit.exhausted ? `\nWEB SEARCH IS OFF right now (provider limit reached${webLimit.resetsAt ? `, back at ${webLimit.resetsAt}` : ""}). If the student needs current/online information, say plainly that you cannot browse until then and answer only from what you know, clearly marked as possibly outdated.` : ""}` },
     ...input.history.map((m) => ({ role: m.role, content: m.content }) as AgentMsg),
   ];
 
@@ -131,8 +136,8 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
     input.onStatus?.(step === 0 ? "understanding" : "planning");
     if (input.isCancelled?.()) { input.onStatus?.("cancelled"); return { answer: "Stopped.", artifacts, citations, toolsUsed, failedTools, modelUsed, folders, cancelled: true }; }
     // Cost-aware routing: cheap model for chat, stronger one for long-form / research work.
-    const heavy = input.tier === "ultra" || toolsUsed.includes("web_research") || (step === 0 && lastUser.length > 600) || /\b(report|essay|assignment|thesis|project work|dissertation|presentation|slides|research|in detail|step by step|prove|derive)\b/i.test(lastUser);
-    const out = await chatWithToolsFailover(messages, schemas, heavy ? "ultra" : "fast");
+    const heavy = input.strictLane ? input.tier === "ultra" : input.tier === "ultra" || toolsUsed.includes("web_research") || (step === 0 && lastUser.length > 600) || /\b(report|essay|assignment|thesis|project work|dissertation|presentation|slides|research|in detail|step by step|prove|derive)\b/i.test(lastUser);
+    const out = await chatWithToolsFailover(messages, schemas, heavy ? "ultra" : "fast", !!input.strictLane);
     modelUsed = out.modelUsed;
 
     if (!out.toolCalls.length) {

@@ -14,9 +14,10 @@ import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueu
 
 
 
+import { prefsBlockFor, loadMemoryPrefs, saveMemoryPrefs, PREF_FIELDS, buildPrefsBlock } from "./assistant/memoryPrefs";
 import { loadUserCapabilities, saveUserCapabilities, DEFAULT_CAPABILITIES, sanitizeCapabilities, capabilityAvailability } from "./assistant/capabilities";
 import { runToolAgent } from "./assistant/agentLoop";
-import { chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
+import { getLaneStatuses, isWebSearchExhausted, setExternalCooldown, parseRetryDelaySeconds, chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
 import { registerVapiCustomTtsRoutes } from "./vapiCustomTts";
@@ -418,10 +419,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   
   // ── User Capabilities (Claude-style toggles) ─────────────────────────────
+  // Live state of every model lane + web search, for the countdown timers under the chat box.
+  app.get("/api/ai/status", supabaseAuth, (_req: any, res) => {
+    const ws = isWebSearchExhausted();
+    res.json({ lanes: getLaneStatuses(), webSearch: { exhausted: ws.exhausted, resetsAt: ws.resetsAt }, serverTime: new Date().toISOString() });
+  });
   app.get("/api/capabilities", supabaseAuth, async (req: any, res) => {
     try {
       const caps = await loadUserCapabilities(req.userId);
-      res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES, availability: capabilityAvailability() });
+      res.json({ success: true, capabilities: caps, defaults: DEFAULT_CAPABILITIES, availability: capabilityAvailability(), webSearchLimit: isWebSearchExhausted() });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e?.message });
     }
@@ -651,6 +657,19 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
       // 10-100x. Ultra messages now cost more, and a linked KB folder adds a
       // surcharge on top since it injects extra tokens into every message in
       // that session, not just this one.
+      systemMessage += await prefsBlockFor(userId);
+
+      // --- Model lane: the student's exact choice (Ultra / Fast / Vision / Search) ---
+      // Nobody bypasses provider limits, admins included: if the chosen lane is resting
+      // we say exactly when it works again and charge nothing.
+      const rawLane = String(req.body?.model || "").replace(/^lenory-/, "");
+      let laneId: "ultra" | "fast" | "vision" | "search" = (["ultra", "fast", "vision", "search"].includes(rawLane) ? rawLane : isAdvanced ? "ultra" : "fast") as any;
+      if (laneId === "ultra" && !isAdvanced) laneId = "fast";
+      const laneInfo = getLaneStatuses().find((l) => l.lane === laneId)!;
+      if (!laneInfo.available) {
+        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo.label, reason: laneInfo.reason, resetsAt: laneInfo.resetsAt, resetsInSeconds: laneInfo.resetsInSeconds, message: `${laneInfo.label} is resting${laneInfo.resetsAt ? ` until ${new Date(laneInfo.resetsAt).toUTCString()}` : ""}.` });
+      }
+
       const hasKbContext = !!kbFolderContext;
       const totalCost = (isAdvanced ? 4 : 1) + (hasKbContext ? 1 : 0) + (isLongPaste ? 12 : 0);
       if (user?.email !== REAL_ADMIN_EMAIL) {
@@ -697,17 +716,30 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         aiResponse = overrideResponse;
       } else {
         try {
-          const tier = isAdvanced ? "ultra" : "fast";
-          const agentRes = await runToolAgent({
-            userId,
-            systemMessage,
-            history: history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })) as any,
-            tier,
-            capabilities: sanitizeCapabilities(req.body?.capabilities),
-            sessionId,
-            onStatus: (st, d) => sendStatus(st, 6, d),
-            isCancelled: () => clientGone,
-          });
+          const tier = laneId === "ultra" ? "ultra" : "fast";
+          let agentRes: any;
+          if (laneId === "vision") {
+            // Vision lane = Gemini (reads images/files). No tool calling here - say so honestly.
+            sendStatus("thinking", 5, "LENORY Vision (Gemini)");
+            const gm = await chatWithGemini([
+              { role: "user", content: systemMessage + "\n\n## MODE\nYou are LENORY Vision. You can read images and files the student attached. You cannot create files, search the web or run tools in this mode - if asked, say that and suggest switching to LENORY Fast or Ultra." },
+              { role: "assistant", content: "Understood." },
+              ...history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })),
+            ]);
+            agentRes = { answer: gm, modelUsed: "Gemini 2.5 Flash", artifacts: [], toolsUsed: [], folders: [], citations: [], failedTools: [] };
+          } else {
+            agentRes = await runToolAgent({
+              userId,
+              systemMessage,
+              history: history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })) as any,
+              tier,
+              strictLane: true,
+              capabilities: { ...sanitizeCapabilities(req.body?.capabilities), ...(laneId === "search" ? { webSearch: true, toolAccess: "always" as const } : {}) },
+              sessionId,
+              onStatus: (st, d) => sendStatus(st, 6, d),
+              isCancelled: () => clientGone,
+            });
+          }
           const result = { text: agentRes.answer, modelUsed: agentRes.modelUsed };
           agentArtifacts = agentRes.artifacts;
           agentTools = agentRes.toolsUsed;
@@ -761,8 +793,12 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
               }
             }
           }
-        } catch (aiError) {
-          aiResponse = "I'm having trouble connecting to my AI services right now. Please try again in a moment.";
+        } catch (aiError: any) {
+          if (laneId === "vision" && /429|RESOURCE_EXHAUSTED|quota/i.test(String(aiError?.message))) setExternalCooldown("gemini:vision", parseRetryDelaySeconds(String(aiError?.message)) || 60, "Gemini rate limit");
+          const li = getLaneStatuses().find((l) => l.lane === laneId);
+          aiResponse = li && !li.available && li.resetsAt
+            ? `${li.label} hit its provider limit and is resting. It will work again at ${new Date(li.resetsAt).toUTCString()} (about ${Math.ceil(li.resetsInSeconds / 60)} min). Your message was not answered.`
+            : `${li?.label || "This model"} could not answer just now (${String(aiError?.message || "unknown error").slice(0, 120)}). Please try again, or pick another model.`;
         }
       }
       sendStatus("writing", 6);
@@ -890,7 +926,7 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
       }
       const orch0 = await runToolAgent({
         userId,
-        systemMessage: `You are LENORY, an AI learning assistant for Nigerian students. Be clear, accurate and concise unless asked for detail. The student is ${user?.firstName || "Friend"}.`,
+        systemMessage: `You are LENORY, an AI learning assistant for Nigerian students. Be clear, accurate and concise unless asked for detail. The student is ${user?.firstName || "Friend"}.` + (await prefsBlockFor(userId)),
         history: [...historyMsgs, { role: "user" as const, content }],
         tier: advanced ? "ultra" : "fast",
         capabilities: sanitizeCapabilities(req.body?.capabilities),
@@ -1179,12 +1215,28 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   // ─── MEMORY ROUTES ──────────────────────────────────────────────────────────
 
+  // Memory > Preferences (the student's own "additional instructions" that every chat/voice reply follows)
+  app.get('/api/memory/profile', supabaseAuth, async (req: any, res: Response) => {
+    const prefs = await loadMemoryPrefs(req.userId, true);
+    res.json({ prefs, fields: PREF_FIELDS, preview: buildPrefsBlock(prefs).trim() });
+  });
+  app.put('/api/memory/profile', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const prefs = await saveMemoryPrefs(req.userId, req.body?.prefs ?? req.body);
+      res.json({ success: true, prefs, preview: buildPrefsBlock(prefs).trim() });
+    } catch (e: any) { res.status(500).json({ message: 'Could not save preferences' }); }
+  });
+  app.delete('/api/memory/facts/:id', supabaseAuth, async (req: any, res: Response) => {
+    const ok = await storage.deleteMemoryEntry(req.userId, String(req.params.id));
+    res.status(ok ? 200 : 404).json({ success: ok });
+  });
+
   // Facts LENORY saved through the memory_save tool (what the Memory panel shows as "Remembered by LENORY")
   app.get('/api/memory/facts', supabaseAuth, async (req: any, res: Response) => {
     try {
       const rows = await storage.getMemoryEntriesByUser(req.userId);
       const facts = (rows || [])
-        .filter((r: any) => r.type === 'user_fact')
+        .filter((r: any) => r.type === 'user_fact' || r.type === 'learned_fact')
         .map((r: any) => ({ id: r.id, text: String((r.data as any)?.text || '').slice(0, 600), createdAt: r.createdAt || (r.data as any)?.timestamp || null }))
         .filter((f: any) => f.text);
       res.json({ facts });
@@ -1660,12 +1712,14 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   // ─── PROJECTS (old workspace) ────────────────────────────────────────────
 
+  // Project/file/task ids embed their owner (kind_<userId>_<rand>), so ownership is checked on the server for every call.
+  const ownsId = (req: any, id: string) => String(id || '').split('_')[1] === req.userId;
   app.get('/api/projects', supabaseAuth, async (req: any, res: Response) => {
     try { res.json(await storage.getProjectsByUser(req.userId)); } catch (error) { res.status(500).json({ message: "Failed to fetch projects" }); }
   });
 
   app.get('/api/projects/:id/tasks', supabaseAuth, async (req: any, res: Response) => {
-    try { res.json(await storage.getTasksByProject(req.params.id)); } catch (error) { res.status(500).json({ message: "Failed to fetch tasks" }); }
+    try { if (!ownsId(req, req.params.id)) return res.status(404).json({ message: 'Not found' }); res.json(await storage.getTasksByProject(req.params.id)); } catch (error) { res.status(500).json({ message: "Failed to fetch tasks" }); }
   });
 
   // ─── CHAT SESSIONS ─────────────────────────────────────────────────────────
@@ -3121,6 +3175,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.delete('/api/projects/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.id)) return res.status(404).json({ message: 'Not found' });
       await storage.deleteProject(req.params.id);
       res.json({ success: true });
     } catch (error: any) {
@@ -3130,6 +3185,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.get('/api/projects/:projectId/files', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.projectId)) return res.status(404).json({ message: 'Not found' });
       const files = await storage.getFilesByProject(req.params.projectId);
       res.json(files);
     } catch (error: any) {
@@ -3140,6 +3196,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   app.post('/api/projects/:projectId/files', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { name, content } = req.body;
+      if (!ownsId(req, req.params.projectId)) return res.status(404).json({ message: 'Not found' });
       const file = await storage.createFile({ projectId: req.params.projectId, name, content });
       res.json(file);
     } catch (error: any) {
@@ -3149,6 +3206,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.delete('/api/files/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.id)) return res.status(404).json({ message: 'Not found' });
       await storage.deleteFile(req.params.id);
       res.json({ success: true });
     } catch (error: any) {
@@ -3158,6 +3216,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.get('/api/projects/:projectId/tasks', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.projectId)) return res.status(404).json({ message: 'Not found' });
       const tasks = await storage.getTasksByProject(req.params.projectId);
       res.json(tasks);
     } catch (error: any) {
@@ -3168,6 +3227,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   app.post('/api/projects/:projectId/tasks', supabaseAuth, async (req: any, res: Response) => {
     try {
       const { title, status } = req.body;
+      if (!ownsId(req, req.params.projectId)) return res.status(404).json({ message: 'Not found' });
       const task = await storage.createTask({ projectId: req.params.projectId, title, status: status || 'pending' });
       res.json(task);
     } catch (error: any) {
@@ -3177,6 +3237,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.patch('/api/tasks/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.id)) return res.status(404).json({ message: 'Not found' });
       const task = await storage.updateTask(req.params.id, req.body);
       res.json(task);
     } catch (error: any) {
@@ -3186,6 +3247,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   app.delete('/api/tasks/:id', supabaseAuth, async (req: any, res: Response) => {
     try {
+      if (!ownsId(req, req.params.id)) return res.status(404).json({ message: 'Not found' });
       await storage.deleteTask(req.params.id);
       res.json({ success: true });
     } catch (error: any) {

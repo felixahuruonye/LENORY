@@ -119,6 +119,7 @@ export interface IStorage {
   // Memory entry operations
   getMemoryEntriesByUser(userId: string): Promise<MemoryEntry[]>;
   createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry>;
+  deleteMemoryEntry(userId: string, id: string): Promise<boolean>;
 
   // Purchase operations
   getPurchase(id: string): Promise<Purchase | undefined>;
@@ -483,6 +484,11 @@ export class DatabaseStorage implements IStorage {
   async createMemoryEntry(entry: InsertMemoryEntry): Promise<MemoryEntry> {
     const [newEntry] = await db.insert(memoryEntries).values(entry).returning();
     return newEntry;
+  }
+
+  async deleteMemoryEntry(userId: string, id: string): Promise<boolean> {
+    const rows = await db.delete(memoryEntries).where(and(eq(memoryEntries.id, id), eq(memoryEntries.userId, userId))).returning();
+    return rows.length > 0;
   }
 
   // Purchase operations
@@ -2107,13 +2113,135 @@ class SupabaseStorage extends DatabaseStorage {
         if (!error && data) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, type: m.type, subject: m.subject,
-            data: m.content ? { content: m.content } : {},
+            // createMemoryEntry stores the JSON payload as text in `content`; give it back as an object
+            data: (() => {
+              if (!m.content) return {};
+              try { const o = JSON.parse(m.content); if (o && typeof o === 'object' && !Array.isArray(o)) return { ...o, content: m.content }; } catch {}
+              return { content: m.content };
+            })(),
             createdAt: new Date(m.created_at),
           })) as unknown as MemoryEntry[];
         }
       } catch {}
     }
     return [];
+  }
+
+  // -- Project Workspace: persistent (survives restarts) ------------------------
+  // One workspace document per student stored in memory_entries (type "workspace").
+  // Ids carry the owner (kind_<userId>_<rand>) so file/task calls that only know an id can find the right student.
+  private wsCache = new Map<string, { ws: { projects: any[]; files: any[]; tasks: any[] }; at: number }>();
+  private wsQueue = new Map<string, Promise<any>>();
+  private wsOwner(id: string): string | null {
+    const m = /^[a-z]+_([^_]+)_/.exec(String(id || ''));
+    return m ? m[1] : null;
+  }
+  private async wsLoad(userId: string): Promise<{ projects: any[]; files: any[]; tasks: any[] }> {
+    const hit = this.wsCache.get(userId);
+    if (hit && Date.now() - hit.at < 20_000) return hit.ws;
+    let ws = { projects: [] as any[], files: [] as any[], tasks: [] as any[] };
+    const rows = await this.getMemoryEntriesByUser(userId);
+    const row: any = (rows || []).find((r: any) => r.type === 'workspace');
+    if (row?.data) ws = { projects: row.data.projects || [], files: row.data.files || [], tasks: row.data.tasks || [] };
+    this.wsCache.set(userId, { ws, at: Date.now() });
+    return ws;
+  }
+  /** Serialised read-modify-write so two quick actions never overwrite each other. */
+  private wsMutate<T>(userId: string, fn: (ws: { projects: any[]; files: any[]; tasks: any[] }) => T): Promise<T> {
+    const prev = this.wsQueue.get(userId) || Promise.resolve();
+    const run = prev.catch(() => {}).then(async () => {
+      const ws = JSON.parse(JSON.stringify(await this.wsLoad(userId)));
+      const result = fn(ws);
+      if (JSON.stringify(ws).length > 3_000_000) throw new Error('Workspace is full (3 MB). Delete some files first.');
+      const old = (await this.getMemoryEntriesByUser(userId)).filter((r: any) => r.type === 'workspace');
+      await this.createMemoryEntry({ userId, type: 'workspace', data: ws as any } as any);
+      for (const r of old) await this.deleteMemoryEntry(userId, (r as any).id).catch(() => false);
+      this.wsCache.set(userId, { ws, at: Date.now() });
+      return result;
+    });
+    this.wsQueue.set(userId, run.catch(() => {}));
+    return run;
+  }
+  private wsId(kind: string, userId: string) { return `${kind}_${userId}_${nanoid(8)}`; }
+
+  async getProjectsByUser(userId: string): Promise<any[]> {
+    return (await this.wsLoad(userId)).projects.filter((p: any) => p.userId === userId);
+  }
+  async createProject(project: any): Promise<any> {
+    const userId = project.userId;
+    const now = new Date().toISOString();
+    const full = { ...project, id: this.wsId('proj', userId), createdAt: now, updatedAt: now };
+    await this.wsMutate(userId, (ws) => { ws.projects.push(full); });
+    return full;
+  }
+  async updateProject(id: string, updates: any): Promise<any> {
+    const uid = this.wsOwner(id); if (!uid) return undefined;
+    return this.wsMutate(uid, (ws) => {
+      const i = ws.projects.findIndex((p: any) => p.id === id);
+      if (i < 0) return undefined;
+      const { id: _i, userId: _u, ...safe } = updates || {};
+      ws.projects[i] = { ...ws.projects[i], ...safe, updatedAt: new Date().toISOString() };
+      return ws.projects[i];
+    });
+  }
+  async deleteProject(id: string): Promise<void> {
+    const uid = this.wsOwner(id); if (!uid) return;
+    await this.wsMutate(uid, (ws) => {
+      ws.projects = ws.projects.filter((p: any) => p.id !== id);
+      ws.files = ws.files.filter((f: any) => f.projectId !== id);
+      ws.tasks = ws.tasks.filter((t: any) => t.projectId !== id);
+    });
+  }
+  async getFilesByProject(projectId: string): Promise<any[]> {
+    const uid = this.wsOwner(projectId); if (!uid) return [];
+    return (await this.wsLoad(uid)).files.filter((f: any) => f.projectId === projectId);
+  }
+  async createFile(file: any): Promise<any> {
+    const uid = this.wsOwner(file.projectId); if (!uid) throw new Error('Unknown project');
+    const full = { ...file, id: this.wsId('file', uid), createdAt: new Date().toISOString() };
+    await this.wsMutate(uid, (ws) => {
+      if (!ws.projects.some((p: any) => p.id === file.projectId)) throw new Error('Project not found');
+      ws.files.push(full);
+    });
+    return full;
+  }
+  async deleteFile(id: string): Promise<void> {
+    const uid = this.wsOwner(id); if (!uid) return;
+    await this.wsMutate(uid, (ws) => { ws.files = ws.files.filter((f: any) => f.id !== id); });
+  }
+  async getTasksByProject(projectId: string): Promise<any[]> {
+    const uid = this.wsOwner(projectId); if (!uid) return [];
+    return (await this.wsLoad(uid)).tasks.filter((t: any) => t.projectId === projectId);
+  }
+  async createTask(task: any): Promise<any> {
+    const uid = this.wsOwner(task.projectId); if (!uid) throw new Error('Unknown project');
+    const full = { ...task, id: this.wsId('task', uid), createdAt: new Date().toISOString() };
+    await this.wsMutate(uid, (ws) => {
+      if (!ws.projects.some((p: any) => p.id === task.projectId)) throw new Error('Project not found');
+      ws.tasks.push(full);
+    });
+    return full;
+  }
+  async updateTask(id: string, updates: any): Promise<any> {
+    const uid = this.wsOwner(id); if (!uid) return undefined;
+    return this.wsMutate(uid, (ws) => {
+      const i = ws.tasks.findIndex((t: any) => t.id === id);
+      if (i < 0) return undefined;
+      const { id: _i, projectId: _p, ...safe } = updates || {};
+      ws.tasks[i] = { ...ws.tasks[i], ...safe, updatedAt: new Date().toISOString() };
+      return ws.tasks[i];
+    });
+  }
+  async deleteTask(id: string): Promise<void> {
+    const uid = this.wsOwner(id); if (!uid) return;
+    await this.wsMutate(uid, (ws) => { ws.tasks = ws.tasks.filter((t: any) => t.id !== id); });
+  }
+
+  async deleteMemoryEntry(userId: string, id: string): Promise<boolean> {
+    if (!supabaseDb) return false;
+    const { data, error } = await supabaseDb.from('memory_entries').delete().eq('id', id).eq('user_id', userId).select('id');
+    if (error) { console.error('deleteMemoryEntry failed:', error.message); return false; }
+    return (data || []).length > 0;
   }
 
   // ── File Uploads ────────────────────────────────────────────────────────────

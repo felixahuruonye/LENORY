@@ -67,6 +67,7 @@ import { Link, useLocation, useSearch } from "wouter";
 import { navigate as navigateInApp } from "wouter/use-browser-location";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useAiStatus, fmtCountdown } from "@/hooks/useAiStatus";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVoice, getVapiVoiceForCall } from "@/lib/useVoice";
@@ -360,6 +361,20 @@ export default function Chat() {
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const aiStatus = useAiStatus();
+  const selectedLane = aiStatus.laneOf(selectedModel.id);
+  const laneBlocked = !!selectedLane && !selectedLane.available;
+  const { data: capsData } = useQuery<{ capabilities: { webSearch: boolean } }>({
+    queryKey: ["/api/capabilities"],
+    queryFn: async () => (await apiRequest("GET", "/api/capabilities")).json(),
+  });
+  const searchOn = !!capsData?.capabilities?.webSearch && !aiStatus.webExhausted;
+  const toggleSearch = async (on: boolean) => {
+    try {
+      await apiRequest("PUT", "/api/capabilities", { webSearch: on });
+      queryClient.invalidateQueries({ queryKey: ["/api/capabilities"] });
+    } catch { toast({ title: "Could not change search", variant: "destructive" }); }
+  };
   const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -1002,6 +1017,10 @@ export default function Chat() {
   const folderActionPending = folderQuizMutation.isPending || folderFlashcardsMutation.isPending || folderSummaryMutation.isPending;
 
   const handleSendMessage = async () => {
+    if (laneBlocked && selectedLane) {
+      toast({ title: `${selectedLane.label} is resting`, description: `Back in ${fmtCountdown(selectedLane.left)}. Pick another model or wait.` });
+      return;
+    }
     if ((!message.trim() && !pastedFile && pendingFiles.length === 0) || isLoading) return;
 
     // Image Gen mode — toggled from the + menu. Reuses the same
@@ -1154,6 +1173,15 @@ export default function Chat() {
         }),
       });
 
+      if (streamRes.status === 429) {
+        const j = await streamRes.clone().json().catch(() => null);
+        if (j?.code === "LANE_UNAVAILABLE") {
+          toast({ title: `${j.label} is resting`, description: j.message });
+          queryClient.invalidateQueries({ queryKey: ["/api/ai/status"] });
+          setIsLoading(false);
+          return;
+        }
+      }
       if (streamRes.status === 402) {
         const errData = await streamRes.json();
         setShowCreditAlert(true);
@@ -1989,6 +2017,17 @@ export default function Chat() {
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+
+                  {/* Web search switch (uses the same setting as Settings > Capabilities) */}
+                  <label
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl text-xs font-medium select-none ${aiStatus.webExhausted ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-muted"} ${searchOn ? "text-primary" : "text-muted-foreground"}`}
+                    title={aiStatus.webExhausted ? `Web search resets in ${fmtCountdown(aiStatus.webLeft)}` : "Let LENORY search the internet"}
+                    data-testid="checkbox-search-web"
+                  >
+                    <input type="checkbox" className="accent-primary w-3.5 h-3.5" checked={searchOn} disabled={aiStatus.webExhausted} onChange={(e) => toggleSearch(e.target.checked)} />
+                    <Search className="w-3.5 h-3.5" />
+                    <span>{aiStatus.webExhausted ? fmtCountdown(aiStatus.webLeft) : "Search"}</span>
+                  </label>
                 </div>
 
                 <div className="flex items-center gap-1">
@@ -2050,7 +2089,7 @@ export default function Chat() {
                   <button
                     onClick={isLoading ? () => abortRef.current?.abort() : handleSendMessage}
                     disabled={isLoading ? false : (!message.trim() && !pastedFile && pendingFiles.length === 0) || isSearching}
-                    className={`p-2 rounded-xl transition-all ${
+                    className={`${laneBlocked && !isLoading ? "hidden " : ""}p-2 rounded-xl transition-all ${
                       isLoading ? "bg-destructive text-destructive-foreground" : (!message.trim() && !pastedFile && pendingFiles.length === 0) || isSearching
                         ? "text-muted-foreground/30 cursor-not-allowed"
                         : videoMode
@@ -2072,6 +2111,23 @@ export default function Chat() {
                 </div>
               </div>
             </div>
+
+            {(aiStatus.lanes.some((l) => !l.available) || aiStatus.webExhausted) && (
+              <div className="mt-2 space-y-1" data-testid="limit-banner" aria-live="polite">
+                {aiStatus.lanes.filter((l) => !l.available && l.lane !== "search").concat(aiStatus.lanes.filter((l) => !l.available && l.lane === "search")).map((l) => (
+                  <div key={l.lane} className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-1.5 text-xs ${selectedLane?.lane === l.lane ? "border-destructive/40 bg-destructive/10" : "border-border/50 bg-muted/40"}`}>
+                    <span className="font-medium truncate">{l.label} is resting{l.reason ? ` - ${l.reason}` : ""}</span>
+                    <span className="font-mono tabular-nums flex-shrink-0">{l.resetsAt ? `back in ${fmtCountdown(l.left)}` : "unavailable"}</span>
+                  </div>
+                ))}
+                {aiStatus.webExhausted && (
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-border/50 bg-muted/40 px-3 py-1.5 text-xs">
+                    <span className="font-medium">Web search is off - provider limit used up</span>
+                    <span className="font-mono tabular-nums flex-shrink-0">back in {fmtCountdown(aiStatus.webLeft)}</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             <p className="text-xs text-muted-foreground text-center mt-2">
               LENORY AI · Advanced intelligence for everyone · Always verify critical information

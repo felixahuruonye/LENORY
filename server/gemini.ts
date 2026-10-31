@@ -303,9 +303,11 @@ Analyze the answers and return ONLY valid JSON (no other text):
 // ─────────────────────────────────────────────────────────────────────
 export async function searchInternetWithGemini(query: string, opts: { depth?: 'basic' | 'advanced'; maxResults?: number } = {}): Promise<WebSearchResponse> {
   // Try Tavily first
+  const limits = await import("./aiRouter");
   const tavilyKey = process.env.TAVILY_API_KEY;
-  if (tavilyKey) {
+  if (tavilyKey && !limits.getExternalCooldown("tavily:search")) {
     try {
+      try { await limits.throttle("tavily"); } catch { /* soft limit: fall through to Gemini */ throw new Error("soft limit"); }
       console.log("🔍 Searching with Tavily:", query);
       const response = await fetch('https://api.tavily.com/search', {
         method: 'POST',
@@ -334,7 +336,10 @@ export async function searchInternetWithGemini(query: string, opts: { depth?: 'b
           summary: data.answer || `Found ${results.length} results for "${query}"`,
         };
       }
-      console.warn("Tavily search failed, falling back to Gemini");
+      const errText = await response.text().catch(() => "");
+      if (response.status === 429) limits.setExternalCooldown("tavily:search", Number(response.headers.get("retry-after")) || 60, "Tavily rate limit (429)");
+      else if ([402, 432, 433].includes(response.status) || /usage limit|exceeds your plan|plan/i.test(errText)) limits.setExternalCooldown("tavily:search", limits.secondsToNextMonth(), "Tavily plan limit reached (resets next month)");
+      console.warn("Tavily search failed, falling back to Gemini", response.status);
     } catch (err) {
       console.warn("Tavily search error:", err);
     }
@@ -346,6 +351,8 @@ export async function searchInternetWithGemini(query: string, opts: { depth?: 'b
       throw new Error("Gemini API key not configured");
     }
 
+    if (limits.getExternalCooldown("gemini:search")) throw new Error("Gemini search cooling down");
+    try { await limits.throttle("gemini"); } catch { throw new Error("Gemini search busy"); }
     console.log("🔍 Falling back to Gemini search:", query);
 
     const response = await ai.models.generateContent({
@@ -378,6 +385,8 @@ Find real, recent information. Include sources and links.`
     };
   } catch (error) {
     console.error("Internet search error:", error);
+    const msg = String((error as any)?.message || error);
+    if (/429|RESOURCE_EXHAUSTED|quota/i.test(msg)) limits.setExternalCooldown("gemini:search", limits.parseRetryDelaySeconds(msg) || 60, "Gemini search limit");
     return {
       results: [],
       summary: "Unable to search internet. Try again later."

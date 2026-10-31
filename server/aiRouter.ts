@@ -75,7 +75,8 @@ function setCooldown(spec: ModelSpec, retryAfterSeconds: number | null, reason: 
   // quota/billing cutoff rather than a per-minute limit, cool down for 6h
   // instead so we're not hammering a dead key every request.
   const isHardQuota = /quota|billing|insufficient_quota|credit/i.test(reason);
-  const seconds = retryAfterSeconds ?? (isHardQuota ? 6 * 60 * 60 : 60);
+  const is402 = /\b402\b/.test(reason); // credits can be topped up any minute, so re-check every 10 min
+  const seconds = retryAfterSeconds ?? (is402 ? 600 : isHardQuota ? 6 * 60 * 60 : 60);
   const until = Date.now() + seconds * 1000;
   cooldowns.set(cooldownKey(spec), { until, reason });
   console.warn(`⏸️  ${spec.label} on cooldown for ${seconds}s — resets ${new Date(until).toISOString()} — ${reason}`);
@@ -191,6 +192,115 @@ export async function chatCompletionWithFailover(
 
 // Lets Felix (or an admin panel) check what's currently on cooldown and when
 // it resets, instead of guessing from logs.
+
+// --- PRE-EMPTIVE RATE LIMITING + LANE STATUS ------------------------------
+// We slow ourselves down BEFORE a provider throws 429, and we publish exactly
+// when each lane (Ultra / Fast / Vision / Search) works again. Nobody bypasses
+// this - admins included.
+const RPM: Record<string, number> = {
+  openrouter: Number(process.env.OPENROUTER_RPM || 16),
+  groq: Number(process.env.GROQ_RPM || 22),
+  gemini: Number(process.env.GEMINI_RPM || 10),
+  tavily: Number(process.env.TAVILY_RPM || 30),
+};
+const windows = new Map<string, number[]>();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Waits a little (max ~6s) to stay under the provider's per-minute budget; throws SOFT_LIMIT:<ms> if the wait would be longer. */
+export async function throttle(provider: string, maxWaitMs = 6000): Promise<void> {
+  const limit = RPM[provider] || 20;
+  for (let i = 0; i < 3; i++) {
+    const now = Date.now();
+    const w = (windows.get(provider) || []).filter((t) => now - t < 60_000);
+    if (w.length < limit) { w.push(now); windows.set(provider, w); return; }
+    const wait = 60_000 - (now - w[0]) + 30;
+    windows.set(provider, w);
+    if (wait > maxWaitMs) throw new Error(`SOFT_LIMIT:${wait}`);
+    await sleep(wait);
+  }
+  throw new Error("SOFT_LIMIT:60000");
+}
+
+/** Cooldowns for non-chain providers (Gemini vision chat, Tavily/Gemini search). */
+const external = new Map<string, { until: number; reason: string }>();
+export function setExternalCooldown(key: string, seconds: number, reason: string) {
+  external.set(key, { until: Date.now() + Math.max(5, seconds) * 1000, reason });
+  console.warn(`[limits] ${key} unavailable for ${Math.round(seconds)}s: ${reason}`);
+}
+export function getExternalCooldown(key: string): { until: number; reason: string } | null {
+  const c = external.get(key);
+  if (!c) return null;
+  if (Date.now() > c.until) { external.delete(key); return null; }
+  return c;
+}
+/** Seconds until the next UTC month starts (Tavily plan limits reset monthly). */
+export function secondsToNextMonth(): number {
+  const n = new Date();
+  return Math.ceil((Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1) - n.getTime()) / 1000);
+}
+export function parseRetryDelaySeconds(text: string): number | null {
+  const m = String(text).match(/retry(?:Delay)?"?[:\s]+"?(\d+(?:\.\d+)?)s/i) || String(text).match(/retry in (\d+(?:\.\d+)?)s/i);
+  return m ? Math.ceil(Number(m[1])) : null;
+}
+
+export type LaneId = "ultra" | "fast" | "vision" | "search";
+export interface LaneStatus { lane: LaneId; label: string; available: boolean; resetsAt: string | null; resetsInSeconds: number; reason: string | null }
+
+function chainStatus(chain: ModelSpec[]): { available: boolean; until: number | null; reason: string | null } {
+  let earliest: number | null = null; let reason: string | null = null;
+  for (const spec of chain) {
+    const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
+    if (!key) continue;
+    const c = cooldowns.get(cooldownKey(spec));
+    if (!c || Date.now() > c.until) return { available: true, until: null, reason: null };
+    if (earliest === null || c.until < earliest) { earliest = c.until; reason = c.reason; }
+  }
+  return { available: false, until: earliest, reason };
+}
+function friendlyReason(r: string | null): string | null {
+  if (!r) return null;
+  if (/402|credit|quota|billing/i.test(r)) return "Provider credits or quota used up";
+  if (/429|rate/i.test(r)) return "Provider rate limit reached";
+  if (/throttl|SOFT/i.test(r)) return "Busy - protecting the provider limit";
+  return "Temporarily unavailable";
+}
+export function getLaneStatuses(): LaneStatus[] {
+  const now = Date.now();
+  const mk = (lane: LaneId, label: string, st: { available: boolean; until: number | null; reason: string | null }): LaneStatus => ({
+    lane, label, available: st.available,
+    resetsAt: st.until ? new Date(st.until).toISOString() : null,
+    resetsInSeconds: st.until ? Math.max(0, Math.ceil((st.until - now) / 1000)) : 0,
+    reason: st.available ? null : friendlyReason(st.reason),
+  });
+  const ext = (key: string, hasKey: boolean) => {
+    if (!hasKey) return { available: false, until: null as number | null, reason: "Not configured on the server" };
+    const c = getExternalCooldown(key);
+    return c ? { available: false, until: c.until, reason: c.reason } : { available: true, until: null as number | null, reason: null as string | null };
+  };
+  const fast = chainStatus(FAST_CHAIN);
+  // Search needs a working web provider (Tavily and/or Gemini) AND a chat model to write the answer.
+  const tav = ext("tavily:search", !!process.env.TAVILY_API_KEY);
+  const gem = ext("gemini:search", !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY));
+  const searchWeb = tav.available || gem.available ? { available: true, until: null as number | null, reason: null as string | null }
+    : { available: false, until: (() => { const v = [tav.until, gem.until].filter((x): x is number => !!x); return v.length ? Math.min(...v) : null; })(), reason: tav.until || gem.until ? "Search provider limit reached" : "Search is not configured on the server" };
+  const searchAll = !searchWeb.available ? searchWeb : fast.available ? searchWeb : fast;
+  return [
+    mk("ultra", "LENORY Ultra", chainStatus(ULTRA_CHAIN)),
+    mk("fast", "LENORY Fast", fast),
+    mk("vision", "LENORY Vision", ext("gemini:vision", !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY))),
+    mk("search", "LENORY Search", searchAll),
+  ];
+}
+/** True only when the WEB provider itself is exhausted (used to switch the Web search capability off). */
+export function isWebSearchExhausted(): { exhausted: boolean; resetsAt: string | null } {
+  const s = getLaneStatuses().find((l) => l.lane === "search")!;
+  const tav = getExternalCooldown("tavily:search"); const gem = getExternalCooldown("gemini:search");
+  const hasGem = !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
+  const exhausted = (!!tav || !process.env.TAVILY_API_KEY) && (!!gem || !hasGem) && !!(tav || gem);
+  void s;
+  return { exhausted, resetsAt: exhausted ? new Date(Math.min(...[tav?.until, gem?.until].filter((x): x is number => !!x))).toISOString() : null };
+}
+
 export function getProviderCooldownStatus() {
   const now = Date.now();
   const rows: { model: string; resetsInSeconds: number; resetsAt: string; reason: string }[] = [];
@@ -288,13 +398,20 @@ export async function chatWithToolsFailover(
   messages: AgentMsg[],
   tools: ToolSchema[],
   tier: "ultra" | "fast" = "fast",
+  strict = false,
 ): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any; modelUsed: string }> {
   const trail: string[] = [];
-  const chains = tier === "ultra" ? [ULTRA_CHAIN, FAST_CHAIN] : [FAST_CHAIN, ULTRA_CHAIN];
+  // strict = the student chose this exact model: never silently answer with a different one.
+  const chains = strict ? [tier === "ultra" ? ULTRA_CHAIN : FAST_CHAIN] : tier === "ultra" ? [ULTRA_CHAIN, FAST_CHAIN] : [FAST_CHAIN, ULTRA_CHAIN];
   for (const chain of chains) {
     for (const spec of chain) {
       if (isOnCooldown(spec)) { trail.push(`${spec.label} (cooling down)`); continue; }
       try {
+        try { await throttle(spec.provider); } catch (te: any) {
+          const ms = Number(String(te?.message).split(":")[1]) || 30000;
+          setCooldown(spec, Math.ceil(ms / 1000), "throttled to protect the provider limit");
+          trail.push(`${spec.label} (busy)`); continue;
+        }
         const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
         if (!key) throw new Error(`No ${spec.provider.toUpperCase()}_API_KEY configured`);
         const base = spec.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.groq.com/openai/v1";
