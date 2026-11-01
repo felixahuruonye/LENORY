@@ -429,9 +429,16 @@ export const DEFAULT_FEATURE_COSTS: Record<string, number> = {
   "voice_transcription_gate": 1,       // min credits to start a transcription
   "voice_transcription_per_5min": 1,   // per 5 minutes of audio
   "format_notes": 3,                   // Gemini structured notebook
-  "chat_fast": 1,
-  "chat_standard": 2,
-  "chat_advanced": 5,
+  // Chat by mode: simple = quick answer, heavy = tools / long work. Edit in Admin > Credit Usage.
+  "chat_ultra_simple": 3,
+  "chat_ultra_heavy": 25,
+  "chat_fast_simple": 1,
+  "chat_fast_heavy": 4,
+  "chat_vision_simple": 1,
+  "chat_vision_heavy": 6,
+  // Extras that used to be hard-coded in the chat route
+  "chat_kb_context_extra": 1,
+  "chat_long_paste_extra": 12,
   "image_generate": 5,
   "image_edit": 6,
   "live_ai_voice_gate": 20,
@@ -445,26 +452,33 @@ let featureCostCache: Record<string, number> | null = null;
 let featureCostCacheAt = 0;
 const FEATURE_COST_CACHE_MS = 30_000;
 
-async function loadFeatureCostsFromDb(): Promise<Record<string, number> | null> {
+const FALLBACK_TYPE = "feature_costs";
+async function loadFallback(): Promise<Record<string, number> | null> {
   if (!supabaseAdmin) return null;
   try {
+    const { data } = await supabaseAdmin.from("memory_entries").select("content,created_at").eq("type", FALLBACK_TYPE).order("created_at", { ascending: false }).limit(1);
+    const row: any = data?.[0];
+    if (!row?.content) return null;
+    const obj = JSON.parse(row.content);
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(obj?.costs || {})) { const n = Number(v); if (Number.isFinite(n) && n >= 0) out[k] = n; }
+    return Object.keys(out).length ? out : null;
+  } catch { return null; }
+}
+async function loadFeatureCostsFromDb(): Promise<Record<string, number> | null> {
+  if (!supabaseAdmin) return null;
+  const merged: Record<string, number> = { ...((await loadFallback()) || {}) };
+  try {
     const { data, error } = await supabaseAdmin.from("feature_costs").select("*");
-    if (error) {
-      // Table may not exist yet — silent fallback
-      return null;
+    if (!error && data) {
+      for (const row of data as any[]) {
+        if (!row?.feature) continue;
+        const cost = Number(row.cost);
+        if (Number.isFinite(cost) && cost >= 0) merged[row.feature] = cost; // dedicated table wins
+      }
     }
-    if (!data || data.length === 0) return null;
-    const merged: Record<string, number> = {};
-    for (const row of data as any[]) {
-      if (!row?.feature) continue;
-      const cost = Number(row.cost);
-      if (!Number.isFinite(cost) || cost < 0) continue;
-      merged[row.feature] = cost;
-    }
-    return Object.keys(merged).length > 0 ? merged : null;
-  } catch {
-    return null;
-  }
+  } catch {}
+  return Object.keys(merged).length > 0 ? merged : null;
 }
 
 export async function getFeatureCost(feature: string): Promise<number> {
@@ -486,21 +500,26 @@ export async function getAllFeatureCosts(): Promise<Record<string, number>> {
   return { ...DEFAULT_FEATURE_COSTS, ...(featureCostCache || {}) };
 }
 
-export async function setFeatureCost(feature: string, cost: number): Promise<boolean> {
+export async function setFeatureCost(feature: string, cost: number, adminUserId?: string): Promise<boolean> {
   if (!supabaseAdmin) return false;
-  if (!Number.isFinite(cost) || cost < 0) return false;
+  if (!Number.isFinite(cost) || cost < 0 || !feature) return false;
+  const value = Math.round(cost);
+  // 1) the dedicated table if it exists
+  let saved = false;
   try {
-    const { error } = await supabaseAdmin
-      .from("feature_costs")
-      .upsert({ feature, cost, updated_at: new Date().toISOString() });
-    if (error) {
-      logSupabaseError("upsert feature_costs", error);
-      return false;
-    }
-    featureCostCache = null;
-    return true;
-  } catch (e) {
-    console.error("[creditsStore] setFeatureCost threw:", e);
-    return false;
+    const { error } = await supabaseAdmin.from("feature_costs").upsert({ feature, cost: value, updated_at: new Date().toISOString() });
+    saved = !error;
+  } catch {}
+  // 2) otherwise (or as well) keep every cost in ONE row of memory_entries so saving never fails when the table is missing
+  if (adminUserId) {
+    try {
+      const current = { ...((await loadFallback()) || {}), [feature]: value };
+      const { data: old } = await supabaseAdmin.from("memory_entries").select("id").eq("type", FALLBACK_TYPE).eq("user_id", adminUserId);
+      const { error } = await supabaseAdmin.from("memory_entries").insert({ id: `fc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, user_id: adminUserId, type: FALLBACK_TYPE, subject: "feature_costs", content: JSON.stringify({ costs: current }) });
+      if (!error) { saved = true; for (const r of old || []) await supabaseAdmin.from("memory_entries").delete().eq("id", (r as any).id); }
+      else console.error("[creditsStore] feature cost fallback insert failed:", error.message);
+    } catch (e) { console.error("[creditsStore] feature cost fallback threw:", e); }
   }
+  if (saved) featureCostCache = null;
+  return saved;
 }

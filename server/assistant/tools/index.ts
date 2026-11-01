@@ -217,6 +217,7 @@ export async function toolAddKbNote(ctx: ToolContext, args: { folderId: string; 
 }
 
 export async function toolMemorySave(ctx: ToolContext, args: { text: string }): Promise<ToolResult> {
+  ctx.onStatus?.("saving_memory", String(args?.text || "").slice(0, 60));
   const text = String(args?.text || "").trim().slice(0, 600);
   if (!text) return { tool: "memory_save", success: false, summary: "Nothing to remember", error: "EMPTY" };
   try {
@@ -229,6 +230,7 @@ export async function toolMemorySave(ctx: ToolContext, args: { text: string }): 
 }
 
 export async function toolMemoryList(ctx: ToolContext): Promise<ToolResult> {
+  ctx.onStatus?.("remembering");
   try {
     const rows = await storage.getMemoryEntriesByUser(ctx.userId);
     const facts = (rows || [])

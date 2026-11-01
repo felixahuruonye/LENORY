@@ -194,6 +194,14 @@ export const supabaseAuth: RequestHandler = async (
     req.userId = user.userId;
     req.userEmail = user.email;
 
+    // Every AI call made while handling this request follows the student's mode (Ultra/Fast/Vision).
+    try {
+      const { getLaneProfile } = await import("./assistant/lanes");
+      const { laneContext } = await import("./laneContext");
+      const prof = await getLaneProfile(user.userId);
+      (req as any).laneProfile = prof;
+      return laneContext.run({ lane: prof.lane, userId: user.userId }, () => next());
+    } catch { /* never block a request because the lane lookup failed */ }
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);

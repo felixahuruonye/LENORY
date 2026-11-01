@@ -2,6 +2,7 @@
 import { WebSocket as WS } from "ws";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { storage } from "./storage";
+import { NIGERIAN_WRITING_POLICY } from "./assistant/writingPolicy";
 import { prefsBlockFor } from "./assistant/memoryPrefs";
 import { getOrCreateCredits, deductCredits } from "./creditsStore";
 
@@ -248,7 +249,7 @@ Guidelines:
 
     // ─── NEW: Inject chat context into system instruction ────────────────────
     // The student's own Memory > Preferences (same "additional instructions" the text chat follows)
-    try { if (session.userId) systemInstruction += await prefsBlockFor(session.userId); } catch {}
+    try { systemInstruction += NIGERIAN_WRITING_POLICY; if (session.userId) systemInstruction += await prefsBlockFor(session.userId); } catch {}
 
     if (session.chatContext && session.chatContext.length > 0) {
       const contextText = session.chatContext.map((m: any) => 

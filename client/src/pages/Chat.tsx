@@ -96,14 +96,29 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   running_code: { label: "Running code", icon: Brain },
   cancelled: { label: "Stopped", icon: Brain },
   validating: { label: "Validating the result...", icon: Brain },
-  saving: { label: "Saving to your account...", icon: Brain },
+  saving: { label: "Saving to your account", icon: Brain },
+  saving_memory: { label: "Saving to memory", icon: Brain },
+  remembering: { label: "Remembering", icon: Brain },
+  searching_memory: { label: "Searching memory", icon: Search },
+  searching_documents: { label: "Searching documents", icon: Search },
+  editing_file: { label: "Editing file", icon: PenLine },
+  generating_image: { label: "Generating image", icon: Sparkles },
+  generating_video: { label: "Generating video", icon: Sparkles },
   writing: { label: "Writing response...", icon: PenLine },
   verifying: { label: "Double-checking the answer...", icon: Brain },
   completed: { label: "Done", icon: Brain },
   failed: { label: "Something went wrong...", icon: Brain },
 };
 
-function TypingIndicator({ action, steps }: { action?: string | null; steps?: { status: string; detail?: string }[] }) {
+function ElapsedTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const sec = Math.max(0, Math.floor((now - since) / 1000));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
+  return <span className="font-mono tabular-nums text-xs text-muted-foreground ml-2">{h > 0 ? `${h}h ` : ""}{m > 0 || h > 0 ? `${m}m ` : ""}{r}s</span>;
+}
+
+function TypingIndicator({ action, steps, startedAt }: { action?: string | null; steps?: { status: string; detail?: string }[]; startedAt?: number | null }) {
   const list = (steps && steps.length ? steps : [{ status: action || "writing" }]).slice(-5);
   return (
     <div className="py-2 px-1 space-y-1.5" data-testid="chat-action-indicator" aria-live="polite">
@@ -120,6 +135,7 @@ function TypingIndicator({ action, steps }: { action?: string | null; steps?: { 
             <span className="min-w-0 truncate">
               <span className={active ? "font-medium" : ""}>{info.label}</span>
               {st.detail ? <span className="text-muted-foreground"> — {st.detail}</span> : null}
+              {active && !terminal && startedAt ? <ElapsedTimer since={startedAt} /> : null}
               {active && !terminal ? <span className="ml-1 inline-flex gap-0.5 align-middle"><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} /><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} /><span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} /></span> : null}
             </span>
           </div>
@@ -337,7 +353,7 @@ function CreditAlert({ credits, onUpgrade, onDismiss }: { credits: number; onUpg
 
 // ─── Main Chat component ──────────────────────────────────────────────────────
 export default function Chat() {
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading, refetchUser } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { speak, stop, isPlaying } = useVoice();
@@ -361,6 +377,7 @@ export default function Chat() {
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [workStartedAt, setWorkStartedAt] = useState<number | null>(null);
   const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -376,6 +393,8 @@ export default function Chat() {
   const selectedLane = aiStatus.laneOf(selectedModel.id);
   const laneBlocked = !!selectedLane && !selectedLane.available;
   const userPickedModelRef = useRef(false);
+  // If a payment went through but the webhook/redirect missed it, the server finds and applies it here.
+  const paymentSyncedRef = useRef(false);
   // Header icon row (Live Session / Dashboard / Settings) auto-hides while
   // scrolling forward through messages to give more reading room, and comes
   // back on scroll-up or a tap — the brand row (logo + LENORY) always stays.
@@ -1141,6 +1160,7 @@ export default function Chat() {
       setLatestSources(null); setLatestArtifacts(null);
       setChatAction(null);
       setChatSteps([]);
+      setWorkStartedAt(Date.now());
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();
@@ -1364,11 +1384,17 @@ export default function Chat() {
   // Free → Vision (Ultra/Fast are locked). Pro → Fast (Ultra is locked, but
   // Fast is their real "main" model, not a fallback). Premium/admin → Ultra.
   useEffect(() => {
-    if (authLoading || userPickedModelRef.current) return;
-    const defaultId = userPlan === "premium" || isAdmin ? "lenory-ultra" : userPlan === "pro" ? "lenory-fast" : "lenory-vision";
-    const match = AI_MODELS.find(m => m.id === defaultId);
-    if (match && match.id !== selectedModel.id) setSelectedModel(match);
-  }, [authLoading, userPlan, isAdmin]);
+    if (authLoading || userPickedModelRef.current || !aiStatus.profile) return;
+    const m = AI_MODELS.find((x) => x.id === `lenory-${aiStatus.profile!.lane}`);
+    if (m) setSelectedModel(m);
+  }, [authLoading, aiStatus.profile?.lane]);
+  useEffect(() => {
+    if (authLoading || !user || paymentSyncedRef.current) return;
+    paymentSyncedRef.current = true;
+    apiRequest("POST", "/api/payments/sync", {}).then((r) => r.json()).then(async (d) => {
+      if (d?.applied) { await refetchUser?.(); queryClient.invalidateQueries({ queryKey: ["/api/ai/status"] }); toast({ title: "Plan activated", description: `You're now on the ${d.applied} plan.` }); }
+    }).catch(() => {});
+  }, [authLoading, user]);
 
   // ─── Auth guard ───────────────────────────────────────────────────────────
   if (authLoading || !user) {
@@ -1388,12 +1414,11 @@ export default function Chat() {
   const credits = creditsData?.credits ?? 20;
 
   const getModelLock = (modelId: string): string | null => {
-    if (isAdmin || userPlan === "premium") return null;
-    if (userPlan === "pro" && modelId === "lenory-ultra") return "Requires Premium";
-    if (userPlan === "free" && (modelId === "lenory-ultra" || modelId === "lenory-fast")) {
-      return modelId === "lenory-ultra" ? "Requires Premium" : "Requires Pro";
-    }
-    return null;
+    const allowed = aiStatus.profile?.allowed;
+    if (!allowed) return null;
+    const lane = modelId.replace("lenory-", "") as any;
+    if (allowed.includes(lane)) return null;
+    return lane === "ultra" ? "Requires Premium" : "Requires Pro";
   };
 
   const quickSuggestions = [
@@ -1774,7 +1799,7 @@ export default function Chat() {
                 )}
 
                 {/* Writing / typing indicator */}
-                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} steps={chatSteps} />}
+                {isLoading && streamingAnalysis === null && <TypingIndicator action={chatAction} steps={chatSteps} startedAt={workStartedAt} />}
 
                 <div ref={messagesEndRef} />
               </div>
@@ -1990,6 +2015,7 @@ export default function Chat() {
                               } else {
                                 userPickedModelRef.current = true;
                                 setSelectedModel(model);
+                                apiRequest("PUT", "/api/ai/lane", { lane: model.id }).then(() => queryClient.invalidateQueries({ queryKey: ["/api/ai/status"] })).catch(() => {});
                               }
                             }}
                             className={`flex items-start gap-2 cursor-pointer rounded-xl px-4 py-3 ${selectedModel.id === model.id ? "bg-primary/15" : ""} ${lockMsg ? "opacity-60" : ""}`}
@@ -2103,20 +2129,10 @@ export default function Chat() {
             </div>
 
             <ToolsMiniPage open={toolsOpen} onOpenChange={setToolsOpen} />
-            {(aiStatus.lanes.some((l) => !l.available) || aiStatus.webExhausted) && (
-              <div className="mt-2 space-y-1" data-testid="limit-banner" aria-live="polite">
-                {aiStatus.lanes.filter((l) => !l.available && l.lane !== "search").concat(aiStatus.lanes.filter((l) => !l.available && l.lane === "search")).map((l) => (
-                  <div key={l.lane} className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-1.5 text-xs ${selectedLane?.lane === l.lane ? "border-destructive/40 bg-destructive/10" : "border-border/50 bg-muted/40"}`}>
-                    <span className="font-medium truncate">{l.label} is resting{l.reason ? ` - ${l.reason}` : ""}</span>
-                    <span className="font-mono tabular-nums flex-shrink-0">{l.resetsAt ? `back in ${fmtCountdown(l.left)}` : "unavailable"}</span>
-                  </div>
-                ))}
-                {aiStatus.webExhausted && (
-                  <div className="flex items-center justify-between gap-2 rounded-xl border border-border/50 bg-muted/40 px-3 py-1.5 text-xs">
-                    <span className="font-medium">Web search is off - provider limit used up</span>
-                    <span className="font-mono tabular-nums flex-shrink-0">back in {fmtCountdown(aiStatus.webLeft)}</span>
-                  </div>
-                )}
+            {laneBlocked && selectedLane && (
+              <div className="mt-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs" data-testid="limit-banner" aria-live="polite">
+                <div>LENORY {selectedLane.label.replace("LENORY ", "")} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.</div>
+                {selectedLane.resetsAt && <div className="mt-1 font-mono tabular-nums font-medium">Back in {fmtCountdown(selectedLane.left)}</div>}
               </div>
             )}
 

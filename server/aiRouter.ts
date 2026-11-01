@@ -22,10 +22,11 @@
 
 import { chatWithGemini } from "./gemini";
 
+import { laneContext } from "./laneContext";
 export type ChatMsg = { role: string; content: string };
 
 interface ModelSpec {
-  provider: "openrouter" | "groq";
+  provider: "openrouter" | "groq" | "gemini";
   model: string;
   label: string;
 }
@@ -35,24 +36,33 @@ interface ModelSpec {
 // HTTP 400 "model not found" instead of 429, check https://openrouter.ai/models
 // and swap the ID here. A 400 is treated like any other failure: skip to
 // the next model in the chain, no special handling needed.
-const ULTRA_CHAIN: ModelSpec[] = [
-  { provider: "openrouter", model: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5 (OpenRouter)" },
-  { provider: "openrouter", model: "openai/gpt-5.1", label: "GPT-5.1 (OpenRouter)" },
-  { provider: "openrouter", model: "deepseek/deepseek-v4", label: "DeepSeek V4 (OpenRouter)" },
-  { provider: "openrouter", model: "x-ai/grok-4", label: "Grok 4 (OpenRouter)" },
-  { provider: "openrouter", model: "openrouter/auto", label: "OpenRouter Auto (curated pool)" },
-];
-
-// ─── FAST (Groq) ─────────────────────────────────────────────────────────
-// Groq's free-tier lineup changes often — check
-// https://console.groq.com/docs/deprecations if one of these starts 400ing.
-// Deliberately NOT using llama-3.1-8b-instant / llama-3.3-70b-versatile —
-// Groq is fully retiring both on 2026-08-16.
-const FAST_CHAIN: ModelSpec[] = [
-  { provider: "groq", model: "openai/gpt-oss-120b", label: "GPT-OSS 120B (Groq)" },
-  { provider: "groq", model: "qwen/qwen3-32b", label: "Qwen3 32B (Groq)" },
-  { provider: "groq", model: "meta-llama/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout (Groq)" },
-];
+// --- THE THREE LANES (3 models each; the student's mode decides the provider) ---
+//   Ultra  -> OpenRouter   Fast -> Groq   Vision -> Gemini
+// Order differs by job: simple chat tries the CHEAPEST model first, heavy work tries
+// the STRONGEST first. A model that hits its quota hands over to the next one in the
+// same lane; only when all three rest does the lane show a countdown.
+const M = (provider: ModelSpec["provider"], model: string, label: string): ModelSpec => ({ provider, model, label });
+const SONNET = M("openrouter", "anthropic/claude-sonnet-5", "Claude Sonnet 5");
+const GLM = M("openrouter", "z-ai/glm-5.2", "GLM 5.2");
+const DSEEK = M("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash");
+const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
+const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B");
+const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
+const G35 = M("gemini", "gemini-3.5-flash", "Gemini 3.5 Flash");
+const G3 = M("gemini", "gemini-3-flash-preview", "Gemini 3 Flash");
+const GLITE = M("gemini", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite");
+export type ChatLane = "ultra" | "fast" | "vision";
+export const LANE_ORDER: Record<ChatLane, { heavy: ModelSpec[]; simple: ModelSpec[] }> = {
+  ultra: { heavy: [SONNET, GLM, DSEEK], simple: [DSEEK, GLM, SONNET] },
+  fast: { heavy: [OSS120, QWEN, OSS20], simple: [OSS20, OSS120, QWEN] },
+  vision: { heavy: [G3, G35, GLITE], simple: [GLITE, G3, G35] },
+};
+export const LANE_NAMES: Record<ChatLane, string> = { ultra: "Ultra", fast: "Fast", vision: "Vision" };
+const laneKeyOk = (spec: ModelSpec) => (spec.provider === "openrouter" ? !!process.env.OPENROUTER_API_KEY : spec.provider === "groq" ? !!process.env.GROQ_API_KEY : !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY));
+export const laneChain = (lane: ChatLane, heavy = true): ModelSpec[] => (heavy ? LANE_ORDER[lane].heavy : LANE_ORDER[lane].simple);
+// Legacy names (kept so older callers/tests still work)
+const ULTRA_CHAIN = LANE_ORDER.ultra.heavy;
+const FAST_CHAIN = LANE_ORDER.fast.heavy;
 
 const cooldowns = new Map<string, { until: number; reason: string }>();
 
@@ -81,6 +91,9 @@ function setCooldown(spec: ModelSpec, retryAfterSeconds: number | null, reason: 
   cooldowns.set(cooldownKey(spec), { until, reason });
   console.warn(`⏸️  ${spec.label} on cooldown for ${seconds}s — resets ${new Date(until).toISOString()} — ${reason}`);
 }
+
+/** test helper */
+export const __cooldownsForTest = () => cooldowns;
 
 function parseRetryAfterSeconds(headers: Headers): number | null {
   const ra = headers.get("retry-after");
@@ -139,6 +152,10 @@ async function callModel(spec: ModelSpec, messages: ChatMsg[]): Promise<string> 
     if (!key) throw new Error("No GROQ_API_KEY configured");
     return callOpenAICompatible("https://api.groq.com/openai/v1", key, spec, messages);
   }
+  if (spec.provider === "gemini") {
+    const out = await callGemini(spec, messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : "user", content: m.content })) as any, []);
+    return out.content;
+  }
   throw new Error("Unknown provider: " + spec.provider);
 }
 
@@ -164,30 +181,38 @@ async function runChain(
   return null;
 }
 
-// Main entry point every chat response should go through. Never throws
-// unless literally every provider (including Gemini) failed.
+// Main entry point every chat response should go through. Inside a signed-in request the
+// student's lane decides the provider (Ultra=OpenRouter, Fast=Groq, Vision=Gemini) and we
+// NEVER silently answer with another lane. Outside a request (cron/admin) the legacy
+// Fast-then-Ultra order still applies.
 export async function chatCompletionWithFailover(
   messages: ChatMsg[],
   tier: "ultra" | "fast" = "fast",
 ): Promise<{ text: string; modelUsed: string }> {
+  const ctx = laneContext.getStore();
   const trail: string[] = [];
+  if (ctx) {
+    const heavy = messages.reduce((n, m) => n + (m.content?.length || 0), 0) > 6000;
+    const result = await runChain(laneChain(ctx.lane, heavy), messages, trail);
+    if (!result) throw new Error(`LANE_UNAVAILABLE:${ctx.lane}`);
+    return result;
+  }
   const primaryChain = tier === "ultra" ? ULTRA_CHAIN : FAST_CHAIN;
   const secondaryChain = tier === "ultra" ? FAST_CHAIN : ULTRA_CHAIN;
-
   let result = await runChain(primaryChain, messages, trail);
   if (!result) result = await runChain(secondaryChain, messages, trail);
-
+  if (!result) result = await runChain(LANE_ORDER.vision.simple, messages, trail);
   if (!result) {
-    try {
-      const text = await chatWithGemini(messages as any);
-      trail.push("Gemini 2.5 Flash (last resort)");
-      return { text, modelUsed: "Gemini 2.5 Flash" };
-    } catch (e: any) {
-      console.error(`🔥 All AI providers failed. Chain tried: ${trail.join(" → ")}`);
-      throw new Error("All AI providers are currently unavailable");
-    }
+    console.error(`All AI providers failed. Chain tried: ${trail.join(" -> ")}`);
+    throw new Error("All AI providers are currently unavailable");
   }
   return result;
+}
+
+/** Best currently-working Gemini model id (used by every direct Gemini feature call). */
+export function pickGeminiModel(heavy = false): string {
+  for (const spec of laneChain("vision", heavy)) if (!isOnCooldown(spec)) return spec.model;
+  return laneChain("vision", heavy)[0].model;
 }
 
 // Lets Felix (or an admin panel) check what's currently on cooldown and when
@@ -247,14 +272,15 @@ export type LaneId = "ultra" | "fast" | "vision" | "search";
 export interface LaneStatus { lane: LaneId; label: string; available: boolean; resetsAt: string | null; resetsInSeconds: number; reason: string | null }
 
 function chainStatus(chain: ModelSpec[]): { available: boolean; until: number | null; reason: string | null } {
-  let earliest: number | null = null; let reason: string | null = null;
+  let earliest: number | null = null; let reason: string | null = null; let anyKey = false;
   for (const spec of chain) {
-    const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
-    if (!key) continue;
+    if (!laneKeyOk(spec)) continue;
+    anyKey = true;
     const c = cooldowns.get(cooldownKey(spec));
     if (!c || Date.now() > c.until) return { available: true, until: null, reason: null };
     if (earliest === null || c.until < earliest) { earliest = c.until; reason = c.reason; }
   }
+  if (!anyKey) return { available: false, until: null, reason: "Not configured on the server" };
   return { available: false, until: earliest, reason };
 }
 function friendlyReason(r: string | null): string | null {
@@ -277,7 +303,7 @@ export function getLaneStatuses(): LaneStatus[] {
     const c = getExternalCooldown(key);
     return c ? { available: false, until: c.until, reason: c.reason } : { available: true, until: null as number | null, reason: null as string | null };
   };
-  const fast = chainStatus(FAST_CHAIN);
+  const fast = chainStatus(LANE_ORDER.fast.heavy);
   // Search needs a working web provider (Tavily and/or Gemini) AND a chat model to write the answer.
   const tav = ext("tavily:search", !!process.env.TAVILY_API_KEY);
   const gem = ext("gemini:search", !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY));
@@ -285,9 +311,9 @@ export function getLaneStatuses(): LaneStatus[] {
     : { available: false, until: (() => { const v = [tav.until, gem.until].filter((x): x is number => !!x); return v.length ? Math.min(...v) : null; })(), reason: tav.until || gem.until ? "Search provider limit reached" : "Search is not configured on the server" };
   const searchAll = !searchWeb.available ? searchWeb : fast.available ? searchWeb : fast;
   return [
-    mk("ultra", "LENORY Ultra", chainStatus(ULTRA_CHAIN)),
+    mk("ultra", "LENORY Ultra", chainStatus(LANE_ORDER.ultra.heavy)),
     mk("fast", "LENORY Fast", fast),
-    mk("vision", "LENORY Vision", ext("gemini:vision", !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY))),
+    mk("vision", "LENORY Vision", chainStatus(LANE_ORDER.vision.heavy)),
     mk("search", "LENORY Search", searchAll),
   ];
 }
@@ -336,6 +362,97 @@ export type AgentMsg =
   | { role: "system" | "user"; content: string }
   | { role: "assistant"; content: string | null; tool_calls?: any[] }
   | { role: "tool"; tool_call_id: string; content: string };
+
+// --- Gemini (REST) with native function calling ---------------------------------
+const stripSchema = (sch: any): any => {
+  if (Array.isArray(sch)) return sch.map(stripSchema);
+  if (sch && typeof sch === "object") {
+    const out: any = {};
+    for (const [k, v] of Object.entries(sch)) { if (k === "additionalProperties" || k === "$schema" || k === "default") continue; out[k] = stripSchema(v); }
+    return out;
+  }
+  return sch;
+};
+async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSchema[]): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
+  const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("No Gemini API key configured");
+  const names = new Map<string, string>();
+  const contents: any[] = [];
+  let system = "";
+  for (const m of messages as any[]) {
+    if (m.role === "system") { system += (system ? "\n\n" : "") + m.content; continue; }
+    if (m.role === "user") { contents.push({ role: "user", parts: [{ text: String(m.content ?? "") }] }); continue; }
+    if (m.role === "assistant") {
+      for (const tc of m.tool_calls || []) names.set(tc.id, tc.function?.name);
+      const parts = m._geminiParts || [
+        ...(m.content ? [{ text: m.content }] : []),
+        ...(m.tool_calls || []).map((tc: any) => ({ functionCall: { name: tc.function.name, args: (() => { try { return JSON.parse(tc.function.arguments || "{}"); } catch { return {}; } })() } })),
+      ];
+      if (parts.length) contents.push({ role: "model", parts });
+      continue;
+    }
+    if (m.role === "tool") {
+      const part = { functionResponse: { name: names.get(m.tool_call_id) || "tool", response: { result: String(m.content ?? "") } } };
+      const last = contents[contents.length - 1];
+      if (last && last.role === "user" && last.parts.every((p: any) => p.functionResponse)) last.parts.push(part);
+      else contents.push({ role: "user", parts: [part] });
+    }
+  }
+  if (!contents.length) contents.push({ role: "user", parts: [{ text: "Hello" }] });
+  const body: any = { contents, generationConfig: { temperature: 0.4, maxOutputTokens: 8192 } };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+  if (tools.length) body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.function.name, description: t.function.description, ...(Object.keys(t.function.parameters?.properties || {}).length ? { parameters: stripSchema(t.function.parameters) } : {}) })) }];
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${spec.model}:generateContent`, {
+    method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 429 || res.status === 403) setCooldown(spec, parseRetryDelaySeconds(text) ?? (/per day|daily/i.test(text) ? 3600 : 60), `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const data: any = await res.json();
+  if (data.promptFeedback?.blockReason) throw new Error(`${spec.label} flagged this request (${data.promptFeedback.blockReason}) - switching model`);
+  const cand = data.candidates?.[0];
+  if (cand?.finishReason === "SAFETY" || cand?.finishReason === "PROHIBITED_CONTENT") throw new Error(`${spec.label} flagged this request - switching model`);
+  const parts: any[] = cand?.content?.parts || [];
+  const content = parts.filter((p) => typeof p.text === "string" && !p.thought).map((p) => p.text).join("");
+  const toolCalls: ToolCall[] = parts.filter((p) => p.functionCall).map((p, i) => ({ id: `gem_${Date.now()}_${i}`, name: p.functionCall.name, arguments: p.functionCall.args || {}, argumentsRaw: JSON.stringify(p.functionCall.args || {}) }));
+  if (!content.trim() && !toolCalls.length) throw new Error(`${spec.label} returned an empty response`);
+  return {
+    content, toolCalls,
+    rawAssistant: { role: "assistant", content: content || null, _geminiParts: parts, ...(toolCalls.length ? { tool_calls: toolCalls.map((t) => ({ id: t.id, type: "function", function: { name: t.name, arguments: t.argumentsRaw } })) } : {}) },
+  };
+}
+
+/** One call for a lane: tries that lane's 3 models in order (cheapest-first for simple, strongest-first for heavy). */
+export async function chatWithLane(
+  messages: AgentMsg[], tools: ToolSchema[], lane: ChatLane, heavy: boolean,
+): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any; modelUsed: string }> {
+  const trail: string[] = [];
+  for (const spec of laneChain(lane, heavy)) {
+    if (!laneKeyOk(spec)) { trail.push(`${spec.label} (no key)`); continue; }
+    if (isOnCooldown(spec)) { trail.push(`${spec.label} (resting)`); continue; }
+    try { await throttle(spec.provider); } catch (te: any) {
+      setCooldown(spec, Math.ceil((Number(String(te?.message).split(":")[1]) || 30000) / 1000), "throttled to protect the provider limit");
+      trail.push(`${spec.label} (busy)`); continue;
+    }
+    try {
+      let out;
+      if (spec.provider === "gemini") out = await callGemini(spec, messages, tools);
+      else {
+        const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY! : process.env.GROQ_API_KEY!;
+        const base = spec.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.groq.com/openai/v1";
+        const extra = spec.provider === "openrouter" ? { "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" } : undefined;
+        out = await callOpenAICompatibleTools(base, key, spec, messages, tools, extra);
+      }
+      return { ...out, modelUsed: spec.label };
+    } catch (e: any) {
+      trail.push(`${spec.label}: ${String(e?.message || "").slice(0, 80)}`);
+      console.warn(`[lane ${lane}] ${spec.label} failed, trying next:`, e?.message);
+    }
+  }
+  throw new Error(`LANE_UNAVAILABLE:${lane}:${trail.join(" | ")}`);
+}
 
 async function callOpenAICompatibleTools(
   baseUrl: string,
@@ -400,30 +517,10 @@ export async function chatWithToolsFailover(
   tier: "ultra" | "fast" = "fast",
   strict = false,
 ): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any; modelUsed: string }> {
-  const trail: string[] = [];
-  // strict = the student chose this exact model: never silently answer with a different one.
-  const chains = strict ? [tier === "ultra" ? ULTRA_CHAIN : FAST_CHAIN] : tier === "ultra" ? [ULTRA_CHAIN, FAST_CHAIN] : [FAST_CHAIN, ULTRA_CHAIN];
-  for (const chain of chains) {
-    for (const spec of chain) {
-      if (isOnCooldown(spec)) { trail.push(`${spec.label} (cooling down)`); continue; }
-      try {
-        try { await throttle(spec.provider); } catch (te: any) {
-          const ms = Number(String(te?.message).split(":")[1]) || 30000;
-          setCooldown(spec, Math.ceil(ms / 1000), "throttled to protect the provider limit");
-          trail.push(`${spec.label} (busy)`); continue;
-        }
-        const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GROQ_API_KEY;
-        if (!key) throw new Error(`No ${spec.provider.toUpperCase()}_API_KEY configured`);
-        const base = spec.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.groq.com/openai/v1";
-        const extra = spec.provider === "openrouter" ? { "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" } : undefined;
-        const out = await callOpenAICompatibleTools(base, key, spec, messages, tools, extra);
-        return { ...out, modelUsed: spec.label };
-      } catch (e: any) {
-        trail.push(`${spec.label} (failed: ${String(e?.message || "").slice(0, 80)})`);
-        console.warn(`[tools] model failed, trying next — ${spec.label}:`, e?.message);
-      }
-    }
+  const lanes: ChatLane[] = strict ? [tier] : tier === "ultra" ? ["ultra", "fast"] : ["fast", "ultra"];
+  let lastErr: any;
+  for (const lane of lanes) {
+    try { return await chatWithLane(messages, tools, lane, true); } catch (e) { lastErr = e; }
   }
-  console.error(`🔥 No provider could run the tool agent. Tried: ${trail.join(" → ")}`);
-  throw new Error("All AI providers are currently unavailable");
+  throw new Error("All AI providers are currently unavailable. " + String(lastErr?.message || ""));
 }

@@ -98,10 +98,18 @@ export default function Pricing() {
   // credits, and show a clear confirmation before clearing the URL.
   useEffect(() => {
     if (authLoading || !user) return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("payment") !== "success") return;
-    const reference = params.get("reference") || params.get("trxref");
-    if (!reference) return;
+    // Paystack can append its own "?reference=" to our callback URL, so read the raw address instead of trusting URLSearchParams.
+    const href = window.location.href;
+    if (!/[?&]payment=success/.test(href)) return;
+    const m = href.match(/(?:reference|trxref)=([^&?#]+)/);
+    const reference = m ? decodeURIComponent(m[1]) : null;
+    if (!reference) {
+      // no reference in the address: let the server check every payment we started for this account
+      apiRequest("POST", "/api/payments/sync", {}).then((r) => r.json()).then(async (d) => {
+        if (d?.applied) { toast({ title: "Payment confirmed!", description: `You're now on the ${d.applied} plan.` }); await refetchUser(); }
+      }).catch(() => {}).finally(() => window.history.replaceState({}, "", "/pricing"));
+      return;
+    }
 
     setConfirmingPayment(true);
     (async () => {

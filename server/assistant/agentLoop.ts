@@ -7,7 +7,7 @@
  * a file/folder/save that no successful tool call produced, it is made to
  * correct itself, and if it still doesn't, an honest notice is appended.
  */
-import { chatWithToolsFailover, type AgentMsg, type ToolSchema } from "../aiRouter";
+import { chatWithLane, type AgentMsg, type ToolSchema, type ChatLane } from "../aiRouter";
 import type { ArtifactRef, AssistantStatus, Citation, ToolContext, ToolResult } from "./types";
 import { isWebSearchExhausted } from "../aiRouter";
 import { loadUserCapabilities, sanitizeCapabilities, type UserCapabilities } from "./capabilities";
@@ -25,6 +25,8 @@ export interface AgentInput {
   tier?: "fast" | "ultra";
   /** The student picked this exact model: never silently switch tiers. */
   strictLane?: boolean;
+  /** The mode the student is on. Ultra=OpenRouter, Fast=Groq, Vision=Gemini - all use the SAME tools. */
+  lane?: ChatLane;
   capabilities?: Partial<UserCapabilities> | null;
   sessionId?: string | null;
   onStatus?: (status: AssistantStatus, detail?: string) => void;
@@ -40,6 +42,7 @@ export interface AgentResult {
   modelUsed: string;
   folders: { id: string; name: string }[];
   cancelled?: boolean;
+  steps?: number;
 }
 
 type Def = { schema: ToolSchema; cap: keyof UserCapabilities; intent: RegExp; run: (ctx: ToolContext, a: any) => Promise<ToolResult> };
@@ -132,12 +135,17 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   let answer = "";
   let corrected = false;
 
+  let stepsRun = 0;
   for (let step = 0; step < MAX_STEPS; step++) {
+    stepsRun = step + 1;
     input.onStatus?.(step === 0 ? "understanding" : "planning");
     if (input.isCancelled?.()) { input.onStatus?.("cancelled"); return { answer: "Stopped.", artifacts, citations, toolsUsed, failedTools, modelUsed, folders, cancelled: true }; }
     // Cost-aware routing: cheap model for chat, stronger one for long-form / research work.
-    const heavy = input.strictLane ? input.tier === "ultra" : input.tier === "ultra" || toolsUsed.includes("web_research") || (step === 0 && lastUser.length > 600) || /\b(report|essay|assignment|thesis|project work|dissertation|presentation|slides|research|in detail|step by step|prove|derive)\b/i.test(lastUser);
-    const out = await chatWithToolsFailover(messages, schemas, heavy ? "ultra" : "fast", !!input.strictLane);
+    // Heavy = long, tool-driven or multi-step work -> the lane tries its strongest model first.
+    // Simple chat -> its cheapest first. (Only the ORDER changes; the lane's provider never does.)
+    const lane: ChatLane = input.lane || (input.tier === "ultra" ? "ultra" : "fast");
+    const heavy = step > 0 || toolsUsed.length > 0 || lastUser.length > 600 || /\b(report|essay|assignment|thesis|dissertation|presentation|slides|research|in detail|step by step|prove|derive|spreadsheet|excel|pdf|word document)\b/i.test(lastUser);
+    const out = await chatWithLane(messages as any, schemas, lane, heavy);
     modelUsed = out.modelUsed;
 
     if (!out.toolCalls.length) {
@@ -193,5 +201,5 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
         : "I wasn't able to produce a response. Please try again.";
   }
   input.onStatus?.(failedTools.length && !artifacts.length ? "failed" : "completed");
-  return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders };
+  return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders, steps: stepsRun };
 }

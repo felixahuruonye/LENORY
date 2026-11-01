@@ -4,7 +4,8 @@ import { apiRequest } from "@/lib/queryClient";
 
 export type LaneId = "ultra" | "fast" | "vision" | "search";
 export interface Lane { lane: LaneId; label: string; available: boolean; resetsAt: string | null; resetsInSeconds: number; reason: string | null }
-interface Status { lanes: Lane[]; webSearch: { exhausted: boolean; resetsAt: string | null }; serverTime: string }
+interface Profile { lane: LaneId; allowed: LaneId[]; plan: string; isAdmin: boolean }
+interface Status { profile?: Profile; lanes: Lane[]; webSearch: { exhausted: boolean; resetsAt: string | null }; serverTime: string }
 
 /** Live provider-limit state for every LENORY model + web search. Same for every chat, every device. */
 export function useAiStatus() {
@@ -26,7 +27,7 @@ export function useAiStatus() {
   });
   const web = data?.webSearch;
   const webLeft = secondsLeft(web?.resetsAt || null);
-  return { lanes, webExhausted: !!web?.exhausted && webLeft > 0, webLeft, laneOf: (id: string) => lanes.find((l) => l.lane === id.replace(/^lenory-/, "")) };
+  return { profile: data?.profile, lanes, webExhausted: !!web?.exhausted && webLeft > 0, webLeft, laneOf: (id: string) => lanes.find((l) => l.lane === id.replace(/^lenory-/, "")) };
 }
 
 export const fmtCountdown = (s: number) => {

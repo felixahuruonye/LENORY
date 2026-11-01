@@ -3,6 +3,8 @@
 // process restarts (use a Redis/BullMQ layer later for multi-instance).
 // Caps concurrent heavy AI work so we stay under provider rate limits.
 
+import { trackJob } from "./jobStats";
+
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
 export interface JobRecord {
@@ -90,17 +92,21 @@ async function pump() {
     if (!handler) {
       job.status = "failed";
       job.error = `No handler for job type ${job.type}`;
+      trackJob(`queue:${job.type}`)(false);
       job.updatedAt = Date.now();
       running--;
       continue;
     }
+    const endJob = trackJob(`queue:${job.type}`);
     handler(job)
       .then((result) => {
+        endJob(true);
         job.result = result;
         job.status = "done";
         job.updatedAt = Date.now();
       })
       .catch((err: any) => {
+        endJob(false);
         job.error = err?.message || String(err);
         job.status = "failed";
         job.updatedAt = Date.now();

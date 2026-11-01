@@ -14,6 +14,9 @@ import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueu
 
 
 
+import { NIGERIAN_WRITING_POLICY } from "./assistant/writingPolicy";
+import { getJobStats, trackJob } from "./jobStats";
+import { getLaneProfile, saveLane, laneCost, isHeavyJob, ALL_LANES } from "./assistant/lanes";
 import { prefsBlockFor, loadMemoryPrefs, saveMemoryPrefs, PREF_FIELDS, buildPrefsBlock } from "./assistant/memoryPrefs";
 import { loadUserCapabilities, saveUserCapabilities, DEFAULT_CAPABILITIES, sanitizeCapabilities, capabilityAvailability } from "./assistant/capabilities";
 import { runToolAgent } from "./assistant/agentLoop";
@@ -420,9 +423,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // ── User Capabilities (Claude-style toggles) ─────────────────────────────
   // Live state of every model lane + web search, for the countdown timers under the chat box.
-  app.get("/api/ai/status", supabaseAuth, (_req: any, res) => {
+  app.get("/api/ai/status", supabaseAuth, async (req: any, res) => {
     const ws = isWebSearchExhausted();
-    res.json({ lanes: getLaneStatuses(), webSearch: { exhausted: ws.exhausted, resetsAt: ws.resetsAt }, serverTime: new Date().toISOString() });
+    const profile = await getLaneProfile(req.userId);
+    res.json({ lanes: getLaneStatuses().filter((l) => (l.lane as string) !== "search"), profile, webSearch: { exhausted: ws.exhausted, resetsAt: ws.resetsAt }, serverTime: new Date().toISOString() });
+  });
+  // The student's chosen mode lives on the server, so it survives restarts and new devices.
+  app.put("/api/ai/lane", supabaseAuth, async (req: any, res) => {
+    const lane = String(req.body?.lane || "").replace(/^lenory-/, "");
+    const profile = await getLaneProfile(req.userId);
+    if (!["ultra", "fast", "vision"].includes(lane)) return res.status(400).json({ message: "Unknown mode" });
+    if (!profile.allowed.includes(lane as any)) return res.status(403).json({ message: `Your plan does not include LENORY ${lane}. Upgrade to unlock it.`, allowed: profile.allowed });
+    await saveLane(req.userId, lane as any);
+    res.json({ success: true, profile: await getLaneProfile(req.userId) });
   });
   app.get("/api/capabilities", supabaseAuth, async (req: any, res) => {
     try {
@@ -657,21 +670,26 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
       // 10-100x. Ultra messages now cost more, and a linked KB folder adds a
       // surcharge on top since it injects extra tokens into every message in
       // that session, not just this one.
-      systemMessage += await prefsBlockFor(userId);
+      systemMessage += NIGERIAN_WRITING_POLICY + (await prefsBlockFor(userId));
 
       // --- Model lane: the student's exact choice (Ultra / Fast / Vision / Search) ---
       // Nobody bypasses provider limits, admins included: if the chosen lane is resting
       // we say exactly when it works again and charge nothing.
-      const rawLane = String(req.body?.model || "").replace(/^lenory-/, "");
-      let laneId: "ultra" | "fast" | "vision" | "search" = (["ultra", "fast", "vision", "search"].includes(rawLane) ? rawLane : isAdvanced ? "ultra" : "fast") as any;
-      if (laneId === "ultra" && !isAdvanced) laneId = "fast";
+      const laneProfile = (req as any).laneProfile || (await getLaneProfile(userId, user));
+      const wantedLane = String(req.body?.model || "").replace(/^lenory-/, "");
+      // The student's plan decides which modes they may use (free: Vision, pro: +Fast, premium/admin: +Ultra).
+      let laneId: "ultra" | "fast" | "vision" = (["ultra", "fast", "vision"].includes(wantedLane) && laneProfile.allowed.includes(wantedLane as any) ? wantedLane : laneProfile.lane) as any;
+      const laneName = { ultra: "Ultra", fast: "Fast", vision: "Vision" }[laneId];
       const laneInfo = getLaneStatuses().find((l) => l.lane === laneId)!;
+      const resting = `LENORY ${laneName} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.`;
+      // Provider limits apply to everyone, admins included. Nothing is charged while a mode rests.
       if (!laneInfo.available) {
-        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo.label, reason: laneInfo.reason, resetsAt: laneInfo.resetsAt, resetsInSeconds: laneInfo.resetsInSeconds, message: `${laneInfo.label} is resting${laneInfo.resetsAt ? ` until ${new Date(laneInfo.resetsAt).toUTCString()}` : ""}.` });
+        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo.label, reason: laneInfo.reason, resetsAt: laneInfo.resetsAt, resetsInSeconds: laneInfo.resetsInSeconds, message: resting });
       }
+      const [simpleCost, heavyCost, kbExtra, pasteExtra] = await Promise.all([laneCost(laneId, false), laneCost(laneId, true), getFeatureCost("chat_kb_context_extra"), getFeatureCost("chat_long_paste_extra")]);
 
       const hasKbContext = !!kbFolderContext;
-      const totalCost = (isAdvanced ? 4 : 1) + (hasKbContext ? 1 : 0) + (isLongPaste ? 12 : 0);
+      const totalCost = simpleCost + (hasKbContext ? kbExtra : 0) + (isLongPaste ? pasteExtra : 0);
       if (user?.email !== REAL_ADMIN_EMAIL) {
         const credits = await getOrCreateCredits(userId, realUserTier);
         if (credits.balance < totalCost) {
@@ -717,29 +735,23 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       } else {
         try {
           const tier = laneId === "ultra" ? "ultra" : "fast";
-          let agentRes: any;
-          if (laneId === "vision") {
-            // Vision lane = Gemini (reads images/files). No tool calling here - say so honestly.
-            sendStatus("thinking", 5, "LENORY Vision (Gemini)");
-            const gm = await chatWithGemini([
-              { role: "user", content: systemMessage + "\n\n## MODE\nYou are LENORY Vision. You can read images and files the student attached. You cannot create files, search the web or run tools in this mode - if asked, say that and suggest switching to LENORY Fast or Ultra." },
-              { role: "assistant", content: "Understood." },
-              ...history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })),
-            ]);
-            agentRes = { answer: gm, modelUsed: "Gemini 2.5 Flash", artifacts: [], toolsUsed: [], folders: [], citations: [], failedTools: [] };
-          } else {
-            agentRes = await runToolAgent({
-              userId,
-              systemMessage,
-              history: history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })) as any,
-              tier,
-              strictLane: true,
-              capabilities: { ...sanitizeCapabilities(req.body?.capabilities), ...(laneId === "search" ? { webSearch: true, toolAccess: "always" as const } : {}) },
-              sessionId,
-              onStatus: (st, d) => sendStatus(st, 6, d),
-              isCancelled: () => clientGone,
-            });
-          }
+          const endJob = trackJob(`chat:${laneId}`);
+          let agentRes: Awaited<ReturnType<typeof runToolAgent>>;
+          try {
+          agentRes = await runToolAgent({
+            userId,
+            systemMessage,
+            history: history.slice(-20).map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "") })) as any,
+            tier,
+            lane: laneId,
+            strictLane: true,
+            capabilities: sanitizeCapabilities(req.body?.capabilities),
+            sessionId,
+            onStatus: (st, d) => sendStatus(st, 6, d),
+            isCancelled: () => clientGone,
+          });
+          endJob(true);
+          } catch (agentErr) { endJob(false); throw agentErr; }
           const result = { text: agentRes.answer, modelUsed: agentRes.modelUsed };
           agentArtifacts = agentRes.artifacts;
           agentTools = agentRes.toolsUsed;
@@ -747,6 +759,10 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
           searchSources = agentRes.citations.map((c) => ({ title: c.title, link: c.url, snippet: c.snippet || "" }));
           aiResponse = result.text;
           modelUsedForLog = result.modelUsed;
+          // Charge by what the job really was: tools / several steps / long work = heavy price.
+          if (user?.email !== REAL_ADMIN_EMAIL && isHeavyJob({ toolsUsed: agentRes.toolsUsed, steps: agentRes.steps, question: content, answer: aiResponse, hasMedia: !!(req.body?.attachments?.length) }) && heavyCost > simpleCost) {
+            try { await deductCredits(userId, heavyCost - simpleCost); } catch {}
+          }
           if (!aiResponse || aiResponse.trim() === "") aiResponse = "I received your message but had trouble formulating a response. Please try again.";
 
           // PASS 2 — independent verification, same model tier the user
@@ -794,11 +810,10 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
             }
           }
         } catch (aiError: any) {
-          if (laneId === "vision" && /429|RESOURCE_EXHAUSTED|quota/i.test(String(aiError?.message))) setExternalCooldown("gemini:vision", parseRetryDelaySeconds(String(aiError?.message)) || 60, "Gemini rate limit");
-          const li = getLaneStatuses().find((l) => l.lane === laneId);
-          aiResponse = li && !li.available && li.resetsAt
-            ? `${li.label} hit its provider limit and is resting. It will work again at ${new Date(li.resetsAt).toUTCString()} (about ${Math.ceil(li.resetsInSeconds / 60)} min). Your message was not answered.`
-            : `${li?.label || "This model"} could not answer just now (${String(aiError?.message || "unknown error").slice(0, 120)}). Please try again, or pick another model.`;
+          // Exactly the wording the product uses when a mode cannot answer; the countdown shows under the chat.
+          const nm = ({ ultra: "Ultra", fast: "Fast", vision: "Vision" } as any)[laneId];
+          aiResponse = `LENORY ${nm} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.`;
+          console.warn(`[lane ${laneId}] failed:`, String(aiError?.message || aiError).slice(0, 200));
         }
       }
       sendStatus("writing", 6);
@@ -924,16 +939,27 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
           }));
         }
       }
+      const lpLive = (req as any).laneProfile || (await getLaneProfile(userId));
+      const wantLive = String(req.body?.model || "").replace(/^lenory-/, "");
+      const laneIdLive: "ultra" | "fast" | "vision" = (["ultra", "fast", "vision"].includes(wantLive) && lpLive.allowed.includes(wantLive as any) ? wantLive : lpLive.lane) as any;
+      const liveInfo = getLaneStatuses().find((l) => l.lane === laneIdLive)!;
+      if (!liveInfo.available) {
+        const nm = ({ ultra: "Ultra", fast: "Fast", vision: "Vision" } as any)[laneIdLive];
+        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneIdLive, label: liveInfo.label, resetsAt: liveInfo.resetsAt, resetsInSeconds: liveInfo.resetsInSeconds, message: `LENORY ${nm} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.` });
+      }
+      const endLive = trackJob(`live:${laneIdLive}`);
       const orch0 = await runToolAgent({
         userId,
-        systemMessage: `You are LENORY, an AI learning assistant for Nigerian students. Be clear, accurate and concise unless asked for detail. The student is ${user?.firstName || "Friend"}.` + (await prefsBlockFor(userId)),
+        systemMessage: `You are LENORY, an AI learning assistant for Nigerian students. Be clear, accurate and concise unless asked for detail. The student is ${user?.firstName || "Friend"}.` + NIGERIAN_WRITING_POLICY + (await prefsBlockFor(userId)),
         history: [...historyMsgs, { role: "user" as const, content }],
         tier: advanced ? "ultra" : "fast",
+        lane: laneIdLive,
+        strictLane: true,
         capabilities: sanitizeCapabilities(req.body?.capabilities),
         sessionId,
         onStatus: (st, d) => sendStatus(st, 6, d),
             isCancelled: () => clientGone,
-      });
+      }).then((r) => { endLive(true); return r; }, (e) => { endLive(false); throw e; });
       const orch = { answer: orch0.answer, citations: orch0.citations, artifacts: orch0.artifacts, toolsUsed: orch0.toolsUsed, status: orch0.failedTools.length && !orch0.artifacts.length ? "failed" : "completed" };
       if (sessionId) {
         try {
@@ -1547,7 +1573,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       if (!feature || !Number.isFinite(cost) || cost < 0) {
         return res.status(400).json({ message: "feature and non-negative cost required" });
       }
-      const ok = await setFeatureCost(feature, cost);
+      const ok = await setFeatureCost(feature, cost, req.userId);
       if (!ok) {
         return res.status(500).json({
           message: "Failed to save — ensure feature_costs table exists in Supabase (see server comment)",
@@ -1565,7 +1591,9 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     try {
       const requester = await storage.getUser(req.userId);
       if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
-      res.json(getQueueStats());
+      const q: any = getQueueStats();
+      const stats = await getJobStats(String(req.query.period || "now") as any, req.query.from as string, req.query.to as string, q.queued, q.maxConcurrent, q.running);
+      res.json(stats);
     } catch (error) {
       res.status(500).json({ message: "Failed to read job queue" });
     }
@@ -3373,6 +3401,46 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     }
   });
 
+  // One place that applies a paid plan. Safe to call from the redirect check, the webhook and the
+  // background sync: the plan is always (re)applied, credits are added only ONCE per payment reference.
+  const applyTierUpgrade = async (userId: string, tierId: string, reference: string, customerEmail?: string): Promise<boolean> => {
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + 1);
+    const updated = await storage.updateUser(userId, { subscriptionTier: tierId, subscriptionExpiresAt: expiresAt, ...(customerEmail ? { paystackCustomerId: customerEmail } : {}) } as any);
+    const persisted = !!updated && (updated as any).subscriptionTier === tierId;
+    if (!persisted) logAdminError("payments", `subscriptionTier did NOT persist for user ${userId} -> ${tierId} (ref ${reference})`);
+    const claimed = await tryClaimReference(reference, "tier_upgrade", userId, 0);
+    if (claimed) {
+      const { dailyAdd } = await getTierLimits(tierId);
+      await getOrCreateCredits(userId, tierId);
+      await addCredits(userId, dailyAdd, tierId);
+    }
+    return persisted;
+  };
+  // Payments we started but have not confirmed yet (covers a missed webhook or a broken redirect)
+  const pendingPayments = async (userId: string) => (await storage.getMemoryEntriesByUser(userId)).filter((r: any) => r.type === "payment_pending");
+  app.post('/api/payments/sync', supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const userId = req.userId;
+      const pend: any[] = await pendingPayments(userId);
+      if (!pend.length) return res.json({ success: true, pending: 0, applied: null });
+      let applied: string | null = null;
+      for (const row of pend) {
+        const ref = row.data?.reference; if (!ref) { await storage.deleteMemoryEntry(userId, row.id); continue; }
+        const age = Date.now() - new Date(row.createdAt || row.data?.at || Date.now()).getTime();
+        let v: any;
+        try { v = await verifyPayment(ref); } catch { continue; }
+        if (v?.status && v.data?.status === "success" && v.data.metadata?.userId === userId && v.data.metadata?.tierId) {
+          const ok = await applyTierUpgrade(userId, v.data.metadata.tierId, ref, v.data.customer?.email);
+          if (ok) { applied = v.data.metadata.tierId; await storage.deleteMemoryEntry(userId, row.id); }
+        } else if (age > 3 * 86400_000 || v?.data?.status === "failed" || v?.data?.status === "abandoned") {
+          await storage.deleteMemoryEntry(userId, row.id);
+        }
+      }
+      res.json({ success: true, pending: pend.length, applied });
+    } catch (e: any) { res.status(500).json({ message: "Could not check payments" }); }
+  });
+
   app.post('/api/payments/initialize', supabaseAuth, async (req: any, res: Response) => {
     try {
       const userId = req.userId;
@@ -3397,6 +3465,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         "/pricing?payment=success"
       );
       if (paystackResponse.status) {
+        try { await storage.createMemoryEntry({ userId, type: "payment_pending", data: { reference, tierId, at: new Date().toISOString() } as any } as any); } catch {}
         res.json({
           success: true,
           authorizationUrl: paystackResponse.data.authorization_url,
@@ -3425,20 +3494,9 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         if (!verifiedTierId || verifiedUserId !== userId) {
           return res.status(403).json({ message: "This payment reference doesn't match your account or plan." });
         }
-        const expiresAt = new Date();
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-        const updated = await storage.updateUser(userId, {
-          subscriptionTier: verifiedTierId,
-          subscriptionExpiresAt: expiresAt,
-          paystackCustomerId: paystackResponse.data.customer.email,
-        });
-        if (!updated || (updated as any).subscriptionTier !== verifiedTierId) {
-          logAdminError("payments-verify", `updateUser did not persist subscriptionTier for user ${userId} -> ${verifiedTierId}`);
-          return res.status(500).json({ message: "Payment verified but upgrade failed to save. Contact support with your reference." });
-        }
-        const { dailyAdd } = await getTierLimits(verifiedTierId);
-        await getOrCreateCredits(userId, verifiedTierId);
-        await addCredits(userId, dailyAdd, verifiedTierId);
+        const persisted = await applyTierUpgrade(userId, verifiedTierId, reference, paystackResponse.data.customer?.email);
+        if (!persisted) return res.status(500).json({ message: "Payment verified but upgrade failed to save. Contact support with your reference." });
+        try { for (const r of await pendingPayments(userId)) if ((r as any).data?.reference === reference) await storage.deleteMemoryEntry(userId, (r as any).id); } catch {}
         res.json({ success: true, message: "Subscription activated", tier: verifiedTierId });
       } else {
         res.status(400).json({ message: "Payment verification failed" });
@@ -3507,25 +3565,9 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           logAdminError("paystack-webhook", `charge.success missing metadata: ${JSON.stringify(meta)}`);
           return;
         }
-        const claimed = await tryClaimReference(reference, "tier_upgrade", userId, 0);
-        if (!claimed) {
-          console.log(`Paystack webhook: tier_upgrade ${reference} already processed, skipping to avoid double-crediting.`);
-          return;
-        }
-        const expiresAt = new Date();
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-        const updated = await storage.updateUser(userId, {
-          subscriptionTier: tierId,
-          subscriptionExpiresAt: expiresAt,
-          paystackCustomerId: event.data.customer?.email,
-        } as any);
-        if (!updated || (updated as any).subscriptionTier !== tierId) {
-          logAdminError("paystack-webhook", `subscriptionTier did NOT persist for user ${userId} -> ${tierId} (ref: ${event.data.reference}). Credits will still be added below — this is exactly the bug where credits update but tier doesn't.`);
-        }
-        const { dailyAdd } = await getTierLimits(tierId);
-        await getOrCreateCredits(userId, tierId);
-        await addCredits(userId, dailyAdd, tierId);
-        console.log(`✅ Paystack webhook: user ${userId} upgraded to ${tierId}, credits topped up`);
+        await applyTierUpgrade(userId, tierId, reference, event.data.customer?.email);
+        try { for (const r of await pendingPayments(userId)) if ((r as any).data?.reference === reference) await storage.deleteMemoryEntry(userId, (r as any).id); } catch {}
+        console.log(`Paystack webhook: user ${userId} upgraded to ${tierId}`);
       } else if (event.event === "subscription.disable" || event.event === "subscription.not_renew") {
         const { userId } = event.data.metadata || event.data || {};
         if (userId) {

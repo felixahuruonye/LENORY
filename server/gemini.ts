@@ -102,7 +102,7 @@ REQUIREMENTS:
           while (retries < maxRetries) {
             try {
               const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
+                model: await geminiModelId(),
                 contents: prompt,
               });
 
@@ -273,7 +273,7 @@ Analyze the answers and return ONLY valid JSON (no other text):
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -356,7 +356,7 @@ export async function searchInternetWithGemini(query: string, opts: { depth?: 'b
     console.log("🔍 Falling back to Gemini search:", query);
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: `You are a web search assistant. Search for information about: "${query}"
 
 Return ONLY valid JSON (no other text):
@@ -413,7 +413,7 @@ Response format (ONLY output valid JSON, no other text):
     console.log("Calling LENORY AI with prompt length:", prompt.length);
     
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: fullPrompt,
     });
 
@@ -470,7 +470,7 @@ Explain it like you're teaching someone who has never written code before. Be de
     console.log("Calling LENORY AI to explain code...");
     
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -524,7 +524,7 @@ Analyze the request and provide ONLY a raw JSON response with NO markdown, NO co
 
     console.log("🔄 Calling Gemini API for debug...");
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -583,7 +583,7 @@ Format: {"explanation": "...", "examples": ["ex1", "ex2"], "relatedTopics": ["to
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -933,10 +933,22 @@ function generateColorPaletteFromPrompt(prompt: string): [string, string, string
   return ['#667eea', '#764ba2', '#f093fb'];
 }
 
+async function geminiModelId(heavy = false): Promise<string> {
+  const { pickGeminiModel } = await import("./aiRouter");
+  return pickGeminiModel(heavy);
+}
+
 export async function chatWithGemini(messages: Array<{ role: string; content: string }>): Promise<string> {
+  // Students on Ultra or Fast get THEIR provider's models for text work, not Gemini.
+  const { laneContext } = await import("./laneContext");
+  const ctx = laneContext.getStore();
+  if (ctx && ctx.lane !== "vision" && !ctx.bypass) {
+    const { chatCompletionWithFailover } = await import("./aiRouter");
+    return (await chatCompletionWithFailover(messages as any)).text;
+  }
   const attemptCall = async (): Promise<string> => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: messages.map(m => ({
         role: m.role === "assistant" ? "model" : "user",
         parts: [{ text: m.content }]
@@ -983,7 +995,7 @@ export async function generateSmartChatTitle(messages: Array<{ role: string; con
       .join("\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: `Create a brief, descriptive title (max 6 words) for this conversation:
 
 ${conversationSnippet}
@@ -1014,7 +1026,7 @@ export async function analyzeFileWithGeminiVision(buffer: Buffer, mimeType: stri
     );
 
     const analysisPromise = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: [
         {
           inlineData: {
@@ -1059,7 +1071,7 @@ export async function fixTextWithLENORY(text: string): Promise<{ correctedText: 
     console.log("🔧 Fixing text with LENORY AI...");
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: `Fix spelling, grammar, and formatting errors in this text. Respond with ONLY valid JSON (no other text):
 
 {"correctedText": "the fixed text here", "explanation": "brief list of corrections made"}
@@ -1107,7 +1119,7 @@ Generate ONLY valid JSON (no other text, no markdown):
 Make the objectives, key points, and summary educational, clear, and useful for students.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -1210,7 +1222,7 @@ Transcript:
 ${transcriptText.slice(0, 2000)}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -1255,7 +1267,7 @@ Respond with ONLY valid JSON:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -1291,7 +1303,7 @@ Respond with ONLY valid JSON:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -1319,7 +1331,7 @@ export async function extractTextFromImage(base64: string, mimeType: string): Pr
   const prompt = "Extract ALL visible text from this image, exactly as written, preserving line breaks, structure, and any numbering. If it's a scanned page, handwritten note, textbook photo, or screenshot with text, transcribe it in full. If the image contains no readable text at all (e.g. it's a pure photo/diagram with no text), respond with exactly: NO_TEXT_FOUND";
   try {
     const ocrPromise = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: [{ parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }] as any,
     });
     const response = await Promise.race([ocrPromise, timeoutPromise]);
@@ -1351,7 +1363,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<{ text: st
     const mimeType = mimeTypes[ext || ''] || 'audio/wav';
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: [
         {
           inlineData: {
@@ -1395,7 +1407,7 @@ export async function summarizeText(text: string, length: 'short' | 'medium' | '
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: `Please summarize the following text ${lengthInstructions[length]}:\n\n${text}`,
     });
     return response.text || "";
@@ -1427,7 +1439,7 @@ Respond with ONLY valid JSON, no markdown fences:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 
@@ -1456,7 +1468,7 @@ Respond with ONLY valid JSON:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: await geminiModelId(),
       contents: prompt,
     });
 

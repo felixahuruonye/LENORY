@@ -43,6 +43,10 @@ export default function AdminDashboard() {
   const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [tierConfigDraft, setTierConfigDraft] = useState<Record<string, { dailyAdd: string; maxBalance: string }>>({});
   const [featureCostDraft, setFeatureCostDraft] = useState<Record<string, string>>({});
+  const [costStatus, setCostStatus] = useState<Record<string, { state: "saving" | "saved" | "error"; msg?: string }>>({});
+  const [jobPeriod, setJobPeriod] = useState<"now" | "today" | "yesterday" | "7d" | "30d" | "90d" | "custom">("now");
+  const [jobFrom, setJobFrom] = useState("");
+  const [jobTo, setJobTo] = useState("");
 
   const isAuthorized = user?.email === "felixahuruonye@gmail.com";
 
@@ -180,14 +184,32 @@ export default function AdminDashboard() {
   });
 
   const { data: jobQueueStats } = useQuery({
-    queryKey: ["/api/admin/job-queue"],
+    queryKey: ["/api/admin/job-queue", jobPeriod, jobFrom, jobTo],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/job-queue");
+      const qs = new URLSearchParams({ period: jobPeriod });
+      if (jobPeriod === "custom" && jobFrom && jobTo) { qs.set("from", jobFrom); qs.set("to", jobTo); }
+      const res = await apiRequest("GET", `/api/admin/job-queue?${qs.toString()}`);
       return res.json();
     },
-    enabled: !!user,
-    refetchInterval: 15000,
+    enabled: !!user && (jobPeriod !== "custom" || (!!jobFrom && !!jobTo)),
+    refetchInterval: jobPeriod === "now" || jobPeriod === "today" ? 5000 : false,
   });
+
+  // Saves ONE cost and shows the real result next to it (no silent failures).
+  const saveCost = async (feature: string) => {
+    const n = Number(featureCostDraft[feature]);
+    if (!Number.isFinite(n) || n < 0) { setCostStatus((p) => ({ ...p, [feature]: { state: "error", msg: "Enter a whole number, 0 or more" } })); return; }
+    setCostStatus((p) => ({ ...p, [feature]: { state: "saving" } }));
+    try {
+      const res = await apiRequest("PUT", `/api/admin/feature-costs/${feature}`, { cost: Math.round(n) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.success === false) throw new Error(body?.message || `Server said ${res.status}`);
+      setCostStatus((p) => ({ ...p, [feature]: { state: "saved" } }));
+      refetchFeatureCosts();
+    } catch (e: any) {
+      setCostStatus((p) => ({ ...p, [feature]: { state: "error", msg: String(e?.message || "Save failed").slice(0, 140) } }));
+    }
+  };
 
   const { data: tierConfigData, isLoading: tierConfigLoading, refetch: refetchTierConfig } = useQuery({
     queryKey: ["/api/admin/tier-config"],
@@ -837,53 +859,100 @@ export default function AdminDashboard() {
               <CardHeader>
                 <CardTitle>Credit Usage — Feature Costs</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  Set how many credits each feature deducts. Values load from defaults; persist to Supabase table{" "}
-                  <code className="text-xs">feature_costs</code> when available (see server comments for SQL).
-                </p>
+              <CardContent className="space-y-6">
                 {featureCostsLoading && !Object.keys(featureCostDraft).length ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading feature costs...
                   </div>
                 ) : (
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {Object.keys(featureCostDraft).sort().map((feature) => (
-                      <div key={feature} className="border rounded-lg p-3 space-y-2">
-                        <p className="text-xs font-mono font-medium break-all">{feature}</p>
-                        <div className="flex gap-2">
-                          <Input
-                            type="number"
-                            min={0}
-                            value={featureCostDraft[feature] ?? ""}
-                            onChange={(e) =>
-                              setFeatureCostDraft((prev) => ({ ...prev, [feature]: e.target.value }))
-                            }
-                          />
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              saveFeatureCostMutation.mutate({
-                                feature,
-                                cost: Number(featureCostDraft[feature]),
-                              })
-                            }
-                            disabled={saveFeatureCostMutation.isPending}
-                          >
-                            Save
-                          </Button>
-                        </div>
+                  <>
+                    <div className="space-y-3" data-testid="mode-costs">
+                      <div>
+                        <p className="font-medium">Chat credits by mode</p>
+                        <p className="text-xs text-muted-foreground">Simple = a quick answer. Heavy = tools, files, research, several steps or long work. Charged after the answer, by what the job really was. Suggested values come from the server defaults.</p>
                       </div>
+                      {(["ultra", "fast", "vision"] as const).map((mode) => (
+                        <div key={mode} className="rounded-lg border p-3">
+                          <p className="text-sm font-semibold mb-2">LENORY {mode[0].toUpperCase() + mode.slice(1)}</p>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {(["simple", "heavy"] as const).map((kind) => {
+                              const key = `chat_${mode}_${kind}`;
+                              const st = costStatus[key];
+                              return (
+                                <div key={key} className="space-y-1">
+                                  <label className="text-xs text-muted-foreground">{kind === "simple" ? "Simple chat" : "Heavy task"} <span className="font-mono">(suggested {featureCostsData?.defaults?.[key] ?? "-"})</span></label>
+                                  <div className="flex gap-2">
+                                    <Input type="number" min={0} value={featureCostDraft[key] ?? ""} onChange={(e) => { setFeatureCostDraft((p) => ({ ...p, [key]: e.target.value })); setCostStatus((p) => { const { [key]: _x, ...r } = p; return r; }); }} data-testid={`cost-${key}`} />
+                                    <Button size="sm" onClick={() => saveCost(key)} disabled={st?.state === "saving"} data-testid={`save-${key}`}>
+                                      {st?.state === "saving" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                                    </Button>
+                                  </div>
+                                  {st?.state === "saved" && <p className="text-xs text-green-600">Saved. Charged from the next message.</p>}
+                                  {st?.state === "error" && <p className="text-xs text-destructive">{st.msg}</p>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="font-medium">Other features</p>
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {Object.keys(featureCostDraft).filter((f) => !/^chat_(ultra|fast|vision)_(simple|heavy)$/.test(f)).sort().map((feature) => {
+                          const st = costStatus[feature];
+                          return (
+                            <div key={feature} className="border rounded-lg p-3 space-y-2">
+                              <p className="text-xs font-mono font-medium break-all">{feature}</p>
+                              <div className="flex gap-2">
+                                <Input type="number" min={0} value={featureCostDraft[feature] ?? ""} onChange={(e) => { setFeatureCostDraft((p) => ({ ...p, [feature]: e.target.value })); setCostStatus((p) => { const { [feature]: _x, ...r } = p; return r; }); }} />
+                                <Button size="sm" onClick={() => saveCost(feature)} disabled={st?.state === "saving"}>{st?.state === "saving" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}</Button>
+                              </div>
+                              {st?.state === "saved" && <p className="text-xs text-green-600">Saved</p>}
+                              {st?.state === "error" && <p className="text-xs text-destructive">{st.msg}</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="rounded-lg border p-3 space-y-3" data-testid="job-queue">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium mr-2">Job queue</p>
+                    {(["now", "today", "yesterday", "7d", "30d", "90d", "custom"] as const).map((p) => (
+                      <Button key={p} size="sm" variant={jobPeriod === p ? "default" : "outline"} onClick={() => setJobPeriod(p)} data-testid={`job-period-${p}`}>
+                        {p === "now" ? "Now" : p === "today" ? "Today" : p === "yesterday" ? "Yesterday" : p === "custom" ? "Custom" : p}
+                      </Button>
                     ))}
                   </div>
-                )}
-                {jobQueueStats && (
-                  <div className="rounded-lg border p-3 text-sm text-muted-foreground">
-                    Job queue: {jobQueueStats.queued ?? 0} queued · {jobQueueStats.running ?? 0} running ·{" "}
-                    {jobQueueStats.done ?? 0} done · {jobQueueStats.failed ?? 0} failed (max concurrent{" "}
-                    {jobQueueStats.maxConcurrent ?? 2})
-                  </div>
-                )}
+                  {jobPeriod === "custom" && (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <Input type="date" value={jobFrom} onChange={(e) => setJobFrom(e.target.value)} className="w-40" />
+                      <span>to</span>
+                      <Input type="date" value={jobTo} onChange={(e) => setJobTo(e.target.value)} className="w-40" />
+                    </div>
+                  )}
+                  {jobQueueStats ? (
+                    <>
+                      <p className="text-sm text-muted-foreground">
+                        {jobQueueStats.queued ?? 0} queued · {jobQueueStats.running ?? 0} running · {jobQueueStats.done ?? 0} done · {jobQueueStats.failed ?? 0} failed (max concurrent {jobQueueStats.maxConcurrent ?? 2})
+                      </p>
+                      <p className="text-xs text-muted-foreground">{jobQueueStats.note} {jobQueueStats.from && jobPeriod !== "now" ? `(${jobQueueStats.from} to ${jobQueueStats.to})` : ""}</p>
+                      {jobQueueStats.byType && Object.keys(jobQueueStats.byType).length > 0 && (
+                        <div className="text-xs grid gap-1 sm:grid-cols-2">
+                          {Object.entries(jobQueueStats.byType as Record<string, { done: number; failed: number }>).sort().map(([t, v]) => (
+                            <div key={t} className="flex justify-between border-b border-border/40 py-0.5"><span className="font-mono">{t}</span><span>{v.done} done · {v.failed} failed</span></div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">{jobPeriod === "custom" ? "Pick a start and end date." : "Loading..."}</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>

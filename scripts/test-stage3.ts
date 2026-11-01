@@ -33,7 +33,7 @@ process.env.GROQ_RPM = "3";
   check("non-strict call can still fall back for internal use", !!soft2 || true);
 
   // 3. vision + search lanes
-  router.setExternalCooldown("gemini:vision", 90, "Gemini rate limit");
+  for (const m of ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite"]) (router as any).__cooldownsForTest().set(`gemini:${m}`, { until: Date.now() + 90_000, reason: "HTTP 429 rate" });
   const vis = router.getLaneStatuses().find((l) => l.lane === "vision")!;
   check("vision: Gemini cooldown shows a countdown", !vis.available && vis.resetsInSeconds > 60 && vis.resetsInSeconds <= 90);
   check("search: web stays on while either provider works", !router.isWebSearchExhausted().exhausted);
