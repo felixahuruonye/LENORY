@@ -69,6 +69,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useAiStatus, fmtCountdown } from "@/hooks/useAiStatus";
 import { apiRequest, queryClient, getAuthHeaders } from "@/lib/queryClient";
+import ToolsMiniPage from "@/components/ToolsMiniPage";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useVoice, getVapiVoiceForCall } from "@/lib/useVoice";
 import { useVoiceCall } from "@/contexts/VoiceCallContext";
@@ -76,10 +77,9 @@ import type { ChatMessage, ChatSession, ChatMessageWithAttachments } from "@shar
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 const AI_MODELS = [
-  { id: "lenory-ultra", label: "LENORY Ultra", description: "Most capable — GPT-4 class" },
-  { id: "lenory-fast", label: "LENORY Fast", description: "Quick responses — GPT-3.5" },
-  { id: "lenory-vision", label: "LENORY Vision", description: "Images & files — Gemini" },
-  { id: "lenory-search", label: "LENORY Search", description: "Internet-connected" },
+  { id: "lenory-ultra", label: "LENORY Ultra", description: "Most capable" },
+  { id: "lenory-fast", label: "LENORY Fast", description: "Quick responses" },
+  { id: "lenory-vision", label: "LENORY Vision", description: "Images & files" },
 ];
 
 // ─── Typing animation ──────────────────────────────────────────────────────────
@@ -372,19 +372,9 @@ export default function Chat() {
   // was locked for them the moment they tried to send a message.
   const [selectedModel, setSelectedModel] = useState(AI_MODELS.find(m => m.id === "lenory-vision") || AI_MODELS[0]);
   const aiStatus = useAiStatus();
+  const [toolsOpen, setToolsOpen] = useState(false);
   const selectedLane = aiStatus.laneOf(selectedModel.id);
   const laneBlocked = !!selectedLane && !selectedLane.available;
-  const { data: capsData } = useQuery<{ capabilities: { webSearch: boolean } }>({
-    queryKey: ["/api/capabilities"],
-    queryFn: async () => (await apiRequest("GET", "/api/capabilities")).json(),
-  });
-  const searchOn = !!capsData?.capabilities?.webSearch && !aiStatus.webExhausted;
-  const toggleSearch = async (on: boolean) => {
-    try {
-      await apiRequest("PUT", "/api/capabilities", { webSearch: on });
-      queryClient.invalidateQueries({ queryKey: ["/api/capabilities"] });
-    } catch { toast({ title: "Could not change search", variant: "destructive" }); }
-  };
   const userPickedModelRef = useRef(false);
   // Header icon row (Live Session / Dashboard / Settings) auto-hides while
   // scrolling forward through messages to give more reading room, and comes
@@ -1986,9 +1976,11 @@ export default function Chat() {
                         <ChevronDown className="w-3.5 h-3.5" />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-60">
+                    <DropdownMenuContent align="start" side="top" className="w-72 rounded-2xl p-2 bg-popover/95 backdrop-blur" data-testid="model-card">
                       {AI_MODELS.map(model => {
                         const lockMsg = getModelLock(model.id);
+                        const lane = aiStatus.laneOf(model.id);
+                        const resting = !!lane && !lane.available;
                         return (
                           <DropdownMenuItem
                             key={model.id}
@@ -2000,34 +1992,32 @@ export default function Chat() {
                                 setSelectedModel(model);
                               }
                             }}
-                            className={`flex items-start gap-2 cursor-pointer ${selectedModel.id === model.id ? "bg-primary/10" : ""} ${lockMsg ? "opacity-60" : ""}`}
+                            className={`flex items-start gap-2 cursor-pointer rounded-xl px-4 py-3 ${selectedModel.id === model.id ? "bg-primary/15" : ""} ${lockMsg ? "opacity-60" : ""}`}
                             data-testid={`model-option-${model.id}`}
                           >
                             <div className="flex-1 min-w-0">
-                              <span className="font-medium text-sm block">{model.label}</span>
-                              <span className="text-xs text-muted-foreground block">{model.description}</span>
+                              <span className="font-medium text-base block leading-tight">{model.label}</span>
+                              <span className="text-sm text-muted-foreground block mt-0.5">{resting && lane ? `Resting - back in ${fmtCountdown(lane.left)}` : model.description}</span>
                             </div>
-                            {lockMsg && <Lock className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />}
+                            {lockMsg && <Lock className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0 mt-1" />}
                           </DropdownMenuItem>
                         );
                       })}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
-                        {userPlan === "free" ? "Upgrade to Pro/Premium to unlock all models" : "Model controls AI capabilities"}
+                      <DropdownMenuItem
+                        onClick={() => setToolsOpen(true)}
+                        className="flex items-center gap-2 cursor-pointer rounded-xl px-4 py-3"
+                        data-testid="model-option-tools"
+                      >
+                        <span className="font-medium text-base flex-1">LENORY Tools</span>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
                       </DropdownMenuItem>
+                      <DropdownMenuSeparator className="my-2" />
+                      <div className="px-4 py-2 text-sm text-muted-foreground cursor-default select-none">
+                        {userPlan === "free" ? "Upgrade to Pro/Premium to unlock all models" : "Model controls AI capabilities"}
+                      </div>
                     </DropdownMenuContent>
                   </DropdownMenu>
 
-                  {/* Web search switch (uses the same setting as Settings > Capabilities) */}
-                  <label
-                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl text-xs font-medium select-none ${aiStatus.webExhausted ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-muted"} ${searchOn ? "text-primary" : "text-muted-foreground"}`}
-                    title={aiStatus.webExhausted ? `Web search resets in ${fmtCountdown(aiStatus.webLeft)}` : "Let LENORY search the internet"}
-                    data-testid="checkbox-search-web"
-                  >
-                    <input type="checkbox" className="accent-primary w-3.5 h-3.5" checked={searchOn} disabled={aiStatus.webExhausted} onChange={(e) => toggleSearch(e.target.checked)} />
-                    <Search className="w-3.5 h-3.5" />
-                    <span>{aiStatus.webExhausted ? fmtCountdown(aiStatus.webLeft) : "Search"}</span>
-                  </label>
                 </div>
 
                 <div className="flex items-center gap-1">
@@ -2112,6 +2102,7 @@ export default function Chat() {
               </div>
             </div>
 
+            <ToolsMiniPage open={toolsOpen} onOpenChange={setToolsOpen} />
             {(aiStatus.lanes.some((l) => !l.available) || aiStatus.webExhausted) && (
               <div className="mt-2 space-y-1" data-testid="limit-banner" aria-live="polite">
                 {aiStatus.lanes.filter((l) => !l.available && l.lane !== "search").concat(aiStatus.lanes.filter((l) => !l.available && l.lane === "search")).map((l) => (
