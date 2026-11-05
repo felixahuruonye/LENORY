@@ -5,15 +5,16 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAiStatus, fmtCountdown } from "@/hooks/useAiStatus";
-import { Globe, FileText, FolderOpen, PenLine, Brain, Briefcase, ChevronRight } from "lucide-react";
+import { ImageIcon, Globe, FileText, FolderOpen, PenLine, Brain, Briefcase, ChevronRight } from "lucide-react";
 
-type Caps = { webSearch: boolean; fileCreation: boolean; knowledgeBase: boolean; kbWrite: boolean; memory: boolean; projects: boolean };
+type Caps = { webSearch: boolean; fileCreation: boolean; knowledgeBase: boolean; kbWrite: boolean; memory: boolean; projects: boolean; imageGeneration: boolean };
 const ROWS: { key: keyof Caps; title: string; desc: string; icon: any }[] = [
   { key: "webSearch", title: "Web search", desc: "Look things up online when it needs current facts", icon: Globe },
   { key: "fileCreation", title: "File creation", desc: "Make real PDF, Word, PowerPoint, Excel and more", icon: FileText },
   { key: "knowledgeBase", title: "Read Knowledge Base", desc: "Use your saved notes and folders", icon: FolderOpen },
   { key: "kbWrite", title: "Write to Knowledge Base", desc: "Create folders and save notes for you", icon: PenLine },
   { key: "memory", title: "Memory", desc: "Remember things you ask it to remember", icon: Brain },
+  { key: "imageGeneration", title: "Images", desc: "Make, edit and upscale pictures in chat", icon: ImageIcon },
   { key: "projects", title: "Projects", desc: "Read and add to your Project Workspace", icon: Briefcase },
 ];
 

@@ -49,18 +49,6 @@ const FEATURES: Feature[] = [
     keywords: ["chat", "conversation", "message"],
   },
   {
-    route: "/image-gallery",
-    names: ["image gallery", "gallery", "images"],
-    aliases: ["pictures", "photos", "visuals"],
-    keywords: ["gallery", "image", "picture"],
-  },
-  {
-    route: "/image-gen",
-    names: ["image generator", "generate image", "ai art"],
-    aliases: ["create image", "picture generator", "art"],
-    keywords: ["generate", "create", "image", "art"],
-  },
-  {
     route: "/workspace",
     names: ["workspace", "projects", "project"],
     aliases: ["work", "files", "documents"],

@@ -1,3 +1,4 @@
+import ImageHistoryDialog from "@/components/ImageHistoryDialog";
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCredits } from "@/hooks/useCredits";
@@ -61,6 +62,7 @@ export default function AdvancedDashboard() {
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<any>(null);
+  const [showImageGrid, setShowImageGrid] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
   const [showChatHistoryModal, setShowChatHistoryModal] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -74,7 +76,7 @@ export default function AdvancedDashboard() {
     { id: "chat", name: "LENORY Chat", icon: MessageSquare, description: "Multi-mode conversational AI", color: "from-blue-500 to-cyan-500", href: "/chat", keywords: ["chat", "ask", "ai", "tutor", "help"] },
     { id: "website", name: "Learn|Build App", icon: Code2, description: "AI-powered code & web generation", color: "from-green-500 to-emerald-500", href: "/website-builder", keywords: ["website", "code", "generate", "build", "web", "app", "builder"] },
     { id: "live", name: "Write My Note", icon: Mic, description: "Record, transcribe & format notes", color: "from-rose-500 to-pink-500", href: "/live-session", keywords: ["live", "session", "voice", "record", "transcribe", "note", "write"] },
-    { id: "image", name: "Image Generation", icon: ImageIcon, description: "DALL-E & image tools", color: "from-orange-500 to-red-500", href: "/image-gen", keywords: ["image", "generate", "photo", "visual", "art"] },
+    { id: "image", name: "Images", icon: ImageIcon, description: "Your pictures made in chat", color: "from-orange-500 to-red-500", href: "/image-gen", keywords: ["image", "generate", "photo", "visual", "art"] },
     { id: "memory", name: "Memory Panel", icon: Brain, description: "Learning memory system", color: "from-teal-500 to-cyan-500", href: "/memory", keywords: ["memory", "learn", "remember", "notes", "history"] },
     { id: "cbt", name: "CBT Mode", icon: Monitor, description: "Exam simulation (JAMB/WAEC/NECO)", color: "from-amber-500 to-yellow-500", href: "/cbt-mode", keywords: ["exam", "test", "cbt", "jamb", "waec", "practice"] },
     { id: "workspace", name: "Project Workspace", icon: FolderOpen, description: "Organize your projects", color: "from-purple-500 to-pink-500", href: "/project-workspace", keywords: ["project", "workspace", "organize", "folder", "task"] },
@@ -447,7 +449,7 @@ export default function AdvancedDashboard() {
               const categoryLinks: Record<string, string> = {
                 all: "/chat", chat: "/chat", memory: "/memory", notes: "/notes",
                 study_plan: "/study-plans", exam: "/cbt-mode", website: "/website-builder",
-                image: "/image-gen", project: "/project-workspace", lesson: "/chat",
+                image: "/dashboard", project: "/project-workspace", lesson: "/chat",
               };
               return (
                 <Link key={cat.value} href={categoryLinks[cat.value] || "/chat"}>
@@ -476,7 +478,7 @@ export default function AdvancedDashboard() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {aiTools.map((tool) => (
-              <Link key={tool.id} href={tool.href || "/chat"} className="block">
+              <Link key={tool.id} href={tool.id === "image" ? "/dashboard" : tool.href || "/chat"} className="block" onClick={(e) => { if (tool.id === "image") { e.preventDefault(); setShowImageGrid(true); } }}>
                 <Card
                   className="hover-elevate cursor-pointer h-full transition-all group relative overflow-hidden glassmorphism border-primary/10 hover:border-primary/30 shadow-lg hover:shadow-primary/20 hover:-translate-y-2"
                   onMouseEnter={() => setHoveredCard(tool.id)}
@@ -514,6 +516,7 @@ export default function AdvancedDashboard() {
         </div>
       </main>
 
+      <ImageHistoryDialog open={showImageGrid} onOpenChange={setShowImageGrid} />
       {/* Image Gallery Modal */}
       {selectedImage && (
         <Dialog open={!!selectedImage} onOpenChange={() => setSelectedImage(null)}>
@@ -524,9 +527,7 @@ export default function AdvancedDashboard() {
                 <p className="font-semibold mb-2" data-testid="text-image-title">{selectedImage.title}</p>
                 <p className="text-sm text-muted-foreground" data-testid="text-image-prompt">{selectedImage.description}</p>
               </div>
-              <Link href={selectedImage.href || "/image-gen"}>
-                <Button className="w-full" data-testid="button-open-image">View &amp; Edit in Generator</Button>
-              </Link>
+              <Button className="w-full" onClick={async () => { try { const r = await fetch(selectedImage.imageUrl); const b = await r.blob(); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "lenory-image." + (b.type.split("/")[1] || "png"); document.body.appendChild(a); a.click(); a.remove(); } catch {} }} data-testid="button-open-image">Download</Button>
             </div>
           </DialogContent>
         </Dialog>

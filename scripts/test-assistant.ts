@@ -1,9 +1,12 @@
+import "./_env";
 // Run: npx tsx scripts/test-assistant.ts  (scripted model; no API keys or database needed)
 process.env.OPENROUTER_API_KEY = "test"; process.env.GROQ_API_KEY = "test";
 import { runToolAgent } from "../server/assistant/agentLoop";
 import { readLocalArtifact } from "../server/assistant/artifactStore";
 let script: any[] = []; let seenTools: string[][] = [];
 (globalThis as any).fetch = async (_u: string, init: any) => {
+  // database / non-model traffic is not part of the scripted conversation
+  if (!/openrouter|groq|generativelanguage/.test(String(_u))) return { ok: false, status: 503, headers: new Headers(), text: async () => "", json: async () => ({}) } as any;
   const body = JSON.parse(init.body); seenTools.push((body.tools || []).map((t: any) => t.function.name));
   const next = script.shift(); if (!next) throw new Error("script exhausted");
   const msg = next.tool ? { content: next.content || null, tool_calls: [{ id: "c1", type: "function", function: { name: next.tool, arguments: JSON.stringify(next.args) } }] } : { content: next.content };

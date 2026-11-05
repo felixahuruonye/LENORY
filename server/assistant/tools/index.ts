@@ -69,7 +69,7 @@ export const SUPPORTED_FORMATS = [...ALL_FORMATS, "markdown", "jpg", "yml", "jav
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 /** Save the file for the user: authenticated local copy + durable Supabase copy + KB record. */
-async function storeArtifact(
+export async function storeArtifact(
   userId: string,
   folderId: string | null,
   file: { buffer: Buffer; mimeType: string; fileName: string },

@@ -21,6 +21,7 @@
 //   on conflict (tier) do nothing;
 
 import { supabaseAdmin } from "./supabase";
+import { imageFeatureDefaults } from "./imageDefaults";
 
 export interface CreditRecord {
   balance: number;
@@ -426,6 +427,7 @@ export async function addCredits(userId: string, amount: number, tier: string = 
 // Defaults used when feature_costs table is missing or a key is absent.
 // Admin Dashboard → Credit Usage can override these without code deploys.
 export const DEFAULT_FEATURE_COSTS: Record<string, number> = {
+  ...imageFeatureDefaults(), // image services, on/off switches and monthly caps (all editable in Admin)
   "voice_transcription_gate": 1,       // min credits to start a transcription
   "voice_transcription_per_5min": 1,   // per 5 minutes of audio
   "format_notes": 3,                   // Gemini structured notebook

@@ -1203,7 +1203,9 @@ export async function chatWithAISmartFallback(messages: any[]): Promise<string> 
     return response;
   } catch (err) {
     console.error("✗ Gemini failed:", (err as any)?.message);
-    return "I'm having trouble connecting to my AI services right now. Please try again.";
+    const { laneContext, laneUnavailableMessage } = await import("./laneContext");
+    const ctx = laneContext.getStore();
+    return ctx ? laneUnavailableMessage(ctx.lane) : "I'm having trouble connecting to my AI services right now. Please try again.";
   }
 }
 

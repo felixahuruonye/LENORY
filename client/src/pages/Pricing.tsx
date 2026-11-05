@@ -221,7 +221,7 @@ export default function Pricing() {
               No Subscription? No Problem.
             </div>
             <h2 className="text-2xl font-bold">Buy Credits On-Demand</h2>
-            <p className="text-muted-foreground mt-2">₦100 per credit. Use for AI chats, image generation, and more.</p>
+            <p className="text-muted-foreground mt-2">₦100 per credit. Use for AI chats, pictures made in chat, and more.</p>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {TOPUP_PACKS.map((pack) => (
@@ -360,7 +360,7 @@ export default function Pricing() {
               <div className="p-4 font-semibold text-sm text-center">Premium</div>
             </div>
             {[
-              { feature: "Daily AI Credits", free: "10", pro: "50", premium: "Unlimited" },
+              { feature: "Daily AI Credits", free: "10", pro: "50", premium: "150/month" },
               { feature: "Monthly Credits", free: "50 max", pro: "1,500", premium: "Unlimited" },
               { feature: "AI Chat", free: "Basic", pro: "Advanced", premium: "Advanced" },
               { feature: "Image Generation", free: "5/month", pro: "50/month", premium: "Unlimited" },
@@ -385,7 +385,7 @@ export default function Pricing() {
           <h2 className="text-2xl font-bold mb-6">Frequently Asked Questions</h2>
           <div className="space-y-4">
             {[
-              { q: "What are credits?", a: "Credits power all AI features on LENORY. Each AI message costs 1 credit. Image generation costs 2, video costs 5. Credits refresh daily based on your plan." },
+              { q: "What are credits?", a: "Credits power all AI features on LENORY. Each AI reply costs credits by mode and task (quick chat costs less than heavy work), and every picture costs credits shown in Admin settings. Pictures are made in chat. Credits refresh daily based on your plan." },
               { q: "Do credits expire?", a: "Free plan: unused credits don't carry over the monthly limit. Pro & Premium: credits accumulate up to their limits. Purchased credits never expire." },
               { q: "Can I change my plan anytime?", a: "Yes! Upgrade or downgrade at any time. Changes take effect immediately." },
               { q: "What payment methods are accepted?", a: "All Paystack methods: cards, bank transfers, and mobile money." },

@@ -14,8 +14,6 @@ import Dashboard from "@/pages/Dashboard";
 import AdvancedDashboard from "@/pages/AdvancedDashboard";
 import AdvancedChat from "@/pages/AdvancedChat";
 import Chat from "@/pages/Chat";
-import ImageGallery from "@/pages/ImageGallery";
-import ImageGenAdvanced from "@/pages/ImageGenAdvanced";
 import ProjectWorkspace from "@/pages/ProjectWorkspace";
 import MemoryPanel from "@/pages/MemoryPanel";
 import StudyPlans from "@/pages/StudyPlans";
@@ -39,10 +37,10 @@ import WebsiteLearn from "@/pages/WebsiteLearn";
 import WebsiteDebug from "@/pages/WebsiteDebug";
 import Notifications from "@/pages/Notifications";
 import LiveAI from "@/pages/LiveAI";
+import LaneNoticeCard from "@/components/LaneNoticeCard";
 import CBTMode from "@/pages/CBTMode";
 import GeneratedLessons from "@/pages/GeneratedLessons";
 import AdminDashboard from "@/pages/AdminDashboard";
-import VideoGeneration from "@/pages/VideoGeneration";
 import AuthCallback from "@/pages/AuthCallback";
 import Notes from "@/pages/Notes";
 import SharedFolder from "@/pages/SharedFolder";
@@ -107,8 +105,6 @@ function Router() {
       <Route path="/old-dashboard" component={Dashboard} />
       <Route path="/chat" component={Chat} />
       <Route path="/advanced-chat" component={AdvancedChat} />
-      <Route path="/image-gallery" component={ImageGallery} />
-      <Route path="/image-gen" component={ImageGenAdvanced} />
       <Route path="/workspace" component={ProjectWorkspace} />
       <Route path="/project-workspace" component={ProjectWorkspace} />
       <Route path="/memory" component={MemoryPanel} />
@@ -149,7 +145,6 @@ function Router() {
       <Route path="/cbt-mode" component={CBTMode} />
       <Route path="/notifications" component={Notifications} />
       <Route path="/live-ai" component={LiveAI} />
-      <Route path="/video-gen" component={VideoGeneration} />
       <Route path="/voice-gallery" component={VoiceGallery} />
 
       {/* ─── NEW LEARN TO CODE ROUTES ────────────────────────────── */}
@@ -193,6 +188,7 @@ function App() {
               instead of dying when the page that started it unmounts. */}
           <VoiceCallProvider>
             <Toaster />
+            <LaneNoticeCard />
             <Router />
             <GlobalVoiceButton />
             <VoiceOrb />

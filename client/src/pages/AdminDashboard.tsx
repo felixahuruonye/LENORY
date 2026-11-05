@@ -1,3 +1,4 @@
+import ImageControlsDialog from "@/components/ImageControlsDialog";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -151,6 +152,15 @@ export default function AdminDashboard() {
     },
     onError: () => toast({ title: "Reset failed", variant: "destructive" }),
   });
+
+  const { data: imgData, refetch: refetchImg } = useQuery({ queryKey: ["/api/admin/image-services"], queryFn: async () => (await apiRequest("GET", "/api/admin/image-services")).json(), enabled: !!user });
+  const { data: stabBal, refetch: refetchStab } = useQuery({ queryKey: ["/api/admin/stability-balance"], queryFn: async () => (await apiRequest("GET", "/api/admin/stability-balance")).json(), enabled: !!user });
+  const [imgCaps, setImgCaps] = useState<{ free: number; pro: number; premium: number }>({ free: 5, pro: 50, premium: 150 });
+  const [capStatus, setCapStatus] = useState<{ state?: "saving"|"saved"|"error"; msg?: string }>({});
+  useEffect(() => { if (imgData?.caps) setImgCaps(imgData.caps); }, [imgData]);
+  const saveCaps = async () => { setCapStatus({ state: "saving" }); try { const r = await apiRequest("PUT", "/api/admin/image-caps", imgCaps); if (!r.ok) throw new Error("Failed"); setCapStatus({ state: "saved" }); refetchImg(); } catch (e: any) { setCapStatus({ state: "error", msg: e.message }); } };
+  const toggleImg = async (id: string, enabled: boolean) => { await apiRequest("PUT", `/api/admin/image-services/${id}`, { enabled }); refetchImg(); };
+  const saveImgCost = async (id: string, credits: string) => { const n = Number(credits); if (!Number.isFinite(n)) return; await apiRequest("PUT", `/api/admin/image-services/${id}`, { credits: Math.round(n) }); refetchImg(); };
 
   // ─── TIER CONFIG (daily/monthly credit amounts, DB-backed) ────────────────
   const { data: featureCostsData, isLoading: featureCostsLoading, refetch: refetchFeatureCosts } = useQuery({
@@ -866,6 +876,10 @@ export default function AdminDashboard() {
                   </div>
                 ) : (
                   <>
+                    <div className="flex items-center justify-between rounded-lg border p-3">
+                      <div><p className="font-medium">Image and 3D services</p><p className="text-xs text-muted-foreground">Switches, credit prices, monthly limits and a live key check.</p></div>
+                      <ImageControlsDialog />
+                    </div>
                     <div className="space-y-3" data-testid="mode-costs">
                       <div>
                         <p className="font-medium">Chat credits by mode</p>

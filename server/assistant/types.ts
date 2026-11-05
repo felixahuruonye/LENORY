@@ -84,6 +84,8 @@ export interface ToolResult {
   error?: string;
   citations?: Citation[];
   artifacts?: ArtifactRef[];
+  /** Pictures to show inside the chat (generated or edited) */
+  images?: { url: string; title: string; id?: string }[];
 }
 
 export interface OrchestratorInput {
@@ -118,4 +120,6 @@ export interface ToolContext {
   userEmail?: string;
   sessionId?: string | null;
   onStatus?: (status: AssistantStatus, detail?: string) => void;
+  /** The mode the student is on; image tools pick Stability (Ultra/Fast) or Nano Banana (Vision) from it */
+  lane?: "ultra" | "fast" | "vision";
 }

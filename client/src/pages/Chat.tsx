@@ -377,6 +377,7 @@ export default function Chat() {
   const [openSource, setOpenSource] = useState<{ title: string; link: string; snippet: string; rawContent?: string } | null>(null);
   const [chatAction, setChatAction] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [streamImages, setStreamImages] = useState<{ url: string; title: string; id?: string }[]>([]);
   const [workStartedAt, setWorkStartedAt] = useState<number | null>(null);
   const [chatSteps, setChatSteps] = useState<{ status: string; detail?: string }[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -1037,49 +1038,6 @@ export default function Chat() {
     // /image-gen page (2 credits, tier-based monthly limits) rather than a
     // separate scheme, then saves the result into this chat session via the
     // same overrideResponse pattern videoMode already uses below.
-    if (imageGenMode) {
-      const prompt = message.trim();
-      if (!prompt) { toast({ title: "Describe the image", description: "Type what you'd like generated." }); return; }
-      setIsLoading(true);
-      const attachedImage = pendingFiles.find(f => f.file.type.startsWith("image/"));
-      resetInput();
-      setPendingFiles([]);
-      try {
-        let referenceImageBase64: string | undefined;
-        if (attachedImage) referenceImageBase64 = "data:" + attachedImage.file.type + ";base64," + await fileToBase64(attachedImage.file);
-        const res = await apiRequest("POST", "/api/generate-image", { prompt, referenceImageBase64 });
-        if (!res.ok) {
-          let errMsg = "Could not generate image.";
-          try { const errData = await res.json(); errMsg = errData.message || errMsg; } catch {}
-          toast({ title: "Image generation failed", description: errMsg, variant: "destructive" });
-          setIsLoading(false);
-          return;
-        }
-        const data = await res.json();
-        let sessionId = currentSessionId;
-        if (!sessionId) {
-          const sRes = await apiRequest("POST", "/api/chat/sessions", { title: prompt.slice(0, 60), mode: "chat" });
-          const sData = await sRes.json();
-          sessionId = sData.id;
-          switchToSession(sData.id);
-          queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
-        }
-        const userLabel = attachedImage ? `${prompt}\n\n[Attached image for editing]` : prompt;
-        await apiRequest("POST", "/api/chat/send", {
-          content: userLabel, sessionId, autoLearn: false, skipAi: false,
-          overrideResponse: data?.imageUrl
-            ? `![${prompt.replace(/[[\]]/g, "")}](${data.imageUrl})`
-            : `Sorry, the image could not be generated right now. Please try again.`,
-        });
-        await refetchMessages();
-      } catch {
-        toast({ title: "Image error", description: "Failed to generate image.", variant: "destructive" });
-      } finally {
-        setIsLoading(false);
-      }
-      return;
-    }
-
     // Files attached — send them with whatever prompt (or default) is typed
     if (pendingFiles.length > 0) {
       const userPrompt = message.trim();
@@ -1161,6 +1119,7 @@ export default function Chat() {
       setChatAction(null);
       setChatSteps([]);
       setWorkStartedAt(Date.now());
+      setStreamImages([]);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();
@@ -1223,7 +1182,8 @@ export default function Chat() {
           if (!part.startsWith("data: ")) continue;
           try {
             const evt = JSON.parse(part.slice(6));
-            if (evt.type === "status") { setChatAction(evt.status); setChatSteps((prev) => (prev.length && prev[prev.length - 1].status === evt.status && prev[prev.length - 1].detail === evt.detail ? prev : [...prev, { status: evt.status, detail: evt.detail }].slice(-12))); }
+            if (evt.type === "images") { setStreamImages((prev) => [...prev, ...evt.images]); }
+            else if (evt.type === "status") { setChatAction(evt.status); setChatSteps((prev) => (prev.length && prev[prev.length - 1].status === evt.status && prev[prev.length - 1].detail === evt.detail ? prev : [...prev, { status: evt.status, detail: evt.detail }].slice(-12))); }
             else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts?.length) { setLatestArtifacts(evt.artifacts); (window as any).__lenoryPendingArtifacts = evt.artifacts; } (window as any).__lenoryLastStreamDone = evt; }
             else if (evt.type === "error") {
               streamErrored = true;
@@ -1674,7 +1634,7 @@ export default function Chat() {
                     <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1 min-w-0"}`} data-testid={`card-message-${msg.id}`}>
                       {msg.role === "user" ? (
                         <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-3 text-sm">
-                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                          {(msg.attachments?.images || msg.images || []).map((img: any, idx: number) => (
                             <div key={idx} className="mb-3 rounded-lg overflow-hidden">
                               <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-48 object-cover rounded-lg" loading="lazy" />
                             </div>
@@ -1707,7 +1667,7 @@ export default function Chat() {
                               ))}
                             </div>
                           )}
-                          {msg.attachments?.images?.map((img: any, idx: number) => (
+                          {(msg.attachments?.images || msg.images || []).map((img: any, idx: number) => (
                             <div key={idx} className="mb-3 rounded-lg overflow-hidden">
                               <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-64 object-cover rounded-lg" loading="lazy" />
                             </div>
@@ -1831,17 +1791,8 @@ export default function Chat() {
                     { icon: Camera, label: "Camera", color: "text-blue-400 bg-blue-500/10", action: () => cameraInputRef.current?.click() },
                     { icon: Image, label: "Photos", color: "text-green-400 bg-green-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); } } },
                     { icon: FileText, label: "Files", color: "text-orange-400 bg-orange-500/10", action: () => { if (fileInputRef.current) { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); } } },
-                    { icon: Film, label: "Video", color: "text-purple-400 bg-purple-500/10", action: activateVideoMode },
                     { icon: BookOpen, label: "My Notes", color: "text-purple-300 bg-purple-400/10", action: () => { setShowPlusMenu(false); setLocation("/notes"); } },
-                    { icon: Sparkles, label: imageGenMode ? "Image Gen: ON" : "Image Gen", color: imageGenMode ? "text-pink-400 bg-pink-500/20" : "text-pink-400 bg-pink-500/10", action: () => {
-                      setShowPlusMenu(false);
-                      setImageGenMode(v => {
-                        const next = !v;
-                        toast({ title: next ? "Image Gen ON" : "Image Gen OFF", description: next ? "Type a prompt to generate an image, or attach one to edit it." : undefined });
-                        return next;
-                      });
-                    } },
-                    { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); window.location.href = "/courses"; } },
+                    { icon: BookOpen, label: "Courses", color: "text-amber-400 bg-amber-500/10", action: () => { setShowPlusMenu(false); setLocation("/courses"); } },
                   ].map(item => (
                     <button key={item.label} onClick={item.action}
                       className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover-elevate transition-all"
@@ -1948,17 +1899,11 @@ export default function Chat() {
             <div className={`rounded-2xl border transition-all ${
               isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
               videoMode ? "border-purple-500/40 bg-purple-500/5" :
-              imageGenMode ? "border-pink-500/40 bg-pink-500/5" :
               "border-border bg-card shadow-sm hover:shadow-md"
             }`}>
 
               {/* Textarea */}
               <div className="px-4 pt-4 pb-2">
-                {imageGenMode && (
-                  <div className="flex items-center gap-1.5 text-xs text-pink-400 font-medium mb-1.5">
-                    <span>🎨</span><span>Image Gen mode — {pendingFiles.length > 0 ? "editing attached image" : "type what to generate"}</span>
-                  </div>
-                )}
                 <textarea
                   ref={textareaRef}
                   value={message}
@@ -1968,7 +1913,6 @@ export default function Chat() {
                   placeholder={
                     isListening ? "Listening..." :
                     videoMode ? "Describe your video..." :
-                    imageGenMode ? "Describe the image you want..." :
                     pendingFiles.length > 0 ? "Add a prompt for these files (optional)..." :
                     "How can I help you today?"
                   }
@@ -2127,6 +2071,19 @@ export default function Chat() {
                 </div>
               </div>
             </div>
+
+            {streamImages.length > 0 && isLoading && (
+              <div className="mt-2 grid grid-cols-2 gap-1.5" data-testid="stream-images">
+                {streamImages.map((img, i) => (
+                  <div key={img.id || i} className="relative group rounded-xl overflow-hidden border border-border/40">
+                    <img src={img.url} alt={img.title} className="w-full aspect-square object-cover" loading="lazy" />
+                    <a href={img.url} download={`lenory-${img.id || i}.png`} className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <Download className="w-6 h-6 text-white" />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <ToolsMiniPage open={toolsOpen} onOpenChange={setToolsOpen} />
             {laneBlocked && selectedLane && (

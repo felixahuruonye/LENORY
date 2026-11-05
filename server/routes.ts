@@ -15,6 +15,9 @@ import { enqueueJob, getJob, getQueueStats, registerJobHandler } from "./jobQueu
 
 
 import { NIGERIAN_WRITING_POLICY } from "./assistant/writingPolicy";
+import { laneUnavailableMessage } from "./laneContext";
+import { IMAGE_SERVICES, imageCostKey, imageOnKey } from "./imageDefaults";
+import { stabilityBalance } from "./imageStudio";
 import { getJobStats, trackJob } from "./jobStats";
 import { getLaneProfile, saveLane, laneCost, isHeavyJob, ALL_LANES } from "./assistant/lanes";
 import { prefsBlockFor, loadMemoryPrefs, saveMemoryPrefs, PREF_FIELDS, buildPrefsBlock } from "./assistant/memoryPrefs";
@@ -423,6 +426,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // ── User Capabilities (Claude-style toggles) ─────────────────────────────
   // Live state of every model lane + web search, for the countdown timers under the chat box.
+  // Admin: every image service with its switch, price, cost to us, plan caps, and a LIVE check of the Stability key.
+  app.get("/api/admin/image-controls", supabaseAuth, async (req: any, res: Response) => {
+    const u: any = await storage.getUser(req.userId);
+    if (u?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Admin only" });
+    const costs = await getAllFeatureCosts();
+    const balance = await stabilityBalance();
+    const month = new Date().toISOString().slice(0, 7);
+    res.json({
+      master: costs["img_master"] ?? 1,
+      caps: { free: costs["image_cap_free"], pro: costs["image_cap_pro"], premium: costs["image_cap_premium"] },
+      services: IMAGE_SERVICES.map((sv) => ({ ...sv, credits: costs[imageCostKey(sv.id)] ?? sv.credits, enabled: (costs[imageOnKey(sv.id)] ?? 1) > 0 })),
+      stability: balance, geminiKey: !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY), month,
+      note: "1 Stability credit = $0.01. Environment changes made on Render apply after the server restarts.",
+    });
+  });
   app.get("/api/ai/status", supabaseAuth, async (req: any, res) => {
     const ws = isWebSearchExhausted();
     const profile = await getLaneProfile(req.userId);
@@ -437,6 +455,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await saveLane(req.userId, lane as any);
     res.json({ success: true, profile: await getLaneProfile(req.userId) });
   });
+  app.get("/api/images/history", supabaseAuth, async (req: any, res: Response) => {
+    try { const imgs = await storage.getGeneratedImagesByUser(req.userId); res.json({ images: imgs || [] }); }
+    catch (e: any) { res.status(500).json({ message: "Could not load image history" }); }
+  });
+  app.get("/api/admin/stability-balance", adminSupabaseAuth, async (_req, res) => {
+    const { stabilityBalance } = await import("./imageStudio");
+    res.json(await stabilityBalance());
+  });
+  app.get("/api/admin/image-services", adminSupabaseAuth, async (_req, res) => {
+    const { IMAGE_SERVICES, IMAGE_CAP_DEFAULTS, imageCostKey, imageOnKey } = await import("./imageDefaults");
+    const { getFeatureCost } = await import("./creditsStore");
+    const svcs = await Promise.all(IMAGE_SERVICES.map(async (s) => ({
+      ...s,
+      credits: await getFeatureCost(imageCostKey(s.id)),
+      enabled: (await getFeatureCost(imageOnKey(s.id))) > 0,
+    })));
+    const caps = { free: await getFeatureCost("image_cap_free"), pro: await getFeatureCost("image_cap_pro"), premium: await getFeatureCost("image_cap_premium") };
+    res.json({ services: svcs, caps, defaults: IMAGE_CAP_DEFAULTS });
+  });
+  app.put("/api/admin/image-services/:id", adminSupabaseAuth, async (req: any, res) => {
+    const { id } = req.params;
+    const { credits, enabled } = req.body || {};
+    const { imageCostKey, imageOnKey } = await import("./imageDefaults");
+    const errors: string[] = [];
+    if (credits !== undefined) { const ok = await setFeatureCost(imageCostKey(id), Number(credits), req.userId); if (!ok) errors.push("credits save failed"); }
+    if (enabled !== undefined) { const ok = await setFeatureCost(imageOnKey(id), enabled ? 1 : 0, req.userId); if (!ok) errors.push("enabled save failed"); }
+    if (errors.length) return res.status(500).json({ message: errors.join("; ") });
+    res.json({ success: true });
+  });
+  app.put("/api/admin/image-caps", adminSupabaseAuth, async (req: any, res) => {
+    const { free, pro, premium } = req.body || {};
+    const errors: string[] = [];
+    for (const [k, v] of [["image_cap_free", free], ["image_cap_pro", pro], ["image_cap_premium", premium]] as [string, number][]) {
+      if (v !== undefined) { const ok = await setFeatureCost(k, Number(v), req.userId); if (!ok) errors.push(`${k} save failed`); }
+    }
+    if (errors.length) return res.status(500).json({ message: errors.join("; ") });
+    res.json({ success: true });
+  });
+
   app.get("/api/capabilities", supabaseAuth, async (req: any, res) => {
     try {
       const caps = await loadUserCapabilities(req.userId);
@@ -576,7 +633,7 @@ app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
 - **Ask LENORY (Chat)**: /chat — main AI chat with context memory
 - **Live Voice AI**: /live-ai — real-time voice conversations with Gemini
 - **Website Generator**: /website-generator — build websites from prompts (Pro+)
-- **Image Generator**: /image-gen — create images with AI (2 credits)
+- **Images**: made inside chat (no image page exists); history is the Image card on the dashboard — create images with AI (2 credits)
 - **CBT Mode**: /cbt-mode — exam practice with JAMB/WAEC/NECO questions
 - **Study Plans**: /study-plans — personalized study schedules
 - **Project Workspace**: /project-workspace — manage code projects and files
@@ -681,7 +738,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
       let laneId: "ultra" | "fast" | "vision" = (["ultra", "fast", "vision"].includes(wantedLane) && laneProfile.allowed.includes(wantedLane as any) ? wantedLane : laneProfile.lane) as any;
       const laneName = { ultra: "Ultra", fast: "Fast", vision: "Vision" }[laneId];
       const laneInfo = getLaneStatuses().find((l) => l.lane === laneId)!;
-      const resting = `LENORY ${laneName} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.`;
+      const resting = laneUnavailableMessage(laneId);
       // Provider limits apply to everyone, admins included. Nothing is charged while a mode rests.
       if (!laneInfo.available) {
         return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo.label, reason: laneInfo.reason, resetsAt: laneInfo.resetsAt, resetsInSeconds: laneInfo.resetsInSeconds, message: resting });
@@ -811,8 +868,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
           }
         } catch (aiError: any) {
           // Exactly the wording the product uses when a mode cannot answer; the countdown shows under the chat.
-          const nm = ({ ultra: "Ultra", fast: "Fast", vision: "Vision" } as any)[laneId];
-          aiResponse = `LENORY ${nm} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.`;
+          aiResponse = laneUnavailableMessage(laneId);
           console.warn(`[lane ${laneId}] failed:`, String(aiError?.message || aiError).slice(0, 200));
         }
       }
@@ -825,6 +881,10 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       const imageKeywords = ["explain with image", "show me", "visualize", "draw", "illustrate", "with image", "with a picture", "with diagram"];
       const shouldGenerateImage = imageKeywords.some(keyword => content.toLowerCase().includes(keyword));
       let attachments: any = null;
+          const agentImages = (agentRes as any)?.images || [];
+          if (agentImages.length) {
+            if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "images", images: agentImages })}\n\n`);
+          }
       if (shouldGenerateImage) {
         try {
           const imagePrompt = `Create a visual representation for: ${aiResponse.substring(0, 200)}`;
@@ -834,7 +894,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         } catch (imgErr) {}
       }
       if (agentArtifacts.length || searchSources.length) {
-        attachments = { ...(attachments || {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
+        attachments = { ...(attachments || {}), ...(agentImages.length ? { images: [...(attachments?.images || []), ...agentImages] } : {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
       }
 
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "assistant", content: aiResponse, attachments });
@@ -944,8 +1004,7 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
       const laneIdLive: "ultra" | "fast" | "vision" = (["ultra", "fast", "vision"].includes(wantLive) && lpLive.allowed.includes(wantLive as any) ? wantLive : lpLive.lane) as any;
       const liveInfo = getLaneStatuses().find((l) => l.lane === laneIdLive)!;
       if (!liveInfo.available) {
-        const nm = ({ ultra: "Ultra", fast: "Fast", vision: "Vision" } as any)[laneIdLive];
-        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneIdLive, label: liveInfo.label, resetsAt: liveInfo.resetsAt, resetsInSeconds: liveInfo.resetsInSeconds, message: `LENORY ${nm} could not answer just now (This mode is currently unavailable). Please try again after your limit is over or pick another model.` });
+        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneIdLive, label: liveInfo.label, resetsAt: liveInfo.resetsAt, resetsInSeconds: liveInfo.resetsInSeconds, message: laneUnavailableMessage(laneIdLive) });
       }
       const endLive = trackJob(`live:${laneIdLive}`);
       const orch0 = await runToolAgent({
@@ -1071,7 +1130,7 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
 - **Ask LENORY (Chat)**: /chat
 - **Live Voice AI**: /live-ai
 - **Website Generator**: /website-generator
-- **Image Generator**: /image-gen
+- **Images**: made inside chat (no image page exists); history is the Image card on the dashboard
 - **CBT Mode**: /cbt-mode
 - **Study Plans**: /study-plans
 - **Project Workspace**: /project-workspace
@@ -2597,93 +2656,8 @@ ${EXAM_BOOKLET_MODE_PROMPT}
 
   // ─── GENERATE IMAGE ─────────────────────────────────────────────────────────
 
-  app.post('/api/generate-image', supabaseAuth, async (req: any, res: Response) => {
-    try {
-      const userId = req.userId;
-      const { prompt, relatedTopic, style, referenceImageBase64 } = req.body;
-      if (!prompt?.trim()) return res.status(400).json({ message: "Prompt is required" });
-      const user = await storage.getUser(userId);
-      const tier = user?.subscriptionTier || 'free';
-      const isAdmin = user?.email === REAL_ADMIN_EMAIL;
-      // Cost accepted from the image-gen spec: standard generate = 5
-      // credits, editing (a reference image supplied) = 6 — drawn from the
-      // same shared credit balance every other feature already uses, not a
-      // separate image-only pool, for consistency with how Website Builder/
-      // chat/TTS/etc. are already billed.
-      const cost = referenceImageBase64 ? 6 : 5;
-      if (!isAdmin) {
-        // Monthly image-count caps, also from the accepted spec (was
-        // free:5/pro:50/premium:unlimited — now free:5/pro:30/premium:70).
-        const MONTHLY_IMAGE_LIMITS: Record<string, number> = { free: 5, pro: 30, premium: 70 };
-        const limit = MONTHLY_IMAGE_LIMITS[tier] ?? 5;
-        if (isFinite(limit)) {
-          const allImages = await storage.getGeneratedImagesByUser(userId);
-          const thisMonth = new Date().toISOString().slice(0, 7);
-          const monthlyCount = allImages.filter((img: any) => {
-            const created = img.createdAt || img.created_at || "";
-            return typeof created === "string" ? created.startsWith(thisMonth) : false;
-          }).length;
-          if (monthlyCount >= limit) return res.status(403).json({ message: `Image generation limit reached (${limit}/month on ${tier} plan).`, limit, used: monthlyCount, tier });
-        }
-        const credits = await getOrCreateCredits(userId, tier);
-        if (credits.balance < cost) return res.status(403).json({ message: `Insufficient credits. You need at least ${cost} credits.`, balance: credits.balance });
-      }
-      const styleHints: Record<string, string> = {
-        illustrated: "illustrated, vector art, flat design",
-        sketch: "pencil sketch, hand-drawn, monochrome line art",
-        "3d": "3D render, CGI, octane render, volumetric lighting",
-        watercolor: "watercolor painting, soft brush strokes, artistic",
-        neon: "neon glow, cyberpunk, dark background, neon lights",
-        photorealistic: "photorealistic, ultra-detailed, 8K, sharp focus",
-      };
-      const styleTag = styleHints[style] || "";
-      const effectivePrompt = styleTag ? `${prompt}, ${styleTag}` : prompt;
-      // generateImageWithLENORY's own internal budget, worst case, is now:
-      // Gemini ~30s (2 model attempts) + NexaAPI ~25s + Pollinations ~25s
-      // (only reached if the earlier ones actually fail slow rather than
-      // fast — most failures, per production logs, are near-instant 429s,
-      // not hangs) + 15s storage upload = up to 95s. The outer timeout has
-      // to allow for the full fallback chain to actually get a chance to
-      // run, or it defeats the purpose of having fallbacks at all. 110s
-      // leaves a safety margin above that worst case.
-      const overallTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("OVERALL_TIMEOUT")), 110000));
-      const image = await Promise.race([generateImageWithLENORY(effectivePrompt, referenceImageBase64), overallTimeout]);
-      logApiUsage(`image-gen-${image.provider}`, userId, "/api/generate-image");
-      const stored = await storage.createGeneratedImage({ userId, prompt, imageUrl: image.url, relatedTopic, provider: image.provider } as any);
-      if (!isAdmin) {
-        const newBalance = await deductCredits(userId, cost);
-        console.log(`💰 Deducted ${cost} credits for image (${image.provider}) — user ${userId}, new balance: ${newBalance}`);
-      }
-      res.json(stored);
-    } catch (error) {
-      // Previously a generic "Failed to generate image" no matter what
-      // actually went wrong; then the raw underlying error — fixed the "no
-      // idea why it failed" problem for debugging, but a wall of raw JSON
-      // in a user-facing toast is bad UX. Full detail still goes to the
-      // server log either way. Now that generateImageWithLENORY tries 3
-      // providers (Gemini -> NexaAPI -> Pollinations) before ever reaching
-      // here, this only fires when ALL THREE failed — genuinely rare — so
-      // the messaging reflects that instead of blaming one provider.
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("Error generating image (all providers exhausted):", msg);
-      const isTimeout = msg.includes("OVERALL_TIMEOUT") || msg.toLowerCase().includes("timed out");
-      const isQuota = msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429") || /quota/i.test(msg);
-      const isAuth = msg.includes("API key") || msg.includes("PERMISSION_DENIED") || msg.includes("401") || msg.includes("403");
-      let status = 500;
-      let clientMessage = "All image providers are unavailable right now. Please try again later.";
-      if (isTimeout) {
-        status = 408;
-        clientMessage = "Image generation is taking too long — please try again.";
-      } else if (isQuota) {
-        status = 503;
-        clientMessage = "All image providers hit their usage limits. Please try again in a few minutes, or contact support if this continues.";
-      } else if (isAuth) {
-        status = 503;
-        clientMessage = "Image generation isn't configured correctly right now. Please contact support.";
-      }
-      res.status(status).json({ message: clientMessage });
-    }
-  });
+  // The standalone image page is gone: pictures are made in chat (generate_image tool) so credits, caps and the mode rules always apply.
+  app.post('/api/generate-image', supabaseAuth, (_req: any, res: Response) => res.status(410).json({ message: 'Image generation now happens in chat. Ask LENORY to make the picture.' }));
 
   app.get('/api/generated-images', supabaseAuth, async (req: any, res: Response) => {
     try { res.json(await storage.getGeneratedImagesByUser(req.userId)); } catch (error) { res.status(500).json({ message: "Failed to fetch generated images" }); }
@@ -3332,7 +3306,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       const images = await storage.getGeneratedImagesByUser(userId);
       const imageResults = images
         .filter(i => i.prompt.toLowerCase().includes(query) || i.relatedTopic?.toLowerCase().includes(query))
-        .map(i => ({ type: 'image', id: i.id, title: i.relatedTopic || 'Generated Image', description: i.prompt.substring(0, 50), icon: 'ImageIcon', imageUrl: i.imageUrl, href: `/image-gen` }))
+        .map(i => ({ type: 'image', id: i.id, title: i.relatedTopic || 'Generated Image', description: i.prompt.substring(0, 50), icon: 'ImageIcon', imageUrl: i.imageUrl, href: `/dashboard` }))
         .slice(0, 3);
       results.push(...imageResults);
       // Search Projects

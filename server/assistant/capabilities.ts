@@ -20,6 +20,8 @@ export interface UserCapabilities {
   codeExecution: boolean;
   /** Let LENORY read/create items in the Project Workspace */
   projects: boolean;
+  /** Make and edit pictures in chat (Stability on Ultra/Fast, Nano Banana on Vision) */
+  imageGeneration: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: UserCapabilities = {
@@ -32,9 +34,10 @@ export const DEFAULT_CAPABILITIES: UserCapabilities = {
   kbWrite: true,
   codeExecution: false,
   projects: true,
+  imageGeneration: true,
 };
 
-const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite", "codeExecution", "projects"] as const;
+const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite", "codeExecution", "projects", "imageGeneration"] as const;
 
 /** Accept only known keys with the right types (never trust raw client JSON). */
 export function sanitizeCapabilities(input: any): Partial<UserCapabilities> {
