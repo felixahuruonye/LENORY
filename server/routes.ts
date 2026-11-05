@@ -459,11 +459,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { const imgs = await storage.getGeneratedImagesByUser(req.userId); res.json({ images: imgs || [] }); }
     catch (e: any) { res.status(500).json({ message: "Could not load image history" }); }
   });
-  app.get("/api/admin/stability-balance", adminSupabaseAuth, async (_req, res) => {
+  app.get("/api/admin/stability-balance", supabaseAuth, async (_req, res) => {
     const { stabilityBalance } = await import("./imageStudio");
     res.json(await stabilityBalance());
   });
-  app.get("/api/admin/image-services", adminSupabaseAuth, async (_req, res) => {
+  app.get("/api/admin/image-services", supabaseAuth, async (_req, res) => {
     const { IMAGE_SERVICES, IMAGE_CAP_DEFAULTS, imageCostKey, imageOnKey } = await import("./imageDefaults");
     const { getFeatureCost } = await import("./creditsStore");
     const svcs = await Promise.all(IMAGE_SERVICES.map(async (s) => ({
@@ -474,7 +474,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const caps = { free: await getFeatureCost("image_cap_free"), pro: await getFeatureCost("image_cap_pro"), premium: await getFeatureCost("image_cap_premium") };
     res.json({ services: svcs, caps, defaults: IMAGE_CAP_DEFAULTS });
   });
-  app.put("/api/admin/image-services/:id", adminSupabaseAuth, async (req: any, res) => {
+  app.put("/api/admin/image-services/:id", supabaseAuth, async (req: any, res) => {
     const { id } = req.params;
     const { credits, enabled } = req.body || {};
     const { imageCostKey, imageOnKey } = await import("./imageDefaults");
@@ -484,7 +484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (errors.length) return res.status(500).json({ message: errors.join("; ") });
     res.json({ success: true });
   });
-  app.put("/api/admin/image-caps", adminSupabaseAuth, async (req: any, res) => {
+  app.put("/api/admin/image-caps", supabaseAuth, async (req: any, res) => {
     const { free, pro, premium } = req.body || {};
     const errors: string[] = [];
     for (const [k, v] of [["image_cap_free", free], ["image_cap_pro", pro], ["image_cap_premium", premium]] as [string, number][]) {

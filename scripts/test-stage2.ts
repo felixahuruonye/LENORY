@@ -1,3 +1,4 @@
+process.env.SUPABASE_URL="https://x.supabase.co"; process.env.VITE_SUPABASE_URL="https://x.supabase.co"; process.env.SUPABASE_SERVICE_ROLE_KEY="k"; process.env.SUPABASE_ANON_KEY="k"; process.env.VITE_SUPABASE_ANON_KEY="k";
 import "./_env";
 // Run: npx tsx scripts/test-stage2.ts   (no API keys or network needed; model/search calls are scripted)
 process.env.OPENROUTER_API_KEY = "test"; process.env.GROQ_API_KEY = "test"; process.env.TAVILY_API_KEY = "test"; delete process.env.STABILITY_API_KEY; delete process.env.CODE_SANDBOX_URL;
