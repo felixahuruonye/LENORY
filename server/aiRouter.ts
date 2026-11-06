@@ -45,9 +45,11 @@ const M = (provider: ModelSpec["provider"], model: string, label: string): Model
 const SONNET = M("openrouter", "anthropic/claude-sonnet-5", "Claude Sonnet 5");
 const GLM = M("openrouter", "z-ai/glm-5.2", "GLM 5.2");
 const DSEEK = M("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash");
+// Groq: keep OSS models; Qwen id must match console.groq.com (404s were taking Fast offline)
 const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
-const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B");
+const QWEN = M("groq", "qwen/qwen3-32b", "Qwen3 32B");
 const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
+// Gemini chat models (Vision lane). Prefer widely available ids; 404s go on short cooldown.
 const G35 = M("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
 const G3 = M("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash");
 const GLITE = M("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite");
@@ -81,15 +83,28 @@ function isOnCooldown(spec: ModelSpec): boolean {
 }
 
 function setCooldown(spec: ModelSpec, retryAfterSeconds: number | null, reason: string) {
-  // Generic rate limits reset in ~60s. If the error text smells like a hard
-  // quota/billing cutoff rather than a per-minute limit, cool down for 6h
-  // instead so we're not hammering a dead key every request.
-  const isHardQuota = /quota|billing|insufficient_quota|credit/i.test(reason);
-  const is402 = /\b402\b/.test(reason); // credits can be topped up any minute, so re-check every 10 min
-  const seconds = retryAfterSeconds ?? (is402 ? 600 : isHardQuota ? 6 * 60 * 60 : 60);
-  const until = Date.now() + seconds * 1000;
+  // IMPORTANT: do NOT treat the bare word "credit" as a hard ban — provider
+  // error bodies and image-tool text often contain it, which previously put
+  // entire Fast/Ultra/Vision lanes on a 6-hour cooldown after one image attempt.
+  const is402 = /\b402\b/.test(reason);
+  const isHardQuota =
+    /insufficient_quota|billing_not_active|payment.?required|exceeded your.+quota|quota exceeded/i.test(reason)
+    && !/\b429\b/.test(reason);
+  // 429 → short rest (rate limit). 402 → re-check soon after top-up. Hard quota → 30 min max.
+  const seconds = Math.min(
+    retryAfterSeconds ?? (is402 ? 180 : isHardQuota ? 30 * 60 : 45),
+    isHardQuota ? 30 * 60 : 15 * 60, // never park a chat model longer than 15–30 min automatically
+  );
+  const until = Date.now() + Math.max(15, seconds) * 1000;
   cooldowns.set(cooldownKey(spec), { until, reason });
-  console.warn(`⏸️  ${spec.label} on cooldown for ${seconds}s — resets ${new Date(until).toISOString()} — ${reason}`);
+  console.warn(`⏸️  ${spec.label} on cooldown for ${Math.round((until - Date.now()) / 1000)}s — ${reason.slice(0, 120)}`);
+}
+
+/** Admin / recovery: clear all in-memory chat model cooldowns (does not affect provider accounts). */
+export function clearAllModelCooldowns(): number {
+  const n = cooldowns.size;
+  cooldowns.clear();
+  return n;
 }
 
 /** test helper */
@@ -128,6 +143,9 @@ async function callOpenAICompatible(
     if (res.status === 429 || res.status === 402 || res.status === 403) {
       const retryAfter = res.status === 429 ? parseRetryAfterSeconds(res.headers) : null;
       setCooldown(spec, retryAfter, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    } else if (res.status === 400 && /model|not found|does not exist/i.test(text)) {
+      // Bad model id — short cooldown so the rest of the lane can run and admin can see it
+      setCooldown(spec, 300, `HTTP 400 bad model id: ${text.slice(0, 160)}`);
     }
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
@@ -223,16 +241,16 @@ export function pickGeminiModel(heavy = false): string {
 // when each lane (Ultra / Fast / Vision / Search) works again. Nobody bypasses
 // this - admins included.
 const RPM: Record<string, number> = {
-  openrouter: Number(process.env.OPENROUTER_RPM || 16),
-  groq: Number(process.env.GROQ_RPM || 22),
-  gemini: Number(process.env.GEMINI_RPM || 10),
+  openrouter: Number(process.env.OPENROUTER_RPM || 24),
+  groq: Number(process.env.GROQ_RPM || 40),
+  gemini: Number(process.env.GEMINI_RPM || 20),
   tavily: Number(process.env.TAVILY_RPM || 30),
 };
 const windows = new Map<string, number[]>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Waits a little (max ~6s) to stay under the provider's per-minute budget; throws SOFT_LIMIT:<ms> if the wait would be longer. */
-export async function throttle(provider: string, maxWaitMs = 6000): Promise<void> {
+export async function throttle(provider: string, maxWaitMs = 12000): Promise<void> {
   const limit = RPM[provider] || 20;
   for (let i = 0; i < 3; i++) {
     const now = Date.now();
@@ -407,8 +425,10 @@ async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSche
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    if (res.status === 404) throw new Error(`${spec.label} model ID not found (404): ${text.slice(0,120)} — please update the model ID`);
+    if (res.status === 404) throw new Error(`${spec.label} model not found (404) — model ID needs updating`);
     if (res.status === 429 || res.status === 403) setCooldown(spec, parseRetryDelaySeconds(text) ?? (/per day|daily/i.test(text) ? 3600 : 60), `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    else if (res.status === 404 || (res.status === 400 && /not found|invalid|unknown model/i.test(text)))
+      setCooldown(spec, 600, `HTTP ${res.status} bad model: ${text.slice(0, 160)}`);
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
   const data: any = await res.json();
@@ -434,8 +454,10 @@ export async function chatWithLane(
     if (!laneKeyOk(spec)) { trail.push(`${spec.label} (no key)`); continue; }
     if (isOnCooldown(spec)) { trail.push(`${spec.label} (resting)`); continue; }
     try { await throttle(spec.provider); } catch (te: any) {
-      setCooldown(spec, Math.ceil((Number(String(te?.message).split(":")[1]) || 30000) / 1000), "throttled to protect the provider limit");
-      trail.push(`${spec.label} (busy)`); continue;
+      // Soft RPM wait exceeded — skip this model for THIS request only.
+      // Do NOT setCooldown: that was marking entire Fast/Ultra/Vision lanes
+      // "unavailable" after normal tool work (e.g. image gen) filled the window.
+      trail.push(`${spec.label} (busy this request)`); continue;
     }
     try {
       let out;
@@ -452,7 +474,9 @@ export async function chatWithLane(
       console.warn(`[lane ${lane}] ${spec.label} failed, trying next:`, e?.message);
     }
   }
-  throw new Error(`LANE_UNAVAILABLE:${lane}:${trail.join(" | ")}`);
+  const hard = trail.some((x) => /HTTP 402|HTTP 403|resting|no key|bad model/i.test(x));
+  const code = hard ? "LANE_UNAVAILABLE" : "LANE_TEMPORARY";
+  throw new Error(`${code}:${lane}:${trail.join(" | ")}`);
 }
 
 async function callOpenAICompatibleTools(
@@ -478,6 +502,9 @@ async function callOpenAICompatibleTools(
     if (res.status === 429 || res.status === 402 || res.status === 403) {
       const retryAfter = res.status === 429 ? parseRetryAfterSeconds(res.headers) : null;
       setCooldown(spec, retryAfter, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    } else if (res.status === 400 && /model|not found|does not exist/i.test(text)) {
+      // Bad model id — short cooldown so the rest of the lane can run and admin can see it
+      setCooldown(spec, 300, `HTTP 400 bad model id: ${text.slice(0, 160)}`);
     }
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
@@ -487,7 +514,10 @@ async function callOpenAICompatibleTools(
   // Safety-flag switch: if this model's safety layer blocked or refused the reply,
   // throw so the failover moves on to the NEXT model instead of showing a false refusal.
   const finish = data.choices?.[0]?.finish_reason;
-  if (finish === "content_filter" || msg?.refusal || (!msg?.tool_calls?.length && content.length < 220 && /^(i'?m sorry,? but )?i (can(no|')t|am (not able|unable) to|won'?t) (help|assist|comply|do that|provide)/i.test(content.trim()))) {
+  // Only treat explicit provider safety blocks as failover triggers.
+  // Do NOT treat ordinary "I couldn't generate the image because..." answers as refusals —
+  // that was burning through every model in the lane and marking it unavailable.
+  if (finish === "content_filter" || msg?.refusal) {
     throw new Error(`${spec.label} flagged/refused this request - switching model`);
   }
   const toolCalls: ToolCall[] = (msg?.tool_calls || [])

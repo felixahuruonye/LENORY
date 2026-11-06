@@ -2084,12 +2084,11 @@ class SupabaseStorage extends DatabaseStorage {
     const now = new Date().toISOString();
     if (supabaseDb) {
       try {
-        const dataPayload = (entry as any).data ?? (entry as any).content !== undefined ? { content: (entry as any).content } : {};
         const { error } = await supabaseDb.from('memory_entries').insert({
           id,
           user_id: entry.userId,
           type: (entry as any).type || 'note',
-          data: typeof dataPayload === 'object' && dataPayload !== null ? dataPayload : { content: String(dataPayload) },
+          data: (() => { const d = (entry as any).data; const c = (entry as any).content; if (d && typeof d === 'object') return d; if (c !== undefined) return { content: String(c) }; return {}; })(),
           created_at: now,
         });
         if (error) console.error("🔥 Failed to save memory entry to Supabase:", error.message, error.details, error.hint);
@@ -2112,12 +2111,7 @@ class SupabaseStorage extends DatabaseStorage {
         if (!error && data) {
           return data.map((m: any) => ({
             id: m.id, userId: m.user_id, type: m.type, subject: (m as any).subject,
-            data: (() => {
-              const d = (m as any).data;
-              if (!d) return {};
-              if (typeof d === 'object') return d;
-              try { return JSON.parse(String(d)); } catch { return { content: String(d) }; }
-            })(),
+            data: (() => { const d=(m as any).data; if (!d) return {}; if (typeof d==='object') return d; try { return JSON.parse(String(d)); } catch { return {content:String(d)}; } })(),
             createdAt: new Date(m.created_at),
           })) as unknown as MemoryEntry[];
         }

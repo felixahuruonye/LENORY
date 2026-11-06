@@ -695,6 +695,10 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
       let agentArtifacts: any[] = [];
       let agentTools: string[] = [];
       let agentFolders: any[] = [];
+      // Must live outside the AI try/catch — previously agentRes was block-scoped
+      // inside try, then read after the catch → ReferenceError on EVERY message
+      // ("Failed to send message") even when the model answered successfully.
+      let agentRes: any = null;
 
       if (examResults.length > 0) {
         const lastExam = examResults[0];
@@ -740,9 +744,15 @@ ${EXAM_BOOKLET_MODE_PROMPT}`;
       const laneInfo = getLaneStatuses().find((l) => l.lane === laneId)!;
       const resting = laneUnavailableMessage(laneId);
       // Provider limits apply to everyone, admins included. Nothing is charged while a mode rests.
-      if (!laneInfo.available) {
-        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo.label, reason: laneInfo.reason, resetsAt: laneInfo.resetsAt, resetsInSeconds: laneInfo.resetsInSeconds, message: resting });
+      if (!laneInfo?.available) {
+        return res.status(429).json({ success: false, code: "LANE_UNAVAILABLE", lane: laneId, label: laneInfo?.label || laneId, reason: laneInfo?.reason, resetsAt: laneInfo?.resetsAt, resetsInSeconds: laneInfo?.resetsInSeconds, message: resting });
       }
+      // Bind THIS message's lane into ALS so nested AI calls (Gemini/Groq/OpenRouter)
+      // follow the selector, not a stale saved profile from auth middleware.
+      try {
+        const { laneContext } = await import("./laneContext");
+        laneContext.enterWith({ lane: laneId, userId });
+      } catch {}
       const [simpleCost, heavyCost, kbExtra, pasteExtra] = await Promise.all([laneCost(laneId, false), laneCost(laneId, true), getFeatureCost("chat_kb_context_extra"), getFeatureCost("chat_long_paste_extra")]);
 
       const hasKbContext = !!kbFolderContext;
@@ -791,9 +801,8 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
         aiResponse = overrideResponse;
       } else {
         try {
-          const tier = laneId === "ultra" ? "ultra" : "fast";
+          const tier = (laneId === "ultra" ? "ultra" : laneId === "vision" ? "vision" : "fast") as "ultra" | "fast" | "vision";
           const endJob = trackJob(`chat:${laneId}`);
-          let agentRes: Awaited<ReturnType<typeof runToolAgent>>;
           try {
           agentRes = await runToolAgent({
             userId,
@@ -867,9 +876,23 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
             }
           }
         } catch (aiError: any) {
-          // Exactly the wording the product uses when a mode cannot answer; the countdown shows under the chat.
-          aiResponse = laneUnavailableMessage(laneId);
-          console.warn(`[lane ${laneId}] failed:`, String(aiError?.message || aiError).slice(0, 200));
+          const msg = String(aiError?.message || aiError || "");
+          console.warn(`[lane ${laneId}] failed:`, msg.slice(0, 240));
+          // LANE_UNAVAILABLE = hard provider/key issue. LANE_TEMPORARY = busy/empty this request only.
+          // Image/tool failures must NEVER use the "mode unavailable" product string.
+          if (/^LANE_UNAVAILABLE/i.test(msg)) {
+            aiResponse = laneUnavailableMessage(laneId);
+          } else if (/^LANE_TEMPORARY/i.test(msg)) {
+            aiResponse = `I couldn't finish that reply just now (temporary model glitch in ${laneId}). This is not a long cooldown — please send the message again. If you were generating an image, try once more or switch to Vision mode.`;
+          } else if (/image|picture|stability|nano banana|provider account is out of credits|No image was made/i.test(msg)) {
+            aiResponse = `I couldn't complete the image request. ${msg.replace(/^LANE_[A-Z]+:[^:]+:/, "").slice(0, 280)}
+
+This is an image-provider issue, not your chat mode being offline. Try again, or use Vision mode (Gemini images).`;
+          } else {
+            aiResponse = `I hit a temporary error handling that request: ${msg.slice(0, 220)}
+
+Please try again. Your selected mode is still available unless Admin → Providers shows it on cooldown.`;
+          }
         }
       }
       sendStatus("writing", 6);
@@ -881,7 +904,7 @@ Help ${user?.firstName || userName} achieve their learning goals. Be accurate, h
       const imageKeywords = ["explain with image", "show me", "visualize", "draw", "illustrate", "with image", "with a picture", "with diagram"];
       const shouldGenerateImage = imageKeywords.some(keyword => content.toLowerCase().includes(keyword));
       let attachments: any = null;
-          const agentImages = (agentRes as any)?.images || [];
+          const agentImages = (agentRes && agentRes.images) ? agentRes.images : [];
           if (agentImages.length) {
             if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "images", images: agentImages })}\n\n`);
           }
@@ -1401,12 +1424,51 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   // Which chat models are currently on cooldown (rate-limited / over quota)
   // and when each one resets — so Felix can check this instead of guessing
   // from server logs.
+  
+  app.post("/api/admin/clear-model-cooldowns", supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const requester = await storage.getUser(req.userId);
+      if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
+      const { clearAllModelCooldowns } = await import("./aiRouter");
+      const n = clearAllModelCooldowns();
+      res.json({ success: true, cleared: n, message: `Cleared ${n} in-memory model cooldown(s). Provider accounts unchanged.` });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to clear cooldowns" });
+    }
+  });
+
   app.get('/api/admin/ai-provider-status', supabaseAuth, async (req: any, res: Response) => {
     try {
       const requester = await storage.getUser(req.userId);
       if (requester?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Forbidden" });
-      res.json({ cooldowns: getProviderCooldownStatus() });
+      // Full inventory: every lane model + key presence + cooldowns (not only models currently resting)
+      const { getLaneStatuses, LANE_ORDER, getProviderCooldownStatus: gps } = await import("./aiRouter");
+      const keys = {
+        openrouter: !!process.env.OPENROUTER_API_KEY,
+        groq: !!process.env.GROQ_API_KEY,
+        gemini: !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
+      };
+      const models: any[] = [];
+      for (const lane of ["ultra", "fast", "vision"] as const) {
+        for (const spec of LANE_ORDER[lane].heavy) {
+          const keyOk = spec.provider === "openrouter" ? keys.openrouter : spec.provider === "groq" ? keys.groq : keys.gemini;
+          const cd = gps().find((c: any) => c.model === `${spec.provider}:${spec.model}`);
+          models.push({
+            lane,
+            provider: spec.provider,
+            model: spec.model,
+            label: spec.label,
+            keyConfigured: keyOk,
+            status: !keyOk ? "no_key" : cd ? "cooldown" : "ready",
+            resetsInSeconds: cd?.resetsInSeconds || 0,
+            resetsAt: cd?.resetsAt || null,
+            reason: cd?.reason || (!keyOk ? "API key not set on server" : null),
+          });
+        }
+      }
+      res.json({ keys, models, lanes: getLaneStatuses(), cooldowns: gps() });
     } catch (error) {
+      console.error("ai-provider-status", error);
       res.status(500).json({ message: "Failed to fetch provider status" });
     }
   });

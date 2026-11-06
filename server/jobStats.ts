@@ -34,8 +34,8 @@ function load(): Promise<void> {
     const id = await getAdminId();
     if (!id || !supabaseAdmin) return;
     try {
-      const { data } = await supabaseAdmin.from("memory_entries").select("id,data").eq("type", TYPE).eq("user_id", id).order("created_at", { ascending: false }).limit(1);
-      const obj = (() => { const d = (data?.[0] as any)?.data; return d ? (typeof d === "object" ? d : JSON.parse(d)) : null; })();
+      const { data } = await supabaseAdmin.from("memory_entries").select("content").eq("type", TYPE).eq("user_id", id).order("created_at", { ascending: false }).limit(1);
+      const obj = data?.[0]?.content ? JSON.parse((data[0] as any).content) : null;
       for (const [k, v] of Object.entries<any>(obj?.buckets || {})) {
         const cur = buckets.get(k);
         buckets.set(k, cur ? merge(cur, v) : v);
@@ -59,7 +59,7 @@ async function flush() {
     const keep: Record<string, Bucket> = {};
     for (const [k, v] of buckets) if (k >= cutoff) keep[k] = v;
     const { data: old } = await supabaseAdmin.from("memory_entries").select("id").eq("type", TYPE).eq("user_id", id);
-    const { error } = await supabaseAdmin.from("memory_entries").insert({ id: `js_${Date.now()}`, user_id: id, type: TYPE, data: { buckets: keep } });
+    const { error } = await supabaseAdmin.from("memory_entries").insert({ id: `js_${Date.now()}`, user_id: id, type: TYPE, subject: "job_stats", content: JSON.stringify({ buckets: keep }) });
     if (error) { dirty = true; return; }
     for (const r of old || []) await supabaseAdmin.from("memory_entries").delete().eq("id", (r as any).id);
   } catch { dirty = true; }

@@ -458,10 +458,10 @@ const FALLBACK_TYPE = "feature_costs";
 async function loadFallback(): Promise<Record<string, number> | null> {
   if (!supabaseAdmin) return null;
   try {
-    const { data } = await supabaseAdmin.from("memory_entries").select("id,data,created_at").eq("type", FALLBACK_TYPE).order("created_at", { ascending: false }).limit(1);
+    const { data } = await supabaseAdmin.from("memory_entries").select("content,created_at").eq("type", FALLBACK_TYPE).order("created_at", { ascending: false }).limit(1);
     const row: any = data?.[0];
     if (!row?.content) return null;
-    const rawData = row.content || (row as any).data; const obj = typeof rawData === 'object' ? rawData : JSON.parse(rawData);
+    const obj = JSON.parse(row.content);
     const out: Record<string, number> = {};
     for (const [k, v] of Object.entries(obj?.costs || {})) { const n = Number(v); if (Number.isFinite(n) && n >= 0) out[k] = n; }
     return Object.keys(out).length ? out : null;
