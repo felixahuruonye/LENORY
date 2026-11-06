@@ -2233,7 +2233,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         setTimeout(() => reject(new Error("VIDEO_TIMEOUT")), 60000)
       );
       const summaryPromise = ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.8-flash",
         contents: [{
           parts: [
             { inlineData: { mimeType: req.file.mimetype, data: base64 } },
@@ -2900,7 +2900,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           const result = await transcribeAudio(tempFile);
           transcriptText = result.text;
           durationSeconds = result.duration || 0;
-          engineUsed = "gemini-2.5-flash";
+          engineUsed = "gemini-3.8-flash";
         }
       } finally {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
@@ -3852,7 +3852,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
             setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
           );
           const analysisPromise = ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3.8-flash",
             contents: [{
               parts: [
                 { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
@@ -3973,7 +3973,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
           parts.push({ text: batchInstruction });
           const streamGen = await ai.models.generateContentStream({
-            model: "gemini-2.5-flash",
+            model: "gemini-3.8-flash",
             contents: [{ parts }] as any,
           });
           send({ type: "status", status: "writing" });
@@ -4152,7 +4152,7 @@ ${EXAM_BOOKLET_MODE_PROMPT}
           const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
           parts.push({ text: batchInstruction });
           const analysisPromise = ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3.8-flash",
             contents: [{ parts }] as any,
           });
           const response = await Promise.race([analysisPromise, timeoutPromise]);

@@ -46,7 +46,7 @@ export const GEMINI_VOICES = [
 ];
 
 // Use the latest Live API model
-const LIVE_MODEL = "gemini-2.0-flash-live-001";
+const LIVE_MODEL = "gemini-3.8-live";
 
 // ─── UPDATED: Accept sessionId parameter ────────────────────────────────────
 export async function handleGeminiLiveConnection(ws: WS, userId: string, chatSessionId: string = '') {

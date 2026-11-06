@@ -407,7 +407,7 @@ export function registerKbRoutes(app: Express) {
             if (geminiKey) {
               const ai = new GoogleGenAI({ apiKey: geminiKey });
               const result = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
+                model: "gemini-3.8-flash",
                 contents: [{ parts: [
                   { inlineData: { mimeType: mimetype, data: buffer.toString('base64') } },
                   { text: "Summarize this video for a student: what it covers and the key points to remember, as a short structured list." },

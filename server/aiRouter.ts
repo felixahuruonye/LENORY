@@ -48,9 +48,9 @@ const DSEEK = M("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Fla
 const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
 const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B");
 const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
-const G35 = M("gemini", "gemini-3.5-flash", "Gemini 3.5 Flash");
-const G3 = M("gemini", "gemini-3-flash-preview", "Gemini 3 Flash");
-const GLITE = M("gemini", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite");
+const G35 = M("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
+const G3 = M("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash");
+const GLITE = M("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite");
 export type ChatLane = "ultra" | "fast" | "vision";
 export const LANE_ORDER: Record<ChatLane, { heavy: ModelSpec[]; simple: ModelSpec[] }> = {
   ultra: { heavy: [SONNET, GLM, DSEEK], simple: [DSEEK, GLM, SONNET] },
@@ -407,6 +407,7 @@ async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSche
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    if (res.status === 404) throw new Error(`${spec.label} model ID not found (404): ${text.slice(0,120)} — please update the model ID`);
     if (res.status === 429 || res.status === 403) setCooldown(spec, parseRetryDelaySeconds(text) ?? (/per day|daily/i.test(text) ? 3600 : 60), `HTTP ${res.status}: ${text.slice(0, 200)}`);
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
