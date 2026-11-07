@@ -107,6 +107,29 @@ export function clearAllModelCooldowns(): number {
   return n;
 }
 
+
+// --- Provider error handling -------------------------------------------------
+// ONLY real limits rest a model (429/402/403). A 400 means OUR request was malformed (a bug) - resting the
+// model for that made whole lanes show "unavailable" for ten minutes. A 404/model_not_found means the model id
+// itself is wrong: we mark it dead (skipped, visible in the self-test) instead of pretending it is resting.
+const dead = new Map<string, { until: number; reason: string }>();
+const isDead = (spec: ModelSpec) => { const d = dead.get(cooldownKey(spec)); if (!d) return false; if (Date.now() > d.until) { dead.delete(cooldownKey(spec)); return false; } return true; };
+function markDead(spec: ModelSpec, reason: string) { dead.set(cooldownKey(spec), { until: Date.now() + 30 * 60_000, reason }); console.error(`[models] ${spec.label} (${spec.model}) marked unavailable: ${reason}`); }
+function parseTryAgainSeconds(text: string): number | null {
+  const m = String(text).match(/try again in (?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i) || String(text).match(/retry(?:Delay)?"?:?\s*"?(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i);
+  return m ? Math.ceil((Number(m[1] || 0) * 60) + Number(m[2])) : null;
+}
+function handleProviderHttpError(spec: ModelSpec, status: number, text: string, headers?: Headers) {
+  if (status === 429 || status === 402 || status === 403) {
+    const retry = (headers ? parseRetryAfterSeconds(headers) : null) ?? parseTryAgainSeconds(text);
+    setCooldown(spec, retry, `HTTP ${status}: ${text.slice(0, 200)}`);
+  } else if (status === 404 || /model_not_found|does not exist|no such model/i.test(text)) {
+    markDead(spec, `HTTP ${status}: ${text.slice(0, 160)}`);
+  } else {
+    console.error(`[provider ${spec.label}] HTTP ${status} (request problem, model NOT rested):`, text.slice(0, 700));
+  }
+}
+
 /** test helper */
 export const __cooldownsForTest = () => cooldowns;
 
@@ -134,19 +157,13 @@ async function callOpenAICompatible(
       model: spec.model,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       temperature: 0.5,
-      max_tokens: 4096,
+      max_tokens: spec.provider === "groq" ? 2800 : 4096,
     }),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    if (res.status === 429 || res.status === 402 || res.status === 403) {
-      const retryAfter = res.status === 429 ? parseRetryAfterSeconds(res.headers) : null;
-      setCooldown(spec, retryAfter, `HTTP ${res.status}: ${text.slice(0, 200)}`);
-    } else if (res.status === 400 && /model|not found|does not exist/i.test(text)) {
-      // Bad model id — short cooldown so the rest of the lane can run and admin can see it
-      setCooldown(spec, 300, `HTTP 400 bad model id: ${text.slice(0, 160)}`);
-    }
+    handleProviderHttpError(spec, res.status, text, res.headers);
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
 
@@ -292,7 +309,7 @@ export interface LaneStatus { lane: LaneId; label: string; available: boolean; r
 function chainStatus(chain: ModelSpec[]): { available: boolean; until: number | null; reason: string | null } {
   let earliest: number | null = null; let reason: string | null = null; let anyKey = false;
   for (const spec of chain) {
-    if (!laneKeyOk(spec)) continue;
+    if (!laneKeyOk(spec) || isDead(spec)) continue;
     anyKey = true;
     const c = cooldowns.get(cooldownKey(spec));
     if (!c || Date.now() > c.until) return { available: true, until: null, reason: null };
@@ -419,16 +436,15 @@ async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSche
   if (!contents.length) contents.push({ role: "user", parts: [{ text: "Hello" }] });
   const body: any = { contents, generationConfig: { temperature: 0.4, maxOutputTokens: 8192 } };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
-  if (tools.length) body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.function.name, description: t.function.description, ...(Object.keys(t.function.parameters?.properties || {}).length ? { parameters: stripSchema(t.function.parameters) } : {}) })) }];
+  const uniqTools = [...new Map(tools.map((t) => [t.function.name, t])).values()];
+  if (uniqTools.length) body.tools = [{ functionDeclarations: uniqTools.map((t) => ({ name: t.function.name, description: t.function.description, ...(Object.keys(t.function.parameters?.properties || {}).length ? { parameters: stripSchema(t.function.parameters) } : {}) })) }];
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${spec.model}:generateContent`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    if (res.status === 404) throw new Error(`${spec.label} model not found (404) — model ID needs updating`);
-    if (res.status === 429 || res.status === 403) setCooldown(spec, parseRetryDelaySeconds(text) ?? (/per day|daily/i.test(text) ? 3600 : 60), `HTTP ${res.status}: ${text.slice(0, 200)}`);
-    else if (res.status === 404 || (res.status === 400 && /not found|invalid|unknown model/i.test(text)))
-      setCooldown(spec, 600, `HTTP ${res.status} bad model: ${text.slice(0, 160)}`);
+    if (res.status === 429 || res.status === 403) setCooldown(spec, parseRetryDelaySeconds(text) ?? parseTryAgainSeconds(text) ?? (/per day|daily/i.test(text) ? 3600 : 60), `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    else handleProviderHttpError(spec, res.status, text, res.headers);
     throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
   }
   const data: any = await res.json();
@@ -452,6 +468,7 @@ export async function chatWithLane(
   const trail: string[] = [];
   for (const spec of laneChain(lane, heavy)) {
     if (!laneKeyOk(spec)) { trail.push(`${spec.label} (no key)`); continue; }
+    if (isDead(spec)) { trail.push(`${spec.label} (unavailable: model id)`); continue; }
     if (isOnCooldown(spec)) { trail.push(`${spec.label} (resting)`); continue; }
     try { await throttle(spec.provider); } catch (te: any) {
       // Soft RPM wait exceeded — skip this model for THIS request only.
@@ -474,7 +491,10 @@ export async function chatWithLane(
       console.warn(`[lane ${lane}] ${spec.label} failed, trying next:`, e?.message);
     }
   }
-  const hard = trail.some((x) => /HTTP 402|HTTP 403|resting|no key|bad model/i.test(x));
+  // All models of the lane at their quota/credit limit (or no key / dead ids) = the lane is unavailable and shows its countdown.
+  // Anything else (a one-off provider hiccup) is temporary and does NOT rest the lane.
+  const laneNow = getLaneStatuses().find((l) => l.lane === lane);
+  const hard = (laneNow && !laneNow.available) || trail.some((x) => /HTTP 402|HTTP 403|resting|no key|unavailable: model id/i.test(x));
   const code = hard ? "LANE_UNAVAILABLE" : "LANE_TEMPORARY";
   throw new Error(`${code}:${lane}:${trail.join(" | ")}`);
 }
@@ -487,26 +507,29 @@ async function callOpenAICompatibleTools(
   tools: ToolSchema[],
   extraHeaders?: Record<string, string>,
 ): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
-  const body: any = { model: spec.model, messages, temperature: 0.4, max_tokens: 6000 };
+  const body: any = { model: spec.model, messages, temperature: 0.4, max_tokens: spec.provider === "groq" ? 2800 : 5000 };
   if (tools.length) {
     body.tools = tools;
     body.tool_choice = "auto";
   }
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  const doFetch = () => fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...(extraHeaders || {}) },
     body: JSON.stringify(body),
   });
+  let res = await doFetch();
+  let errText = "";
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 429 || res.status === 402 || res.status === 403) {
-      const retryAfter = res.status === 429 ? parseRetryAfterSeconds(res.headers) : null;
-      setCooldown(spec, retryAfter, `HTTP ${res.status}: ${text.slice(0, 200)}`);
-    } else if (res.status === 400 && /model|not found|does not exist/i.test(text)) {
-      // Bad model id — short cooldown so the rest of the lane can run and admin can see it
-      setCooldown(spec, 300, `HTTP 400 bad model id: ${text.slice(0, 160)}`);
+    errText = await res.text().catch(() => "");
+    if (res.status === 429) {
+      // A short per-minute limit (Groq): wait it out once instead of giving up, so the turn still completes.
+      const wait = parseRetryAfterSeconds(res.headers) ?? parseTryAgainSeconds(errText) ?? 99;
+      if (wait <= 20) { await sleep((wait + 0.5) * 1000); res = await doFetch(); errText = res.ok ? "" : await res.text().catch(() => ""); }
     }
-    throw new Error(`${spec.label} error ${res.status}: ${text.slice(0, 300)}`);
+  }
+  if (!res.ok) {
+    handleProviderHttpError(spec, res.status, errText, res.headers);
+    throw new Error(`${spec.label} error ${res.status}: ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
   const msg = data.choices?.[0]?.message;
@@ -555,3 +578,30 @@ export async function chatWithToolsFailover(
   }
   throw new Error("All AI providers are currently unavailable. " + String(lastErr?.message || ""));
 }
+
+// --- Model id self-check: ask each provider which models this key can really use -------------------------
+export interface ModelCheck { lane: ChatLane; label: string; model: string; status: "ok" | "renamed" | "missing" | "unknown"; detail?: string }
+export async function validateLaneModels(): Promise<ModelCheck[]> {
+  const out: ModelCheck[] = [];
+  const lists: Record<string, string[] | null> = { openrouter: null, groq: null, gemini: null };
+  try { const r = await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(10000) }); if (r.ok) lists.openrouter = ((await r.json()) as any).data.map((m: any) => m.id); } catch {}
+  try { if (process.env.GROQ_API_KEY) { const r = await fetch("https://api.groq.com/openai/v1/models", { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` }, signal: AbortSignal.timeout(10000) }); if (r.ok) lists.groq = ((await r.json()) as any).data.map((m: any) => m.id); } } catch {}
+  try { const k = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY; if (k) { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${k}`, { signal: AbortSignal.timeout(10000) }); if (r.ok) lists.gemini = ((await r.json()) as any).models.filter((m: any) => (m.supportedGenerationMethods || []).includes("generateContent")).map((m: any) => String(m.name).replace(/^models\//, "")); } } catch {}
+  const seen = new Set<ModelSpec>();
+  for (const lane of ["ultra", "fast", "vision"] as ChatLane[]) {
+    for (const spec of LANE_ORDER[lane].heavy) {
+      if (seen.has(spec)) continue; seen.add(spec);
+      const list = lists[spec.provider];
+      if (!list) { out.push({ lane, label: spec.label, model: spec.model, status: "unknown", detail: "could not read the provider's model list (key missing or provider down)" }); continue; }
+      if (list.includes(spec.model)) { dead.delete(cooldownKey(spec)); out.push({ lane, label: spec.label, model: spec.model, status: "ok" }); continue; }
+      // look for the same family under a newer/older name (e.g. qwen3-32b -> qwen3.8-27b)
+      const fam = spec.model.split("/").pop()!.replace(/[-.\d]+.*$/, "");
+      const alt = list.filter((id) => id.toLowerCase().includes(fam.toLowerCase()) && !/embed|tts|whisper|guard|image/i.test(id)).sort().reverse()[0];
+      if (alt) { console.warn(`[models] ${spec.label}: '${spec.model}' not offered; using '${alt}'`); out.push({ lane, label: spec.label, model: spec.model, status: "renamed", detail: `now using ${alt}` }); spec.model = alt; dead.delete(cooldownKey(spec)); }
+      else { markDead(spec, "not in the provider's model list"); out.push({ lane, label: spec.label, model: spec.model, status: "missing", detail: "not offered to this API key" }); }
+    }
+  }
+  return out;
+}
+setTimeout(() => { validateLaneModels().then((r) => { const bad = r.filter((x) => x.status !== "ok"); console.log(`[models] self-check: ${r.length - bad.length}/${r.length} lane models confirmed${bad.length ? "; problems: " + bad.map((b) => `${b.label} ${b.status}`).join(", ") : ""}`); }).catch(() => {}); }, 8000).unref?.();
+setInterval(() => { validateLaneModels().catch(() => {}); }, 6 * 3600_000).unref?.();

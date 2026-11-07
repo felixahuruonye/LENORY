@@ -1160,7 +1160,13 @@ export default function Chat() {
         return;
       }
       if (!streamRes.ok || !streamRes.body) {
-        toast({ title: "Message failed", description: "LENORY couldn't respond to that message. Please try again.", variant: "destructive" });
+        let detail = "LENORY couldn't respond to that message. Please try again.";
+        try {
+          const j = await streamRes.clone().json();
+          if (j?.message) detail = j.message;
+          if (j?.code === "LANE_UNAVAILABLE") detail = j.message || detail;
+        } catch {}
+        toast({ title: "Message failed", description: detail, variant: "destructive" });
         setIsLoading(false);
         setChatAction(null);
         return;

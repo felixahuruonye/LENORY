@@ -71,7 +71,7 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
     schema: fn("run_code", "Run short code in an isolated sandbox and get the real stdout/stderr. Use it to verify calculations or show real program output instead of guessing.", { language: { type: "string", description: "python, javascript, typescript, java, c, cpp, go, ruby, php, bash, sql" }, code: { type: "string" }, stdin: { type: "string" } }, ["language", "code"]),
     run: (c, a) => toolRunCode(c, a) },
   { cap: "imageGeneration", intent: /\b(image|picture|photo|draw|logo|poster|illustration|diagram|wallpaper|generate|create|make|edit|upscale|3d)\b/i,
-    schema: fn("generate_image", "Make NEW pictures from a description. Up to 6 at once on Fast/Ultra, 4 on Vision. The pictures appear in the chat automatically and are saved to the student's image history. Never paste image links or say a picture exists unless this tool succeeded. Pictures can be of anything the student asks for that is allowed (study diagrams, posters, logos, scenes).", { prompt: { type: "string", description: "A detailed visual description in English" }, count: { type: "number", description: "How many (1-6)" }, aspect_ratio: { type: "string", description: "1:1, 16:9, 9:16, 4:3, 3:4, 21:9" }, quality: { type: "string", enum: ["fast", "balanced", "best"], description: "best = Stable Image Ultra / Nano Banana Pro; fast = cheapest" } }, ["prompt"]),
+    schema: fn("generate_image", "Make NEW pictures from a description. Up to 6 at once on Fast/Ultra, 4 on Vision. The pictures appear in the chat automatically and are saved to the student's image history. Never paste image links or say a picture exists unless this tool succeeded. Pictures can be of anything the student asks for that is allowed (study diagrams, posters, logos, scenes).", { prompt: { type: "string", description: "A detailed visual description in English" }, count: { type: "number", description: "How many (1-6)" }, aspect_ratio: { type: "string", description: "One of 1:1, 16:9, 9:16, 3:2, 2:3, 5:4, 4:5, 21:9. Other values are mapped to the nearest." }, quality: { type: "string", enum: ["fast", "balanced", "best"], description: "best = Stable Image Ultra / Nano Banana Pro; fast = cheapest" } }, ["prompt"]),
     run: (c, a) => toolGenerateImage(c, a) },
   { cap: "imageGeneration", intent: /\b(edit|change|remove|replace|recolou?r|background|erase|extend|outpaint|fix)\b/i,
     schema: fn("edit_image", "Edit a picture from the student's image history ('last' = the most recent). Fast/Ultra operations: remove_background, search_replace (needs search_prompt + prompt), search_recolor (needs select_prompt + prompt), outpaint (left/right/up/down in pixels), erase, inpaint, replace_background (needs background_prompt). Vision edits with a plain instruction in prompt. The original is never overwritten.", { operation: { type: "string", description: "remove_background | search_replace | search_recolor | outpaint | erase | inpaint | replace_background (Vision: any, e.g. 'edit')" }, source: { type: "string", description: "'last' or an image id" }, prompt: { type: "string" }, search_prompt: { type: "string" }, select_prompt: { type: "string" }, background_prompt: { type: "string" }, left: { type: "number" }, right: { type: "number" }, up: { type: "number" }, down: { type: "number" } }, ["operation"]),
@@ -91,21 +91,6 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
     schema: fn("project_create", "Create a new project in the student's Project Workspace.", { name: { type: "string" }, description: { type: "string" } }, ["name"]), run: (c, a) => toolCreateProject(c, a) },
   { cap: "projects", intent: /\b(project|workspace)\b/i,
     schema: fn("project_add_file", "Save a text file (notes, code, report text) into one of the student's projects.", { projectId: { type: "string" }, name: { type: "string" }, content: { type: "string" } }, ["projectId", "name", "content"]), run: (c, a) => toolAddProjectFile(c, a) },
-  { cap: "fileCreation", intent: /\b(generat|creat|draw|paint|sketch|illustrat|picture|photo|image|show me)\b/i,
-    schema: fn("generate_image", "Generate 1-6 real images in the chat from a text description. Ultra/Fast use Stability AI; Vision uses Nano Banana (Gemini). The images appear automatically inside the chat - never paste the URLs yourself.", { prompt: { type: "string" }, count: { type: "number", description: "Number of images (max 6 for Ultra/Fast, max 4 for Vision)" }, aspect_ratio: { type: "string", enum: ["1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4", "1:2", "2:1"] }, quality: { type: "string", enum: ["fast", "balanced", "best"] } }, ["prompt"]),
-    run: (c, a) => toolGenerateImage(c, a) },
-  { cap: "fileCreation", intent: /\b(edit|fix|change|remov|replac|erase|inpaint|background|color|recolor|upscal|extend|outpaint|style)\b.*\b(image|photo|picture|pic)\b/i,
-    schema: fn("edit_image", "Edit one of the student's existing images using Stability AI or Nano Banana. Vision: any instruction ('remove the person', 'change background'). Ultra/Fast: specific operations. operations: remove_background, search_replace, search_recolor, outpaint, erase, inpaint, replace_background.", { operation: { type: "string" }, source: { type: "string", description: "Image id or url from history (or 'last' for most recent)" }, prompt: { type: "string" }, search_prompt: { type: "string" }, select_prompt: { type: "string" }, background_prompt: { type: "string" }, left: { type: "number" }, right: { type: "number" }, up: { type: "number" }, down: { type: "number" } }, ["operation"]),
-    run: (c, a) => toolEditImage(c, a) },
-  { cap: "fileCreation", intent: /\b(upscal|enlarg|4k|high.?res)\b/i,
-    schema: fn("upscale_image", "Make an existing image larger and sharper (4x). mode: 'fast' or 'creative' (Premium only).", { mode: { type: "string", enum: ["fast", "creative"] }, source: { type: "string" }, prompt: { type: "string" } }, []),
-    run: (c, a) => toolUpscaleImage(c, a) },
-  { cap: "fileCreation", intent: /\b(control|sketch.?to|style.?transfer|style.?guide|structure)\b/i,
-    schema: fn("control_image", "Advanced image control (Ultra/Fast only). modes: sketch, structure, style_guide, style_transfer.", { mode: { type: "string" }, source: { type: "string" }, style_source: { type: "string" }, prompt: { type: "string" }, strength: { type: "number" } }, ["mode"]),
-    run: (c, a) => toolControlImage(c, a) },
-  { cap: "fileCreation", intent: /\b(3d|three.?d|model|glb|gltf)\b/i,
-    schema: fn("image_to_3d", "Turn one of the student's images into a downloadable 3D model (GLB). Ultra/Fast only.", { source: { type: "string" } }, []),
-    run: (c, a) => toolImageTo3D(c, a) },
   { cap: "projects", intent: /\b(project|workspace|task|to-?do)\b/i,
     schema: fn("project_add_task", "Add a task to one of the student's projects.", { projectId: { type: "string" }, title: { type: "string" } }, ["projectId", "title"]), run: (c, a) => toolAddProjectTask(c, a) },
   { cap: "knowledgeBase", intent: /\b(knowledge base|folder|notes?|notebook|my (files|materials|documents))\b/i,
@@ -151,7 +136,8 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   let defs = DEFS.filter((d) => caps[d.cap] && (d.schema.function.name !== "run_code" || sandboxConfigured()));
   if (caps.toolAccess === "on_demand") defs = defs.filter((d) => d.intent.test(lastUser));
   const byName = new Map(defs.map((d) => [d.schema.function.name, d]));
-  const schemas = defs.map((d) => d.schema);
+  if (byName.size !== defs.length) console.error(`[agent] duplicate tool names removed: ${defs.map((d) => d.schema.function.name).filter((n, i, a) => a.indexOf(n) !== i).join(", ")}`);
+  const schemas = [...byName.values()].map((d) => d.schema);
 
   const messages: AgentMsg[] = [
     { role: "system", content: `${input.systemMessage}\n\n${toolsPolicyBlock(schemas.map((s) => s.function.name))}${caps.toolAccess === "always" && schemas.length ? "\nTool mode is ALWAYS: use a tool whenever one could help." : ""}${webLimit.exhausted ? `\nWEB SEARCH IS OFF right now (provider limit reached${webLimit.resetsAt ? `, back at ${webLimit.resetsAt}` : ""}). If the student needs current/online information, say plainly that you cannot browse until then and answer only from what you know, clearly marked as possibly outdated.` : ""}` },
@@ -179,7 +165,42 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
     // Simple chat -> its cheapest first. (Only the ORDER changes; the lane's provider never does.)
     const lane: ChatLane = input.lane || (input.tier === "ultra" ? "ultra" : "fast");
     const heavy = step > 0 || toolsUsed.length > 0 || lastUser.length > 600 || /\b(report|essay|assignment|thesis|dissertation|presentation|slides|research|in detail|step by step|prove|derive|spreadsheet|excel|pdf|word document)\b/i.test(lastUser);
-    const out = await chatWithLane(messages as any, schemas, lane, heavy);
+    let out: Awaited<ReturnType<typeof chatWithLane>>;
+    try {
+      out = await chatWithLane(messages as any, schemas, lane, heavy);
+    } catch (laneErr: any) {
+      // If we already produced images/files earlier in this run, do not wipe them with a lane error.
+      if (images.length || artifacts.length) {
+        const bits: string[] = [];
+        if (images.length) bits.push(`created ${images.length} image(s)`);
+        if (artifacts.length) bits.push(`created ${artifacts.length} file(s)`);
+        answer = `I ${bits.join(" and ")}, but the follow-up model call failed (${String(laneErr?.message || "").slice(0, 120)}). The results above should still be usable.`;
+        break;
+      }
+      // Vision safety net: plain Gemini without tools
+      if (lane === "vision") {
+        try {
+          const { chatWithGemini } = await import("../gemini");
+          const plain = await chatWithGemini(messages.map((m: any) => ({ role: m.role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) })) as any);
+          out = { content: plain, toolCalls: [], rawAssistant: { role: "assistant", content: plain }, modelUsed: "Gemini (plain)" };
+          console.warn("[vision] tool lane failed, plain Gemini ok:", String(laneErr?.message || "").slice(0, 120));
+        } catch {
+          throw laneErr;
+        }
+      } else {
+        // Fast/Ultra: one plain completion without tools so image-tool follow-ups don't kill the mode
+        try {
+          out = await chatWithLane(messages as any, [], lane, false);
+          console.warn(`[${lane}] tool-round failed, plain retry ok:`, String(laneErr?.message || "").slice(0, 120));
+        } catch {
+          if (lastImageFail) {
+            answer = `Image generation did not complete: ${lastImageFail}\n\nYour chat mode (${lane}) is still available — this was only the image provider/tool step.`;
+            break;
+          }
+          throw laneErr;
+        }
+      }
+    }
     modelUsed = out.modelUsed;
 
     if (!out.toolCalls.length) {
@@ -209,6 +230,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
       } else {
         try { result = await def.run(ctx, call.arguments || {}); }
         catch (e: any) { result = { tool: call.name, success: false, summary: `Tool crashed: ${e?.message}`, error: e?.message || "CRASH" }; }
+        if (call.name === "generate_image" && !result.success) lastImageFail = result.summary || result.error || "image failed";
       }
       toolsUsed.push(call.name);
       if (result.success) {
@@ -239,3 +261,5 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   input.onStatus?.(failedTools.length && !artifacts.length ? "failed" : "completed");
   return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders, steps: stepsRun, images };
 }
+
+export const __defsForTest = () => DEFS;

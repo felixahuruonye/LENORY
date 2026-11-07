@@ -459,6 +459,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { const imgs = await storage.getGeneratedImagesByUser(req.userId); res.json({ images: imgs || [] }); }
     catch (e: any) { res.status(500).json({ message: "Could not load image history" }); }
   });
+  // One button: checks every lane model id against the providers' own lists and runs a real image test.
+  app.get("/api/admin/self-test", supabaseAuth, async (req: any, res: Response) => {
+    const u: any = await storage.getUser(req.userId);
+    if (u?.email !== REAL_ADMIN_EMAIL) return res.status(403).json({ message: "Admin only" });
+    const { validateLaneModels } = await import("./aiRouter");
+    const { imageSelfTest } = await import("./imageStudio");
+    res.json({ models: await validateLaneModels(), images: await imageSelfTest(), lanes: getLaneStatuses() });
+  });
   app.get("/api/admin/stability-balance", supabaseAuth, async (_req, res) => {
     const { stabilityBalance } = await import("./imageStudio");
     res.json(await stabilityBalance());

@@ -23,8 +23,23 @@ export interface ImgOut { buffer: Buffer; mime: string }
 const blob = (b: { buffer: Buffer; mime: string }) => new Blob([b.buffer], { type: b.mime });
 const ext = (m: string) => (m.includes("jpeg") ? "jpg" : m.includes("webp") ? "webp" : m.includes("gltf") || m.includes("glb") ? "glb" : "png");
 
+
+const STAB_RATIOS = ["21:9", "16:9", "3:2", "5:4", "1:1", "4:5", "2:3", "9:16", "9:21"];
+const GEM_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
+/** Map whatever the model asked for to the nearest ratio the provider really accepts (a bad value was failing every image). */
+export function normalizeAspect(ratio: string | undefined, provider: "stability" | "gemini"): string {
+  const list = provider === "stability" ? STAB_RATIOS : GEM_RATIOS;
+  const r = String(ratio || "1:1").replace(/\s+/g, "").replace(/[xX\/]/, ":");
+  if (list.includes(r)) return r;
+  const [a, b] = r.split(":").map(Number);
+  if (!a || !b) return "1:1";
+  const want = a / b;
+  return list.map((x) => ({ x, d: Math.abs(Number(x.split(":")[0]) / Number(x.split(":")[1]) - want) })).sort((m, n) => m.d - n.d)[0].x;
+}
+
 async function stabilityError(res: Response): Promise<Error> {
   const text = await res.text().catch(() => "");
+  console.error(`[stability] HTTP ${res.status} ${res.url.replace("https://api.stability.ai", "")}: ${text.slice(0, 600)}`);
   let msg = text.slice(0, 220);
   try { const j = JSON.parse(text); msg = (j.errors?.join("; ") || j.message || j.name || msg); } catch {}
   if (res.status === 401 || res.status === 403) return new Error(`The image provider rejected the server's key (HTTP ${res.status}). An admin must check STABILITY_API_KEY.`);
@@ -45,7 +60,7 @@ export async function runStability(svc: ImageService, input: ImgInput): Promise<
   if (svc.model) set("model", svc.model);
   set("prompt", input.prompt); set("negative_prompt", input.negativePrompt); set("seed", input.seed);
   set("output_format", p.output_format || (svc.kind === "3d" ? undefined : "png"));
-  if (svc.kind === "generate") set("aspect_ratio", input.aspectRatio || "1:1");
+  if (svc.kind === "generate") set("aspect_ratio", normalizeAspect(input.aspectRatio, "stability"));
   const needImage = svc.kind !== "generate";
   if (needImage && !input.image) throw new Error(`${svc.label} needs a source image.`);
   switch (svc.id) {
@@ -61,7 +76,7 @@ export async function runStability(svc: ImageService, input: ImgInput): Promise<
     case "search_replace": set("search_prompt", p.search_prompt); if (!p.search_prompt || !input.prompt) throw new Error("Say what to find and what to replace it with."); break;
     case "inpaint": if (!input.prompt) throw new Error("Describe what should fill the area."); break;
     case "sketch": case "structure": set("control_strength", p.control_strength); if (!input.prompt) throw new Error(`${svc.label} needs a prompt.`); break;
-    case "style_guide": set("fidelity", p.fidelity); set("aspect_ratio", input.aspectRatio); if (!input.prompt) throw new Error("Style Guide needs a prompt."); break;
+    case "style_guide": set("fidelity", p.fidelity); set("aspect_ratio", input.aspectRatio ? normalizeAspect(input.aspectRatio, "stability") : undefined); if (!input.prompt) throw new Error("Style Guide needs a prompt."); break;
     case "upscale_creative": set("creativity", p.creativity); if (!input.prompt) throw new Error("Creative Upscaler needs a short description of the picture."); break;
     case "spar3d": for (const k of ["texture_resolution", "foreground_ratio", "remesh"]) set(k, p[k]); break;
   }
@@ -97,7 +112,7 @@ export async function runNanoBanana(svc: ImageService, input: ImgInput): Promise
   if (cd) throw new Error("This image model is resting for a moment. Try again shortly.");
   const parts: any[] = [{ text: input.prompt || "Create an image" }];
   for (const im of [input.image, input.styleImage]) if (im) parts.push({ inlineData: { mimeType: im.mime, data: im.buffer.toString("base64") } });
-  const body: any = { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE", "TEXT"], ...(input.aspectRatio ? { imageConfig: { aspectRatio: input.aspectRatio } } : {}) } };
+  const body: any = { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE", "TEXT"], ...(input.aspectRatio ? { imageConfig: { aspectRatio: normalizeAspect(input.aspectRatio, "gemini") } } : {}) } };
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${svc.model}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body), signal: AbortSignal.timeout(110_000) });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -163,12 +178,59 @@ export async function imageGate(userId: string, svc: ImageService, count: number
 }
 export async function chargeImages(userId: string, unit: number, n: number) { if (n > 0 && unit > 0) await deductCredits(userId, unit * n); }
 
-export async function stabilityBalance(): Promise<{ ok: boolean; credits?: number; error?: string }> {
+export async function stabilityBalance(): Promise<{ ok: boolean; credits?: number; error?: string; keyPresent?: boolean }> {
   const key = process.env.STABILITY_API_KEY;
-  if (!key) return { ok: false, error: "STABILITY_API_KEY is not set on the server" };
+  if (!key) return { ok: false, keyPresent: false, error: "STABILITY_API_KEY is not set on Render. Add it under Environment, then restart the service." };
   try {
-    const r = await fetch(`${STAB}/v1/user/balance`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return { ok: false, error: r.status === 401 ? "Stability rejected the key (401). Renew it and restart the server." : `Stability returned HTTP ${r.status}` };
-    return { ok: true, credits: (await r.json() as any).credits };
-  } catch (e: any) { return { ok: false, error: e?.message || "Could not reach Stability" }; }
+    // Primary balance endpoint
+    const r = await fetch(`${STAB}/v1/user/balance`, { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+    const text = await r.text().catch(() => "");
+    if (!r.ok) {
+      if (r.status === 401 || r.status === 403)
+        return { ok: false, keyPresent: true, error: `Stability rejected the API key (HTTP ${r.status}). Paste the NEW key into Render env STABILITY_API_KEY and restart.` };
+      return { ok: false, keyPresent: true, error: `Stability HTTP ${r.status}: ${text.slice(0, 160)}` };
+    }
+    let j: any = {};
+    try { j = JSON.parse(text); } catch { return { ok: false, keyPresent: true, error: "Stability returned non-JSON balance body" }; }
+    // Stability has used several field names over time
+    const credits = Number(
+      j.credits ?? j.balance ?? j.credit_balance ?? j.credits_remaining ?? j?.data?.credits ?? NaN
+    );
+    if (!Number.isFinite(credits))
+      return { ok: false, keyPresent: true, error: `Could not parse credits from: ${text.slice(0, 120)}` };
+    return { ok: true, keyPresent: true, credits };
+  } catch (e: any) {
+    return { ok: false, keyPresent: true, error: e?.message || "Could not reach Stability" };
+  }
+}
+
+/** Real end-to-end check of the image providers with the keys on this server (admin button). */
+export async function imageSelfTest(): Promise<Record<string, any>> {
+  const out: Record<string, any> = {};
+  const key = process.env.STABILITY_API_KEY;
+  out.stabilityKeyPresent = !!key;
+  if (key) {
+    try {
+      const a = await fetch(`${STAB}/v1/user/account`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
+      out.stabilityAccount = a.ok ? "ok" : `HTTP ${a.status}: ${(await a.text()).slice(0, 200)}`;
+    } catch (e: any) { out.stabilityAccount = e?.message; }
+    out.stabilityBalance = await stabilityBalance();
+    // one real, cheap generation (SD 3.5 Flash) so the exact provider error, if any, is shown
+    try {
+      const svc = getService("sd35_flash")!;
+      const img = await runStability(svc, { prompt: "a small blue circle on a white background", aspectRatio: "1:1" });
+      out.stabilityGenerate = `ok (${img.buffer.length} bytes)`;
+    } catch (e: any) { out.stabilityGenerate = `FAILED: ${e?.message}`; }
+  }
+  const gk = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+  out.geminiKeyPresent = !!gk;
+  if (gk) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${gk}`, { signal: AbortSignal.timeout(10000) });
+      const names: string[] = r.ok ? ((await r.json()) as any).models.map((m: any) => String(m.name).replace(/^models\//, "")) : [];
+      out.geminiImageModelsOffered = names.filter((n) => /image/i.test(n));
+      out.geminiNote = "Image models need a Google AI Studio project with billing enabled. On the free tier their quota is 0.";
+    } catch (e: any) { out.geminiImageModelsOffered = e?.message; }
+  }
+  return out;
 }

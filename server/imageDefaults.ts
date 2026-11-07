@@ -34,9 +34,9 @@ export const IMAGE_SERVICES: ImageService[] = [
   // --- Stability: 3D
   { id: "spar3d", label: "Stable Point Aware 3D", kind: "3d", provider: "stability", path: "/v2beta/3d/stable-point-aware-3d", providerUsd: 0.04, credits: 25, help: "Turn one picture into a 3D model (GLB)" },
   // --- Google Nano Banana (Vision lane)
-  { id: "nano_banana_lite", label: "Nano Banana 2 Lite", kind: "generate", provider: "gemini", model: "gemini-3.1-flash-lite-image", providerUsd: 0.034, credits: 20, help: "Cheapest Gemini image model (1K)" },
-  { id: "nano_banana", label: "Nano Banana 2", kind: "generate", provider: "gemini", model: "gemini-3.1-flash-image", providerUsd: 0.067, credits: 40, help: "Everyday generation and editing" },
-  { id: "nano_banana_pro", label: "Nano Banana Pro", kind: "generate", provider: "gemini", model: "gemini-3-pro-image", providerUsd: 0.134, credits: 80, premiumOnly: true, help: "Best text in images and detailed work" },
+  { id: "nano_banana_lite", label: "Nano Banana 2 Lite", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.034, credits: 20, help: "Cheapest Gemini image model (1K)" },
+  { id: "nano_banana", label: "Nano Banana 2", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.067, credits: 40, help: "Everyday generation and editing" },
+  { id: "nano_banana_pro", label: "Nano Banana Pro", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.134, credits: 80, premiumOnly: true, help: "Best text in images and detailed work" },
 ];
 export const IMAGE_CAP_DEFAULTS = { image_cap_free: 5, image_cap_pro: 50, image_cap_premium: 150 };
 export const imageCostKey = (id: string) => `img_${id}`;

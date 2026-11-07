@@ -91,19 +91,12 @@ export async function getTavilyBalance(): Promise<{ available: boolean; credits?
 }
 
 export async function getStabilityBalance(): Promise<{ available: boolean; credits?: number; error?: string }> {
-  const key = process.env.STABILITY_API_KEY;
-  if (!key) return { available: false, error: "STABILITY_API_KEY not configured" };
+  // Delegate to imageStudio so Providers + burn estimate always match live generation
   try {
-    const res = await fetch("https://api.stability.ai/v1/user/balance", {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => `HTTP ${res.status}`);
-      return { available: false, error: `Stability API returned ${res.status}: ${text.substring(0, 100)}` };
-    }
-    const data = await res.json();
-    return { available: true, credits: data.credits };
+    const { stabilityBalance } = await import("./imageStudio");
+    const b = await stabilityBalance();
+    if (b.ok) return { available: true, credits: b.credits };
+    return { available: false, error: b.error || "Unavailable" };
   } catch (e) {
     return { available: false, error: e instanceof Error ? e.message : String(e) };
   }

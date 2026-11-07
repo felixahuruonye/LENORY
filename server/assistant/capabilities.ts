@@ -85,7 +85,7 @@ export const setUserCapabilities = saveUserCapabilities;
 export function capabilityAvailability() {
   return {
     codeExecution: !!process.env.CODE_SANDBOX_URL,
-    imageGeneration: !!process.env.STABILITY_API_KEY,
+    imageGeneration: !!(process.env.STABILITY_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
     webSearch: !!(process.env.TAVILY_API_KEY || process.env.GEMINI_API_KEY),
   };
 }

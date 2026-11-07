@@ -104,6 +104,9 @@ export default function AdminDashboard() {
   // AI chat model cooldown status (which Groq/OpenRouter models are
   // currently rate-limited/over quota and when each resets).
   const { data: aiProviderStatus, isLoading: aiStatusLoading, refetch: refetchAiStatus } = useQuery<{
+    keys?: { openrouter: boolean; groq: boolean; gemini: boolean };
+    models?: { lane: string; provider: string; model: string; label: string; keyConfigured: boolean; status: string; resetsInSeconds: number; resetsAt: string | null; reason: string | null }[];
+    lanes?: { lane: string; label: string; available: boolean; resetsInSeconds: number; resetsAt: string | null; reason: string | null }[];
     cooldowns: { model: string; resetsInSeconds: number; resetsAt: string; reason: string }[];
   }>({
     queryKey: ["/api/admin/ai-provider-status"],
@@ -987,15 +990,34 @@ export default function AdminDashboard() {
                       Which Groq/OpenRouter chat models are currently rate-limited or over quota, and exactly when each resets. Auto-refreshes every 15s.
                     </p>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => refetchAiStatus()}
-                    disabled={aiStatusLoading}
-                    data-testid="button-refresh-ai-provider-status"
-                  >
-                    {aiStatusLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const r = await apiRequest("POST", "/api/admin/clear-model-cooldowns", {});
+                          const j = await r.json();
+                          toast({ title: "Cooldowns cleared", description: j.message || `Cleared ${j.cleared}` });
+                          refetchAiStatus();
+                        } catch (e: any) {
+                          toast({ title: "Clear failed", description: e?.message, variant: "destructive" });
+                        }
+                      }}
+                      data-testid="button-clear-model-cooldowns"
+                    >
+                      Clear cooldowns
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => refetchAiStatus()}
+                      disabled={aiStatusLoading}
+                      data-testid="button-refresh-ai-provider-status"
+                    >
+                      {aiStatusLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -1004,25 +1026,78 @@ export default function AdminDashboard() {
                     <Loader2 className="h-5 w-5 animate-spin" />
                     <span className="text-sm">Checking model status…</span>
                   </div>
-                ) : !aiProviderStatus?.cooldowns?.length ? (
-                  <div className="flex items-center gap-2 text-sm text-emerald-500">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    All chat models available — nothing on cooldown right now.
+                ) : (
+                  <div className="space-y-4">
+                    {aiProviderStatus?.keys && (
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className={`px-2 py-1 rounded-full border ${aiProviderStatus.keys.openrouter ? "border-emerald-500/40 text-emerald-600" : "border-red-500/40 text-red-500"}`}>OpenRouter: {aiProviderStatus.keys.openrouter ? "key set" : "missing"}</span>
+                        <span className={`px-2 py-1 rounded-full border ${aiProviderStatus.keys.groq ? "border-emerald-500/40 text-emerald-600" : "border-red-500/40 text-red-500"}`}>Groq: {aiProviderStatus.keys.groq ? "key set" : "missing"}</span>
+                        <span className={`px-2 py-1 rounded-full border ${aiProviderStatus.keys.gemini ? "border-emerald-500/40 text-emerald-600" : "border-red-500/40 text-red-500"}`}>Gemini: {aiProviderStatus.keys.gemini ? "key set" : "missing"}</span>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      {(aiProviderStatus?.models || []).map((m) => (
+                        <div key={`${m.lane}-${m.model}`} className="flex items-center justify-between rounded-lg border border-border p-3 text-sm flex-wrap gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`h-2 w-2 rounded-full flex-shrink-0 ${m.status === "ready" ? "bg-emerald-500" : m.status === "cooldown" ? "bg-amber-500" : "bg-red-500"}`} />
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">{m.label}</div>
+                              <div className="text-xs text-muted-foreground">Lane: <span className="uppercase">{m.lane}</span> · {m.provider} · <code className="text-[10px]">{m.model}</code></div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-muted-foreground flex items-center gap-2">
+                            <span className="uppercase font-medium">{m.status}</span>
+                            {m.status === "cooldown" && m.resetsAt && <span>until {new Date(m.resetsAt).toLocaleTimeString()}</span>}
+                            {m.reason && <span className="truncate max-w-[180px]" title={m.reason || ""}>{m.reason}</span>}
+                          </div>
+                        </div>
+                      ))}
+                      {!aiProviderStatus?.models?.length && !aiProviderStatus?.cooldowns?.length && (
+                        <div className="text-sm text-emerald-500">No inventory yet — refresh after deploy.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <DollarSign className="h-5 w-5 text-emerald-500" />
+                      Stability AI (image provider)
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Live balance from STABILITY_API_KEY on Render. Changing the key on Stability&apos;s website only works after you paste it into Render Environment and restart the service.
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => refetchStab()} data-testid="button-refresh-stability">
+                    <RefreshCcw className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {!stabBal ? (
+                  <p className="text-sm text-muted-foreground">Loading…</p>
+                ) : stabBal.ok ? (
+                  <div className="flex items-center gap-3">
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                    <div>
+                      <div className="text-2xl font-bold">{Number(stabBal.credits).toLocaleString()} <span className="text-sm font-normal text-muted-foreground">provider credits</span></div>
+                      <p className="text-xs text-muted-foreground">1 Stability credit ≈ $0.01. Separate from student credits on /pricing.</p>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {aiProviderStatus.cooldowns.map((c) => (
-                      <div key={c.model} className="flex items-center justify-between rounded-lg border border-border p-3 text-sm flex-wrap gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full bg-red-500" />
-                          <span className="font-medium">{c.model}</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground flex items-center gap-3">
-                          <span>Resets in {Math.ceil(c.resetsInSeconds / 60)} min ({new Date(c.resetsAt).toLocaleTimeString()})</span>
-                          <span className="truncate max-w-[240px]" title={c.reason}>{c.reason}</span>
-                        </div>
-                      </div>
-                    ))}
+                    <div className="flex items-center gap-2 text-red-500 text-sm font-medium">
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                      Balance unavailable
+                    </div>
+                    <p className="text-xs text-muted-foreground">{stabBal.error || "Unknown error"}</p>
+                    <p className="text-xs text-muted-foreground">Render → Environment → <code>STABILITY_API_KEY</code> → Save → Manual Deploy.</p>
                   </div>
                 )}
               </CardContent>
@@ -1180,6 +1255,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        
         {/* Overview Tab */}
         {activeTab === "overview" && (
           <div className="space-y-6">

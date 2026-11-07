@@ -25,9 +25,13 @@ export async function toolGenerateImage(ctx: ToolContext, args: { prompt: string
   const l = lane(ctx);
   const count = Math.max(1, Math.min(Number(args?.count) || 1, MAX_IMAGES_AT_ONCE[l]));
   const q = String(args?.quality || (l === "ultra" ? "best" : l === "fast" ? "fast" : "balanced"));
+  // Vision → Gemini Nano Banana. Ultra/Fast → Stability first, then Gemini fallback
+  // so a zeroed Stability account does not block every picture request.
   const order = l === "vision"
     ? q === "best" ? ["nano_banana_pro", "nano_banana", "nano_banana_lite"] : q === "fast" ? ["nano_banana_lite", "nano_banana"] : ["nano_banana", "nano_banana_lite"]
-    : q === "best" ? ["stable_image_ultra", "sd35_large", "sd35_flash"] : q === "balanced" ? ["sd35_large", "sd35_flash", "stable_image_ultra"] : ["sd35_flash", "sd35_large", "stable_image_ultra"];
+    : q === "best" ? ["stable_image_ultra", "sd35_large", "sd35_flash", "nano_banana", "nano_banana_lite"]
+      : q === "balanced" ? ["sd35_large", "sd35_flash", "stable_image_ultra", "nano_banana", "nano_banana_lite"]
+      : ["sd35_flash", "sd35_large", "stable_image_ultra", "nano_banana_lite", "nano_banana"];
   let used = "", gateMsg = "", unit = 0, admin = false;
   for (const id of order) {
     const g = await imageGate(ctx.userId, getService(id)!, count);
@@ -46,7 +50,12 @@ export async function toolGenerateImage(ctx: ToolContext, args: { prompt: string
   }));
   const ok = results.filter((r): r is PromiseFulfilledResult<{ id: string; url: string }> => r.status === "fulfilled").map((r) => r.value);
   const firstErr = (results.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined)?.reason?.message;
-  if (!ok.length) return fail("generate_image", `No image was made. ${firstErr || ""}`.trim(), "PROVIDER");
+  if (!ok.length) {
+    const hint = /out of credits|402|provider account/i.test(String(firstErr || ""))
+      ? " Stability provider credits may be empty — an admin must top up at platform.stability.ai and ensure STABILITY_API_KEY on Render matches the new key (then restart). LENORY user credits on /pricing are separate."
+      : "";
+    return fail("generate_image", `No image was made. ${firstErr || ""}${hint}`.trim(), "PROVIDER");
+  }
   if (!admin) await chargeImages(ctx.userId, unit, ok.length);
   return { tool: "generate_image", success: true, images: ok.map((i, n) => ({ url: i.url, id: i.id, title: `${prompt.slice(0, 60)}${ok.length > 1 ? ` (${n + 1})` : ""}` })),
     summary: `Made ${ok.length} of ${count} image(s) with ${getService(used)!.label}. They are already shown in the chat and saved to the student's image history - do not paste links.${ok.length < count ? ` ${count - ok.length} failed: ${firstErr}.` : ""} Charged ${admin ? 0 : unit * ok.length} credits.`, data: { ids: ok.map((i) => i.id) } };
