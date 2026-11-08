@@ -157,6 +157,9 @@ export default function AdminDashboard() {
   });
 
   const { data: imgData, refetch: refetchImg } = useQuery({ queryKey: ["/api/admin/image-services"], queryFn: async () => (await apiRequest("GET", "/api/admin/image-services")).json(), enabled: !!user });
+  const [selfTest, setSelfTest] = useState<any>(null);
+  const [selfTestBusy, setSelfTestBusy] = useState(false);
+  const runSelfTest = async () => { setSelfTestBusy(true); setSelfTest(null); try { const r = await apiRequest("GET", "/api/admin/self-test"); setSelfTest(await r.json()); } catch (e: any) { setSelfTest({ error: e?.message || "self-test failed" }); } finally { setSelfTestBusy(false); } };
   const { data: stabBal, refetch: refetchStab } = useQuery({ queryKey: ["/api/admin/stability-balance"], queryFn: async () => (await apiRequest("GET", "/api/admin/stability-balance")).json(), enabled: !!user });
   const [imgCaps, setImgCaps] = useState<{ free: number; pro: number; premium: number }>({ free: 5, pro: 50, premium: 150 });
   const [capStatus, setCapStatus] = useState<{ state?: "saving"|"saved"|"error"; msg?: string }>({});
@@ -1100,6 +1103,10 @@ export default function AdminDashboard() {
                     <p className="text-xs text-muted-foreground">Render → Environment → <code>STABILITY_API_KEY</code> → Save → Manual Deploy.</p>
                   </div>
                 )}
+                <div className="mt-4 border-t pt-3 space-y-2">
+                  <Button size="sm" variant="outline" onClick={runSelfTest} disabled={selfTestBusy} data-testid="button-self-test">{selfTestBusy ? "Testing (about 20 seconds)..." : "Run model and image self-test"}</Button>
+                  {selfTest && <pre className="text-[11px] leading-snug bg-muted/50 rounded-md p-2 overflow-x-auto max-h-72 whitespace-pre-wrap">{JSON.stringify({ stabilityKey: selfTest.images?.stabilityKeyShape, stabilityAccount: selfTest.images?.stabilityAccount, stabilityGenerate: selfTest.images?.stabilityGenerate, geminiImageModels: selfTest.images?.geminiImageModelsOffered, geminiNote: selfTest.images?.geminiNote, laneModels: (selfTest.models || []).map((m: any) => `${m.lane}: ${m.label} - ${m.status}${m.detail ? " (" + m.detail + ")" : ""}`), error: selfTest.error }, null, 2)}</pre>}
+                </div>
               </CardContent>
             </Card>
 

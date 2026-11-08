@@ -909,21 +909,11 @@ Please try again. Your selected mode is still available unless Admin → Provide
         await storage.createMemoryEntry({ userId, type: "chat_interaction", data: { userMessage: content.substring(0, 500), aiResponse: aiResponse.substring(0, 500), timestamp: new Date().toISOString() } });
       } catch (memErr) {}
 
-      const imageKeywords = ["explain with image", "show me", "visualize", "draw", "illustrate", "with image", "with a picture", "with diagram"];
-      const shouldGenerateImage = imageKeywords.some(keyword => content.toLowerCase().includes(keyword));
       let attachments: any = null;
           const agentImages = (agentRes && agentRes.images) ? agentRes.images : [];
           if (agentImages.length) {
             if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "images", images: agentImages })}\n\n`);
           }
-      if (shouldGenerateImage) {
-        try {
-          const imagePrompt = `Create a visual representation for: ${aiResponse.substring(0, 200)}`;
-          const image = await generateImageWithLENORY(imagePrompt);
-          await storage.createGeneratedImage({ userId, prompt: imagePrompt, imageUrl: image.url, relatedTopic: content.substring(0, 100), provider: image.provider } as any);
-          attachments = { images: [{ url: image.url, title: "Visual Explanation" }] };
-        } catch (imgErr) {}
-      }
       if (agentArtifacts.length || searchSources.length) {
         attachments = { ...(attachments || {}), ...(agentImages.length ? { images: [...(attachments?.images || []), ...agentImages] } : {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
       }

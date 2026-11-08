@@ -155,6 +155,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   let answer = "";
   let corrected = false;
 
+  let lastImageFail = ""; // last failed generate_image reason (so the answer can report the real cause)
   let stepsRun = 0;
   for (let step = 0; step < MAX_STEPS; step++) {
     stepsRun = step + 1;
@@ -236,7 +237,6 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
       if (result.success) {
         if (result.artifacts) artifacts.push(...result.artifacts);
         if (result.images) images.push(...result.images);
-        if (result.images) images.push(...result.images);
         if (result.citations) citations.push(...result.citations);
         if (call.name === "kb_create_folder" && result.data?.id) folders.push({ id: result.data.id, name: result.data.name });
       } else {
@@ -259,6 +259,10 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
         : "I wasn't able to produce a response. Please try again.";
   }
   input.onStatus?.(failedTools.length && !artifacts.length ? "failed" : "completed");
+  // The student must always learn the REAL reason a picture failed, even if the model's own wording was vague.
+  if (lastImageFail && !images.length && !answer.includes(lastImageFail.slice(0, 40))) {
+    answer = `${answer.trim()}\n\n**Why the image failed:** ${lastImageFail}`.trim();
+  }
   return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders, steps: stepsRun, images };
 }
 

@@ -73,5 +73,31 @@ process.env.OPENROUTER_RPM = "900"; process.env.GROQ_RPM = "900"; process.env.GE
   check("Gemini: 4:3 stays 4:3", img.normalizeAspect("4:3", "gemini") === "4:3");
   (globalThis as any).fetch = real;
 
+  // 9. end to end: ask for an image on Fast while Stability rejects the key -> a clear, real reason (never "lastImageFail is not defined")
+  process.env.STABILITY_API_KEY = ' "sk-test-key-with-quotes-and-space" ';
+  const { storage } = await import("../server/storage");
+  (storage as any).getUser = async () => ({ id: "u", email: "felixahuruonye@gmail.com", subscriptionTier: "premium" });
+  (storage as any).getMemoryEntriesByUser = async () => [];
+  (storage as any).getGeneratedImagesByUser = async () => [];
+  let stabAuth = ""; let groqTurn = 0;
+  (globalThis as any).fetch = async (url: any, init: any) => {
+    const u = String(url);
+    if (u.includes("api.stability.ai")) { stabAuth = init?.headers?.Authorization || ""; return resp(400, { errors: ["User required"], name: "internal_status" }); }
+    if (u.includes("groq.com")) {
+      groqTurn++;
+      return groqTurn === 1
+        ? resp(200, { choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "generate_image", arguments: JSON.stringify({ prompt: "a database server room", aspect_ratio: "4:3" }) } }] } }] })
+        : resp(200, { choices: [{ finish_reason: "stop", message: { content: "Sorry, the image could not be made." } }] });
+    }
+    return resp(200, { choices: [{ finish_reason: "stop", message: { content: "ok" } }] });
+  };
+  clearAll();
+  const run = await agent.runToolAgent({ userId: "u", systemMessage: "You are LENORY.", history: [{ role: "user", content: "Create an image of a database server room" }], lane: "fast", tier: "fast", strictLane: true, capabilities: { fileCreation: true, imageGeneration: true } } as any).catch((e: any) => ({ answer: "THREW: " + e.message }));
+  check("image request on Fast calls the Stability tool (not a code error)", !/is not defined|THREW/.test(run.answer), run.answer.slice(0, 90));
+  check("key sent to Stability is cleaned of quotes/spaces", stabAuth === "Bearer sk-test-key-with-quotes-and-space", stabAuth);
+  console.log("FULL ANSWER >>", JSON.stringify(run.answer)); check("answer explains the real cause (Stability key problem is named)", /Stable.*(key|account)/i.test(run.answer), run.answer.slice(0, 120));
+  check("clean key helper", img.cleanKey('  "Bearer sk-abc "\n') === "sk-abc" && img.keyShape("sk-" + "a".repeat(50)).startsWithSk);
+  (globalThis as any).fetch = real;
+
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error("TEST CRASH", e); process.exit(2); });

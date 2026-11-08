@@ -9,6 +9,16 @@ import { getFeatureCost, getOrCreateCredits, deductCredits } from "./creditsStor
 import { IMAGE_SERVICES, imageCostKey, imageOnKey, type ImageService } from "./imageDefaults";
 import { setExternalCooldown, getExternalCooldown } from "./aiRouter";
 
+
+/** Render env values are often pasted with quotes, spaces, a newline or a "Bearer " prefix - any of which makes Stability answer "User required". */
+export function cleanKey(raw: string | undefined): string {
+  return String(raw || "").trim().replace(/^["']+|["']+$/g, "").trim().replace(/^bearer\s+/i, "").replace(/\s+/g, "");
+}
+export function keyShape(raw: string | undefined) {
+  const k = cleanKey(raw); const r = String(raw || "");
+  return { present: !!r, length: k.length, startsWithSk: k.startsWith("sk-"), pastedWithExtras: r !== k, hint: !r ? "not set" : !k.startsWith("sk-") ? "Stability keys start with sk-; this one does not" : k.length < 40 ? "key looks too short" : "shape looks normal" };
+}
+
 const ADMIN_EMAIL = "felixahuruonye@gmail.com";
 const STAB = "https://api.stability.ai";
 export const getService = (id: string) => IMAGE_SERVICES.find((s) => s.id === id);
@@ -39,9 +49,10 @@ export function normalizeAspect(ratio: string | undefined, provider: "stability"
 
 async function stabilityError(res: Response): Promise<Error> {
   const text = await res.text().catch(() => "");
-  console.error(`[stability] HTTP ${res.status} ${res.url.replace("https://api.stability.ai", "")}: ${text.slice(0, 600)}`);
+  console.error(`[stability] HTTP ${res.status} ${String(res.url || "").replace("https://api.stability.ai", "")}: ${text.slice(0, 600)}`);
   let msg = text.slice(0, 220);
   try { const j = JSON.parse(text); msg = (j.errors?.join("; ") || j.message || j.name || msg); } catch {}
+  if (res.status === 400 && /user required/i.test(text)) return new Error("Stability does not recognise the server's API key as belonging to an account (\"User required\"). An admin must create a fresh key at platform.stability.ai and paste it in Render without quotes or spaces.");
   if (res.status === 401 || res.status === 403) return new Error(`The image provider rejected the server's key (HTTP ${res.status}). An admin must check STABILITY_API_KEY.`);
   if (res.status === 402) return new Error("The image provider account is out of credits. An admin must top up Stability.");
   if (res.status === 429) { setExternalCooldown("stability", 30, "Stability rate limit"); return new Error("The image provider is busy right now. Try again in about 30 seconds."); }
@@ -51,7 +62,7 @@ async function stabilityError(res: Response): Promise<Error> {
 
 /** One Stability call (handles the async services by polling /results/{id}). */
 export async function runStability(svc: ImageService, input: ImgInput): Promise<ImgOut> {
-  const key = process.env.STABILITY_API_KEY; // read on every call so a renewed key works after a restart
+  const key = cleanKey(process.env.STABILITY_API_KEY); // read on every call; cleaned of quotes/spaces/"Bearer "
   if (!key) throw new Error("Image generation is not configured (STABILITY_API_KEY is missing).");
   if (getExternalCooldown("stability")) throw new Error("The image provider is busy right now. Try again in a moment.");
   const f = new FormData();
@@ -207,8 +218,9 @@ export async function stabilityBalance(): Promise<{ ok: boolean; credits?: numbe
 /** Real end-to-end check of the image providers with the keys on this server (admin button). */
 export async function imageSelfTest(): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
-  const key = process.env.STABILITY_API_KEY;
+  const key = cleanKey(process.env.STABILITY_API_KEY);
   out.stabilityKeyPresent = !!key;
+  out.stabilityKeyShape = keyShape(process.env.STABILITY_API_KEY);
   if (key) {
     try {
       const a = await fetch(`${STAB}/v1/user/account`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });

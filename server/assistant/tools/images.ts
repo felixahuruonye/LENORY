@@ -41,11 +41,18 @@ export async function toolGenerateImage(ctx: ToolContext, args: { prompt: string
   if (!used) return fail("generate_image", gateMsg || "Image generation is not available right now.", "GATE");
   ctx.onStatus?.("generating_image", `${count} image${count > 1 ? "s" : ""} - ${getService(used)!.label}`);
   const results = await Promise.allSettled(Array.from({ length: count }, async () => {
-    let out: ImgOut | null = null; let lastErr: any;
+    let out: ImgOut | null = null; const tried: string[] = [];
     for (const id of order.slice(order.indexOf(used))) {
-      try { out = await make(ctx, id, { prompt, aspectRatio: args?.aspect_ratio }); used = id; break; } catch (e) { lastErr = e; if (/safety|blocked/i.test(String((e as any)?.message))) break; }
+      const label = getService(id)!.label;
+      try { out = await make(ctx, id, { prompt, aspectRatio: args?.aspect_ratio }); used = id; break; }
+      catch (e) {
+        const msg = String((e as any)?.message || e);
+        // Every provider's own reason is kept, so the student sees WHY each one failed (not just the last fallback's error).
+        if (!tried.some((t) => t.endsWith(msg))) tried.push(`${label}: ${msg}`);
+        if (/safety|blocked/i.test(msg)) break;
+      }
     }
-    if (!out) throw lastErr;
+    if (!out) throw new Error(tried.slice(0, 3).join(" | "));
     return saveImage(ctx.userId, out, { prompt, provider: `${getService(used)!.provider}:${used}` });
   }));
   const ok = results.filter((r): r is PromiseFulfilledResult<{ id: string; url: string }> => r.status === "fulfilled").map((r) => r.value);
