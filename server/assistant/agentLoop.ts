@@ -52,6 +52,10 @@ const fn = (name: string, description: string, properties: Record<string, any>, 
   type: "function", function: { name, description, parameters: { type: "object", properties, required } },
 });
 
+/** The student is asking for a NEW picture (or to make one again). */
+const IMAGE_INTENT = /\b(generat\w*|creat\w*|make|draw|paint|design|regenerat\w*|re-?do|try)\b[^.?!]{0,60}\b(images?|pictures?|photos?|logos?|illustrations?|posters?|wallpapers?|art|artwork|drawings?)\b|\b(images?|pictures?|photos?)\b[^.?!]{0,40}\b(of|showing)\b|\bshow me (an?|the)? ?(image|picture|photo)\b/i;
+/** The AI saying it made a picture. */
+const CLAIMS_IMAGE = /(here(?:'|’)?s|here is|i(?:'|’)?ve|i have|i just|successfully)[^.!?\n]{0,40}\b(generated|created|made|regenerated|produced|drawn)\b[^.!?\n]{0,60}\b(image|picture|photo|illustration|logo|artwork)\b|\b(image|picture)\b[^.!?\n]{0,30}\b(is|are) (ready|below|above|attached|shown|displayed)\b/i;
 const DEFS: Def[] = [
   { cap: "webSearch", intent: /\b(search|look ?up|google|research|latest|current|news|recent|online|internet|web|find (out|information))\b/i,
     schema: fn("web_search", "Search the live web for current information. Use when the user asks for current/recent facts or research. Returns titles, URLs and snippets.", { query: { type: "string", description: "Short specific search query" } }, ["query"]),
@@ -168,7 +172,9 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
     const heavy = step > 0 || toolsUsed.length > 0 || lastUser.length > 600 || /\b(report|essay|assignment|thesis|dissertation|presentation|slides|research|in detail|step by step|prove|derive|spreadsheet|excel|pdf|word document)\b/i.test(lastUser);
     let out: Awaited<ReturnType<typeof chatWithLane>>;
     try {
-      out = await chatWithLane(messages as any, schemas, lane, heavy);
+      // A clear request for a picture MUST go through the image tool: small models otherwise just say "here it is".
+      const forceImage = step === 0 && IMAGE_INTENT.test(lastUser) && schemas.some((t) => t.function.name === "generate_image") && !/\b(edit|upscale|remove|erase|replace|recolor)\b/i.test(lastUser);
+      out = await chatWithLane(messages as any, schemas, lane, heavy, forceImage ? "generate_image" : undefined);
     } catch (laneErr: any) {
       // If we already produced images/files earlier in this run, do not wipe them with a lane error.
       if (images.length || artifacts.length) {
@@ -234,6 +240,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
         if (call.name === "generate_image" && !result.success) lastImageFail = result.summary || result.error || "image failed";
       }
       toolsUsed.push(call.name);
+      console.log(`[agent] tool ${call.name} ${result.success ? "ok" : "FAILED"}${result.success ? "" : ": " + String(result.summary || result.error).slice(0, 160)}${result.images?.length ? ` images=${result.images.length}` : ""}`);
       if (result.success) {
         if (result.artifacts) artifacts.push(...result.artifacts);
         if (result.images) images.push(...result.images);
@@ -259,6 +266,13 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
         : "I wasn't able to produce a response. Please try again.";
   }
   input.onStatus?.(failedTools.length && !artifacts.length ? "failed" : "completed");
+  // Never let the AI say a picture exists when no picture was made (whether the tool never ran or it failed).
+  if (!images.length && CLAIMS_IMAGE.test(answer)) {
+    console.warn("[agent] blocked a false 'here is your image' claim (no image exists)");
+    answer = lastImageFail
+      ? `I could not make the image.`
+      : "I did not actually make an image this time: the image step did not run, so there is nothing to show. Please send the request again and I will make it for real.";
+  }
   // The student must always learn the REAL reason a picture failed, even if the model's own wording was vague.
   if (lastImageFail && !images.length && !answer.includes(lastImageFail.slice(0, 40))) {
     answer = `${answer.trim()}\n\n**Why the image failed:** ${lastImageFail}`.trim();

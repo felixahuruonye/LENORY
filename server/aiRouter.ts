@@ -408,7 +408,7 @@ const stripSchema = (sch: any): any => {
   }
   return sch;
 };
-async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSchema[]): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
+async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSchema[], forceTool?: string): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
   const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!key) throw new Error("No Gemini API key configured");
   const names = new Map<string, string>();
@@ -437,6 +437,7 @@ async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSche
   const body: any = { contents, generationConfig: { temperature: 0.4, maxOutputTokens: 8192 } };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   const uniqTools = [...new Map(tools.map((t) => [t.function.name, t])).values()];
+  if (forceTool && uniqTools.some((t) => t.function.name === forceTool)) body.toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [forceTool] } };
   if (uniqTools.length) body.tools = [{ functionDeclarations: uniqTools.map((t) => ({ name: t.function.name, description: t.function.description, ...(Object.keys(t.function.parameters?.properties || {}).length ? { parameters: stripSchema(t.function.parameters) } : {}) })) }];
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${spec.model}:generateContent`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body),
@@ -463,7 +464,7 @@ async function callGemini(spec: ModelSpec, messages: AgentMsg[], tools: ToolSche
 
 /** One call for a lane: tries that lane's 3 models in order (cheapest-first for simple, strongest-first for heavy). */
 export async function chatWithLane(
-  messages: AgentMsg[], tools: ToolSchema[], lane: ChatLane, heavy: boolean,
+  messages: AgentMsg[], tools: ToolSchema[], lane: ChatLane, heavy: boolean, forceTool?: string,
 ): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any; modelUsed: string }> {
   const trail: string[] = [];
   for (const spec of laneChain(lane, heavy)) {
@@ -478,12 +479,12 @@ export async function chatWithLane(
     }
     try {
       let out;
-      if (spec.provider === "gemini") out = await callGemini(spec, messages, tools);
+      if (spec.provider === "gemini") out = await callGemini(spec, messages, tools, forceTool);
       else {
         const key = spec.provider === "openrouter" ? process.env.OPENROUTER_API_KEY! : process.env.GROQ_API_KEY!;
         const base = spec.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.groq.com/openai/v1";
         const extra = spec.provider === "openrouter" ? { "HTTP-Referer": "https://lenory.app", "X-Title": "LENORY AI" } : undefined;
-        out = await callOpenAICompatibleTools(base, key, spec, messages, tools, extra);
+        out = await callOpenAICompatibleTools(base, key, spec, messages, tools, extra, forceTool);
       }
       return { ...out, modelUsed: spec.label };
     } catch (e: any) {
@@ -506,11 +507,12 @@ async function callOpenAICompatibleTools(
   messages: AgentMsg[],
   tools: ToolSchema[],
   extraHeaders?: Record<string, string>,
+  forceTool?: string,
 ): Promise<{ content: string; toolCalls: ToolCall[]; rawAssistant: any }> {
   const body: any = { model: spec.model, messages, temperature: 0.4, max_tokens: spec.provider === "groq" ? 2800 : 5000 };
   if (tools.length) {
     body.tools = tools;
-    body.tool_choice = "auto";
+    body.tool_choice = forceTool && tools.some((t) => t.function.name === forceTool) ? { type: "function", function: { name: forceTool } } : "auto";
   }
   const doFetch = () => fetch(`${baseUrl}/chat/completions`, {
     method: "POST",

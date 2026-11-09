@@ -914,7 +914,7 @@ Please try again. Your selected mode is still available unless Admin → Provide
           if (agentImages.length) {
             if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "images", images: agentImages })}\n\n`);
           }
-      if (agentArtifacts.length || searchSources.length) {
+      if (agentArtifacts.length || searchSources.length || agentImages.length) {
         attachments = { ...(attachments || {}), ...(agentImages.length ? { images: [...(attachments?.images || []), ...agentImages] } : {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
       }
 

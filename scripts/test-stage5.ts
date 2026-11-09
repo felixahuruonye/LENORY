@@ -99,5 +99,37 @@ process.env.OPENROUTER_RPM = "900"; process.env.GROQ_RPM = "900"; process.env.GE
   check("clean key helper", img.cleanKey('  "Bearer sk-abc "\n') === "sk-abc" && img.keyShape("sk-" + "a".repeat(50)).startsWithSk);
   (globalThis as any).fetch = real;
 
+  // 10. the screenshot case: "regenerate my image" - a model that only says "here it is" must not fool the student
+  process.env.STABILITY_API_KEY = "sk-" + "a".repeat(50);
+  let toolChoiceSeen: any = null; let turn = 0;
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  (globalThis as any).fetch = async (url: any, init: any) => {
+    const u = String(url);
+    if (u.includes("api.stability.ai")) return { ok: true, status: 200, headers: new Headers({ "content-type": "image/png" }), arrayBuffer: async () => Buffer.concat([png, Buffer.alloc(400)]).buffer, text: async () => "", json: async () => ({}) } as any;
+    if (u.includes("supabase.co")) return resp(200, {});
+    if (u.includes("groq.com")) {
+      const b = JSON.parse(init.body); if (turn === 0) toolChoiceSeen = b.tool_choice; turn++;
+      // a lazy model: only calls the tool when forced; otherwise claims success in words
+      if (b.tool_choice && typeof b.tool_choice === "object") return resp(200, { choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ id: "c9", type: "function", function: { name: "generate_image", arguments: JSON.stringify({ prompt: "Elon Musk in a modern data center" }) } }] } }] });
+      return resp(200, { choices: [{ finish_reason: "stop", message: { content: "Here's the regenerated image you requested - showing Elon Musk in a data center." } }] });
+    }
+    return resp(200, { choices: [{ finish_reason: "stop", message: { content: "ok" } }] });
+  };
+  clearAll();
+  const hist = [{ role: "user", content: "Create an image of Elon Musk in a modern xAI data center" }, { role: "assistant", content: "I couldn't complete the image request." }, { role: "user", content: "Hey lenory try regenerating my image again, I expect it to show on the chat" }];
+  const run2 = await agent.runToolAgent({ userId: "u", systemMessage: "You are LENORY.", history: hist, lane: "fast", tier: "fast", strictLane: true, capabilities: { fileCreation: true, imageGeneration: true } } as any).catch((e: any) => ({ answer: "THREW " + e.message }));
+  check("a clear image request forces the generate_image tool", toolChoiceSeen && typeof toolChoiceSeen === "object" && toolChoiceSeen.function?.name === "generate_image", JSON.stringify(toolChoiceSeen));
+  // with Supabase unreachable in this sandbox the save step fails; what matters: the AI never claims a picture it did not make
+  console.log("RUN2 tools:", run2.toolsUsed, "images:", run2.images?.length);
+  check("a claim of a picture is only allowed when a picture really exists", !/here('|.)?s the regenerated image/i.test(run2.answer) || (run2.images?.length || 0) > 0, `images=${run2.images?.length || 0}`);
+  check("forced image tool ran and produced a real image object", run2.toolsUsed.includes("generate_image"), run2.toolsUsed.join(","));
+
+  // 11. a model that only TALKS about an image (no tool at all) is corrected
+  (globalThis as any).fetch = async (url: any) => String(url).includes("groq.com") ? resp(200, { choices: [{ finish_reason: "stop", message: { content: "I've generated the image for you - it is shown below." } }] }) : resp(200, {});
+  clearAll();
+  const run3 = await agent.runToolAgent({ userId: "u", systemMessage: "You are LENORY.", history: [{ role: "user", content: "What can you do?" }], lane: "fast", tier: "fast", strictLane: true, capabilities: {} } as any);
+  check("fake image claim with no tool is replaced by an honest message", /did not actually make an image/i.test(run3.answer), run3.answer.slice(0, 80));
+  (globalThis as any).fetch = real;
+
   console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error("TEST CRASH", e); process.exit(2); });
