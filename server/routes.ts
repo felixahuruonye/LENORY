@@ -26,6 +26,7 @@ import { runToolAgent } from "./assistant/agentLoop";
 import { getLaneStatuses, isWebSearchExhausted, setExternalCooldown, parseRetryDelaySeconds, chatCompletionWithFailover, getProviderCooldownStatus } from "./aiRouter";
 import { storage } from "./storage";
 import { registerKbRoutes } from "./kbRoutes";
+import { registerDigitizeRoutes } from "./digitizeRoutes";
 import { registerVapiCustomTtsRoutes } from "./vapiCustomTts";
 import { tryClaimReference } from "./paymentLedger";
 import { supabaseAuth, optionalSupabaseAuth, type AuthenticatedRequest, generateLenoryId, createDeviceToken, verifyDeviceToken } from "./supabaseAuth";
@@ -191,6 +192,7 @@ function getGitHubAuthUrl(userId: string): string {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   registerKbRoutes(app);
+  registerDigitizeRoutes(app);
   registerVapiCustomTtsRoutes(app);
   // Wire up Replit AI Integrations
   registerChatRoutes(app);

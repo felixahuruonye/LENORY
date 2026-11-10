@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import HandwrittenDigitize, { type DigitizeResult } from "@/components/notes/HandwrittenDigitize";
 import { supabase } from "@/lib/supabase";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -219,6 +220,7 @@ export default function LiveSession() {
   const [showSilenceSettings, setShowSilenceSettings] = useState(false);
   const [videoUrlInput, setVideoUrlInput] = useState("");
   const [showVideoUrl, setShowVideoUrl] = useState(false);
+  const [showDigitize, setShowDigitize] = useState(false);
 
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
@@ -992,6 +994,19 @@ export default function LiveSession() {
   };
 
   if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+
+  const handleDigitizeComplete = (result: DigitizeResult) => {
+    if (result.document) setFormattedNotes(result.document);
+    if (result.photoDataUrls?.length) {
+      setPhotos((prev) => [...prev, ...result.photoDataUrls]);
+    }
+    setTopicTab("note");
+    toast({
+      title: "Digital notes ready",
+      description: "Review on the Note tab, then Save to store this page in the topic.",
+    });
+  };
+
   if (!user) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
       <p className="text-muted-foreground">Sign in to use Write My Note</p>
@@ -1193,6 +1208,7 @@ export default function LiveSession() {
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => fileInputRef.current?.click()}><Upload className="w-4 h-4" />Upload</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => videoInputRef.current?.click()}><FileText className="w-4 h-4" />Video</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowVideoUrl(true)}><Link2 className="w-4 h-4" />Link</Button>
+                          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowDigitize(true)} data-testid="button-scan-notes"><ImageIcon className="w-4 h-4" />Scan notes</Button>
             </div>
             <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.aac,.flac" className="hidden" onChange={handleUploadRecording} />
             <input ref={videoInputRef} type="file" accept="video/*,.mp4,.webm,.mov" className="hidden" onChange={handleUploadRecording} />
@@ -1587,6 +1603,15 @@ export default function LiveSession() {
             <Button variant="ghost" className="w-full" onClick={() => setShowStartRecCard(false)}>Cancel</Button>
           </div>
         </div>
+      )}
+
+      
+      {showDigitize && (
+        <HandwrittenDigitize
+          open={showDigitize}
+          onClose={() => setShowDigitize(false)}
+          onComplete={handleDigitizeComplete}
+        />
       )}
 
       {showShare && (
