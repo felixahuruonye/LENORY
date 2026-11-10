@@ -46,29 +46,57 @@ async function geminiExtract(buffer: Buffer, mimeType: string): Promise<string> 
   // Always use the strict handwriting prompt (do not use generic extractTextFromImage — it may invent structure)
   const { GoogleGenAI } = await import("@google/genai");
   const ai = new GoogleGenAI({ apiKey: key });
-  const model =
-    process.env.GEMINI_OCR_MODEL ||
-    process.env.GEMINI_VISION_MODEL ||
-    "gemini-2.0-flash";
+  // gemini-2.0-flash was retired (404). Prefer current flash models; allow env override.
+  const models = [
+    process.env.GEMINI_OCR_MODEL,
+    process.env.GEMINI_VISION_MODEL,
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+  ].filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
 
-  const timeout = new Promise<never>((_, rej) =>
-    setTimeout(() => rej(new Error("OCR_TIMEOUT")), 45_000)
+  let lastErr = "";
+  for (const model of models) {
+    try {
+      const timeout = new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error("OCR_TIMEOUT")), 45_000)
+      );
+      const run = ai.models.generateContent({
+        model,
+        contents: [
+          {
+            inlineData: {
+              mimeType: mimeType || "image/jpeg",
+              data: buffer.toString("base64"),
+            },
+          },
+          { text: HANDWRITING_PROMPT },
+        ] as any,
+        config: { thinkingConfig: { thinkingBudget: 0 } } as any,
+      });
+      const response = await Promise.race([run, timeout]);
+      const text = String((response as any).text || "").trim();
+      // SDK sometimes embeds JSON error as "text"
+      if (/NOT_FOUND|"code"\s*:\s*404|no longer available/i.test(text)) {
+        lastErr = text.slice(0, 200);
+        continue;
+      }
+      return text;
+    } catch (e: any) {
+      const msg = String(e?.message || e || "");
+      lastErr = msg.slice(0, 240);
+      // Try next model on 404 / not found / deprecated
+      if (/404|NOT_FOUND|no longer available|not found|invalid model/i.test(msg)) continue;
+      if (/OCR_TIMEOUT/i.test(msg)) continue;
+      throw e;
+    }
+  }
+  throw new Error(
+    lastErr
+      ? `OCR model unavailable: ${lastErr.slice(0, 180)}`
+      : "OCR failed — no working Gemini model"
   );
-  const run = ai.models.generateContent({
-    model,
-    contents: [
-      {
-        inlineData: {
-          mimeType: mimeType || "image/jpeg",
-          data: buffer.toString("base64"),
-        },
-      },
-      { text: HANDWRITING_PROMPT },
-    ] as any,
-    config: { thinkingConfig: { thinkingBudget: 0 } } as any,
-  });
-  const response = await Promise.race([run, timeout]);
-  return String((response as any).text || "").trim();
 }
 
 function scoreConfidence(text: string): OcrPageResult["confidence"] {

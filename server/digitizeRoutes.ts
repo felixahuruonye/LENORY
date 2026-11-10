@@ -133,15 +133,20 @@ export function registerDigitizeRoutes(app: Express) {
         }
 
         const combined = combinePageTexts(results);
+        const allBlank = results.every((p) => p.isBlank);
+        const apiHints = results.flatMap((p) => p.warnings).filter((w) => /404|NOT_FOUND|no longer available|OCR model|API key/i.test(w));
         res.json({
-          success: true,
+          success: !allBlank,
           provider: provider.id,
           pageCount: results.length,
           pages: results,
           document: combined,
-          message: combined
+          message: !allBlank
             ? `Extracted ${results.filter((p) => !p.isBlank).length} of ${results.length} pages`
-            : "No text could be extracted from the uploaded pages",
+            : apiHints[0]
+              ? `OCR failed: ${apiHints[0]}`
+              : "No text could be extracted from the uploaded pages",
+          modelError: apiHints[0] || undefined,
         });
       } catch (e: any) {
         console.error("[digitize]", e);
