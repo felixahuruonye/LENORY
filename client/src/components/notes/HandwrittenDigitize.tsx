@@ -197,7 +197,22 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
       setResult(out);
       setEditedDoc(out.document);
       setViewMode("side");
-      toast({ title: "Digital notes ready", description: data.message || "Review, export, or save as a new page." });
+      const blank = (out.pages || []).filter((x: any) => x.isBlank).length;
+      const total = (out.pages || []).length || 1;
+      if (blank === total) {
+        toast({
+          title: "OCR busy — try again",
+          description: data.modelError || data.message || "The vision model was overloaded. Tap Convert again in a few seconds.",
+          variant: "destructive",
+        });
+      } else if (blank > 0) {
+        toast({
+          title: `Got ${total - blank} of ${total} pages`,
+          description: "Some pages failed (provider busy). You can Convert again or edit the text.",
+        });
+      } else {
+        toast({ title: "Digital notes ready", description: data.message || "Review, export, or save as a new page." });
+      }
     } catch (e: any) {
       toast({ title: "Digitize failed", description: e?.message || "Try again", variant: "destructive" });
     } finally {
@@ -424,7 +439,9 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                   <div className="space-y-2">
                     <p className="text-[10px] font-semibold text-muted-foreground uppercase">Extracted text (page {previewIndex + 1})</p>
                     <div className="rounded-lg border bg-card p-2 text-xs max-h-56 overflow-y-auto whitespace-pre-wrap font-sans">
-                      {result.pages[previewIndex]?.text || editedDoc || "—"}
+                      {result.pages[previewIndex]?.isBlank
+                      ? (result.pages[previewIndex]?.warnings?.[0] || "No text on this page — try Convert again")
+                      : (result.pages[previewIndex]?.text || "—")}
                     </div>
                     {result.pages[previewIndex]?.warnings?.length ? (
                       <div className="text-[10px] text-amber-600 flex gap-1"><AlertTriangle className="w-3 h-3" />{result.pages[previewIndex].warnings.join(" · ")}</div>
@@ -437,6 +454,11 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                 <Button size="sm" variant="outline" className="gap-1" onClick={exportTxt}><Download className="w-3.5 h-3.5" />TXT</Button>
                 <Button size="sm" variant="outline" className="gap-1" onClick={exportDoc}><Download className="w-3.5 h-3.5" />DOC</Button>
                 <Button size="sm" variant="outline" className="gap-1" onClick={exportPdf}><Download className="w-3.5 h-3.5" />PDF</Button>
+                {(result.pages || []).some((x) => x.isBlank) && (
+                  <Button size="sm" variant="secondary" className="gap-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={busy}>
+                    Retry convert
+                  </Button>
+                )}
               </div>
 
               <div className="flex flex-wrap gap-1.5">

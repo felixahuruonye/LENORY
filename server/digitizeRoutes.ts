@@ -101,34 +101,48 @@ export function registerDigitizeRoutes(app: Express) {
         }
 
         const results: OcrPageResult[] = [];
-        const progress: { page: number; status: string }[] = [];
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-        for (let pos = 0; pos < order.length; pos++) {
+        async function processOne(pos: number): Promise<OcrPageResult> {
           const fi = order[pos];
           const f = files[fi];
           const mime = f.mimetype || "application/octet-stream";
           const name = f.originalname || `page_${pos + 1}`;
-
-          progress.push({ page: pos + 1, status: "processing" });
-
           if (/^image\//i.test(mime) || /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(name)) {
-            const r = await provider.extractPage({
+            return provider.extractPage({
               index: pos,
               buffer: f.buffer,
               mimeType: mime.startsWith("image/") ? mime : "image/jpeg",
               fileName: name,
             });
-            results.push(r);
-          } else {
-            const text = await extractPlainDoc(f.buffer, mime, name);
-            results.push({
-              index: pos,
-              fileName: name,
-              text: text || "",
-              confidence: text ? "high" : "none",
-              warnings: text ? [] : ["No text extracted from document"],
-              isBlank: !text,
-            });
+          }
+          const text = await extractPlainDoc(f.buffer, mime, name);
+          return {
+            index: pos,
+            fileName: name,
+            text: text || "",
+            confidence: text ? "high" : "none",
+            warnings: text ? [] : ["No text extracted from document"],
+            isBlank: !text,
+          };
+        }
+
+        // Sequential with short gap — parallel bursts trigger Gemini 503 high-demand
+        for (let pos = 0; pos < order.length; pos++) {
+          if (pos > 0) await sleep(400);
+          results.push(await processOne(pos));
+        }
+
+        // Second pass: retry blank image pages once after a pause
+        const blankIdx = results
+          .map((r, i) => (r.isBlank && !r.warnings.some((w) => /document/i.test(w)) ? i : -1))
+          .filter((i) => i >= 0);
+        if (blankIdx.length) {
+          await sleep(1500);
+          for (const i of blankIdx) {
+            await sleep(500);
+            const again = await processOne(i);
+            if (!again.isBlank) results[i] = again;
           }
         }
 
