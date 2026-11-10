@@ -62,6 +62,17 @@ interface TopicPayload {
 }
 interface TranscriptSegment { text: string; start: number; end: number; speaker?: string; }
 
+/** Real topic documents only — exclude board/scan media that polluted the topic list */
+function isTopicFile(f: any): boolean {
+  const type = String(f.file_type || f.fileType || f.type || "").toLowerCase();
+  const src = String(f.source_type || f.sourceType || "").toLowerCase();
+  if (src === "write_my_note_media") return false;
+  if (["image", "audio", "video", "upload"].includes(type)) return false;
+  const name = String(f.name || "");
+  if (/^scan-/i.test(name)) return false;
+  return true;
+}
+
 function parseMeta(description?: string | null): NotebookMeta {
   if (!description) return {};
   try { const j = JSON.parse(description); if (j && typeof j === "object") return j; } catch {}
@@ -268,7 +279,9 @@ export default function LiveSession() {
       if (!selectedNotebook) return [];
       const res = await authFetch(`/api/kb/folders/${selectedNotebook.id}`);
       if (!res.ok) throw new Error("Failed to load topics");
-      return res.json();
+      const data = await res.json();
+      const files = Array.isArray(data) ? data : (data.files || []);
+      return files.filter(isTopicFile);
     },
     enabled: !!user && !!selectedNotebook,
   });
@@ -1059,32 +1072,29 @@ export default function LiveSession() {
       }
 
       const body = JSON.stringify({ name: selectedTopic.name, content });
-      let res = await authFetch(
+      // Always UPDATE the open topic — never POST /files/text (that created extra empty topics)
+      const res = await authFetch(
         `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
         { method: "PUT", headers: { "Content-Type": "application/json" }, body }
       );
-      if (!res.ok) {
-        res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/text`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        });
-      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || err.error || `Save failed (${res.status})`);
       }
       const saved = await res.json().catch(() => ({}));
-      const updatedTopic = {
+      const updatedTopic: TopicFile = {
         ...selectedTopic,
         ...saved,
-        extracted_text: saved.extracted_text || content,
+        id: selectedTopic.id,
+        name: selectedTopic.name,
+        extracted_text: content,
+        extractedText: content,
         size_bytes: size,
+        sizeBytes: size,
       };
       setSelectedTopic(updatedTopic);
       setTopicPages(pages);
       setSelectedPageIndex(pages.length - 1);
-      // Load only the new scan page into the editor (do not merge prior page state)
       setTranscript("");
       setSegments([]);
       setAudioUrl(null);
@@ -1094,12 +1104,12 @@ export default function LiveSession() {
       setPhotos(permanentPhotos);
       setTopicTab("note");
       setNoteEditing(false);
-      setShowScanPhotos(false);
+      setShowScanPhotos(true); // show eye gallery for the new scan page
       refetchTopics();
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
       toast({
         title: `Saved as Page ${nextNum}`,
-        description: "Scanned notes added as a new page. Previous pages are unchanged.",
+        description: "Text is on the Note tab. Tap the eye icon to see original photos.",
       });
     } catch (e: any) {
       toast({ title: "Could not save scan page", description: e?.message || "Try again", variant: "destructive" });
@@ -1142,6 +1152,52 @@ export default function LiveSession() {
       toast({ title: "Note saved" });
     } catch (e: any) {
       toast({ title: "Save failed", description: e?.message, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+
+  const deleteTopicPage = async (pageIndex: number) => {
+    if (!selectedNotebook || !selectedTopic) return;
+    if (!confirm("Delete this page? Note text and scanned images on this page will be removed.")) return;
+    try {
+      setIsSaving(true);
+      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+      let pages = getTopicPages(existingDoc);
+      if (topicPages.length >= pages.length) pages = [...topicPages];
+      if (pageIndex < 0 || pageIndex >= pages.length) return;
+      pages = pages.filter((_, i) => i !== pageIndex).map((pg, i) => ({
+        ...pg,
+        pageNumber: i + 1,
+        title: pg.title?.replace(/Page \d+/, `Page ${i + 1}`) || `Page ${i + 1}`,
+      }));
+      const doc: TopicPayload = { version: 2, pages };
+      const content = JSON.stringify(doc);
+      const body = JSON.stringify({ name: selectedTopic.name, content });
+      const res = await authFetch(
+        `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body }
+      );
+      if (!res.ok) throw new Error("Delete failed");
+      setSelectedTopic({ ...selectedTopic, extracted_text: content, extractedText: content });
+      setTopicPages(pages);
+      const nextIdx = Math.max(0, Math.min(pageIndex, pages.length - 1));
+      setSelectedPageIndex(nextIdx);
+      if (pages[nextIdx]) {
+        applyTopicPage(pages[nextIdx]);
+      } else {
+        setFormattedNotes("");
+        setPhotos([]);
+        setTranscript("");
+        setSegments([]);
+        setAudioUrl(null);
+      }
+      setShowScanPhotos(false);
+      setNoteEditing(false);
+      toast({ title: "Page deleted" });
+    } catch (e: any) {
+      toast({ title: "Could not delete page", description: e?.message, variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
@@ -1319,8 +1375,8 @@ export default function LiveSession() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pages in this topic</p>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {topicPages.map((pg, idx) => (
+                  <div key={pg.id || idx} className="relative shrink-0">
                     <button
-                      key={pg.id}
                       type="button"
                       onClick={() => {
                         stopSegmentAudio();
@@ -1328,17 +1384,27 @@ export default function LiveSession() {
                         applyTopicPage(pg);
                         setTopicTab(pg.formattedNotes ? "note" : "live");
                       }}
-                      className={`shrink-0 rounded-lg border px-3 py-2 text-left min-w-[7rem] transition ${
-                        selectedPageIndex === idx ? "border-primary bg-primary/10 ring-1 ring-primary" : "bg-card hover:bg-muted/40"
+                      className={`min-w-[5.5rem] rounded-xl border px-3 py-2 text-left transition ${
+                        selectedPageIndex === idx ? "border-primary bg-primary/15 ring-1 ring-primary" : "bg-muted/30"
                       }`}
                     >
                       <p className="text-sm font-semibold">Page {pg.pageNumber}</p>
                       <p className="text-[10px] text-muted-foreground truncate">
                         {pg.title || relativeTime(pg.createdAt)}
                         {pg.hasRecording || pg.recordingUrl ? " · 🎧" : ""}
+                        {(pg.photos?.length || 0) > 0 ? " · 📷" : ""}
                       </p>
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      title="Delete this page"
+                      className="absolute -top-1.5 -right-1.5 h-6 w-6 rounded-full bg-destructive text-white flex items-center justify-center shadow z-10"
+                      onClick={(e) => { e.stopPropagation(); deleteTopicPage(idx); }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
                 </div>
               </div>
             )}

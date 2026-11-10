@@ -476,29 +476,21 @@ export function registerKbRoutes(app: Express) {
       else if (mimetype.startsWith("audio/")) fileType = "audio";
       else if (mimetype.startsWith("video/")) fileType = "video";
 
+      // Do NOT createKBFile here — that was listing every photo as an empty "topic"
+      // (scan-xxxx entries). Media lives in storage; page JSON on the real topic holds the URLs.
       const topicId = req.body?.topicId || null;
       const label = req.body?.label || originalname;
 
-      const file = await storage.createKBFile({
-        folder_id: req.params.id,
-        user_id: req.userId,
-        name: label,
-        file_type: fileType,
-        mime_type: mimetype,
-        file_size: buffer.length,
-        extracted_text: topicId ? JSON.stringify({ topicId, role: req.body?.role || "board_photo" }) : null,
-        full_text_url: publicUrl,
-        source_type: "write_my_note_media",
-      });
-
       res.status(201).json({
-        id: file.id,
-        name: file.name,
+        id: `media_${Date.now()}`,
+        name: label,
         url: publicUrl,
         full_text_url: publicUrl,
         file_type: fileType,
         mime_type: mimetype,
         file_size: buffer.length,
+        topicId,
+        role: req.body?.role || "board_photo",
       });
     } catch (error) {
       console.error("KB MEDIA UPLOAD ERROR:", error);
