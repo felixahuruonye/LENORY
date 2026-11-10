@@ -1,7 +1,7 @@
 /** Chat tools for pictures. Ultra/Fast use Stability; Vision uses Google Nano Banana. Nothing is claimed unless an image was really made and saved. */
 import type { ToolContext, ToolResult } from "../types";
 import { IMAGE_SERVICES, MAX_IMAGES_AT_ONCE } from "../../imageDefaults";
-import { getService, runStability, runNanoBanana, saveImage, loadOwnImage, imageGate, chargeImages, type ImgInput, type ImgOut } from "../../imageStudio";
+import { getService, runImageService, saveImage, loadOwnImage, imageGate, chargeImages, type ImgInput, type ImgOut } from "../../imageStudio";
 import { storeArtifact } from "./index";
 
 const SWITCH = "Switch to LENORY Fast or Ultra for this (Vision makes and edits pictures with Nano Banana, but cannot do this specific job).";
@@ -16,7 +16,7 @@ const fail = (tool: string, msg: string, error = "FAILED"): ToolResult => ({ too
 
 async function make(ctx: ToolContext, svcId: string, input: ImgInput): Promise<ImgOut> {
   const svc = getService(svcId)!;
-  return svc.provider === "stability" ? runStability(svc, input) : runNanoBanana(svc, input);
+  return runImageService(svc, input);
 }
 
 export async function toolGenerateImage(ctx: ToolContext, args: { prompt: string; count?: number; aspect_ratio?: string; quality?: string }): Promise<ToolResult> {
@@ -28,7 +28,7 @@ export async function toolGenerateImage(ctx: ToolContext, args: { prompt: string
   // Vision → Gemini Nano Banana. Ultra/Fast → Stability first, then Gemini fallback
   // so a zeroed Stability account does not block every picture request.
   const order = l === "vision"
-    ? q === "best" ? ["nano_banana_pro", "nano_banana", "nano_banana_lite"] : q === "fast" ? ["nano_banana_lite", "nano_banana"] : ["nano_banana", "nano_banana_lite"]
+    ? q === "best" ? ["nano_banana_pro", "nano_banana_lite", "nano_banana_lite"] : q === "fast" ? ["nano_banana_lite", "nano_banana_lite"] : ["nano_banana", "nano_banana_lite"]
     : q === "best" ? ["stable_image_ultra", "sd35_large", "sd35_flash", "nano_banana", "nano_banana_lite"]
       : q === "balanced" ? ["sd35_large", "sd35_flash", "stable_image_ultra", "nano_banana", "nano_banana_lite"]
       : ["sd35_flash", "sd35_large", "stable_image_ultra", "nano_banana_lite", "nano_banana"];

@@ -6,7 +6,7 @@
  */
 export type ImageKind = "generate" | "upscale" | "edit" | "control" | "3d";
 export interface ImageService {
-  id: string; label: string; kind: ImageKind; provider: "stability" | "gemini";
+  id: string; label: string; kind: ImageKind; provider: "stability" | "gemini" | "fal" | "svg";
   path?: string; model?: string; async?: boolean; providerUsd: number; credits: number; premiumOnly?: boolean;
   help: string;
 }
@@ -33,10 +33,24 @@ export const IMAGE_SERVICES: ImageService[] = [
   { id: "style_transfer", label: "Control: Style Transfer", kind: "control", provider: "stability", path: "/v2beta/stable-image/control/style-transfer", providerUsd: 0.08, credits: 48, help: "Apply a reference style to your image" },
   // --- Stability: 3D
   { id: "spar3d", label: "Stable Point Aware 3D", kind: "3d", provider: "stability", path: "/v2beta/3d/stable-point-aware-3d", providerUsd: 0.04, credits: 25, help: "Turn one picture into a 3D model (GLB)" },
+
+  // --- fal.ai FLUX models (primary for Ultra/Fast lanes) ---
+  { id: "flux_fast", label: "FLUX 2 Flash", kind: "generate", provider: "fal", model: "fal-ai/flux/schnell", providerUsd: 0.003, credits: 8, help: "Fastest, cheapest draft images" },
+  { id: "flux_standard", label: "FLUX 3", kind: "generate", provider: "fal", model: "fal-ai/flux-pro/v1.1", providerUsd: 0.048, credits: 55, help: "High quality, great for people, scenes and logos" },
+  { id: "flux_ultra", label: "FLUX 3 Ultra", kind: "generate", provider: "fal", model: "fal-ai/flux-pro/v1.1-ultra", providerUsd: 0.06, credits: 70, premiumOnly: true, help: "Best quality and prompt following" },
+  { id: "flux_edit", label: "FLUX Kontext", kind: "edit", provider: "fal", model: "fal-ai/flux-pro/kontext", providerUsd: 0.045, credits: 60, help: "Edit an image using a text instruction" },
+  { id: "flux_edit_fast", label: "FLUX Kontext Fast", kind: "edit", provider: "fal", model: "fal-ai/flux-pro/kontext/max", providerUsd: 0.08, credits: 90, premiumOnly: true, help: "Highest fidelity reference-based editing" },
+  { id: "flux_upscale", label: "FLUX Upscale", kind: "upscale", provider: "fal", model: "fal-ai/aura-sr", providerUsd: 0.013, credits: 15, help: "4× upscale any image" },
+  { id: "flux_remove_bg", label: "Remove Background (fal)", kind: "edit", provider: "fal", model: "fal-ai/birefnet", providerUsd: 0.0015, credits: 5, help: "Remove image background instantly" },
+  { id: "flux_inpaint", label: "FLUX Inpaint", kind: "edit", provider: "fal", model: "fal-ai/flux-pro/v1/fill", providerUsd: 0.05, credits: 60, help: "Fill or replace a region of an image" },
+  { id: "flux_canny", label: "FLUX Canny Control", kind: "control", provider: "fal", model: "fal-ai/flux-pro/v1/canny", providerUsd: 0.05, credits: 60, help: "Control image structure from an edge-detection map" },
+  { id: "flux_depth", label: "FLUX Depth Control", kind: "control", provider: "fal", model: "fal-ai/flux-pro/v1/depth", providerUsd: 0.05, credits: 60, help: "Control image structure from a depth map" },
+  // --- SVG diagram (free, generated locally - no API cost) ---
+  { id: "svg_diagram", label: "SVG Diagram", kind: "generate", provider: "svg", model: "local", providerUsd: 0.0, credits: 0, help: "Free: graphs, charts and diagrams as sharp SVG images" },
   // --- Google Nano Banana (Vision lane)
-  { id: "nano_banana_lite", label: "Nano Banana 2 Lite", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.034, credits: 20, help: "Cheapest Gemini image model (1K)" },
-  { id: "nano_banana", label: "Nano Banana 2", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.067, credits: 40, help: "Everyday generation and editing" },
-  { id: "nano_banana_pro", label: "Nano Banana Pro", kind: "generate", provider: "gemini", model: "gemini-2.0-flash-preview-image-generation", providerUsd: 0.134, credits: 80, premiumOnly: true, help: "Best text in images and detailed work" },
+  { id: "nano_banana_lite", label: "Nano Banana 2 Lite", kind: "generate", provider: "gemini", model: "gemini-nano-banana-2.1", providerUsd: 0.034, credits: 20, help: "Cheapest Gemini image model" },
+  { id: "nano_banana", label: "Nano Banana 2", kind: "generate", provider: "gemini", model: "gemini-nano-banana-2.1", providerUsd: 0.067, credits: 40, help: "Everyday generation and editing" },
+  { id: "nano_banana_pro", label: "Nano Banana Pro", kind: "generate", provider: "gemini", model: "gemini-nano-banana-2.1", providerUsd: 0.134, credits: 80, premiumOnly: true, help: "Best text in images and detailed work" },
 ];
 export const IMAGE_CAP_DEFAULTS = { image_cap_free: 5, image_cap_pro: 50, image_cap_premium: 150 };
 export const imageCostKey = (id: string) => `img_${id}`;

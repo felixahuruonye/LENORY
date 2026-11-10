@@ -3,6 +3,7 @@
  * saves results to the student's image history, and enforces admin switches, monthly caps and credits.
  * Docs: docs.stability.ai (REST v2beta). 1 Stability credit = $0.01.
  */
+import { runFal } from "./falProvider";
 import { supabaseDb } from "./db";
 import { storage } from "./storage";
 import { getFeatureCost, getOrCreateCredits, deductCredits } from "./creditsStore";
@@ -37,7 +38,7 @@ const ext = (m: string) => (m.includes("jpeg") ? "jpg" : m.includes("webp") ? "w
 const STAB_RATIOS = ["21:9", "16:9", "3:2", "5:4", "1:1", "4:5", "2:3", "9:16", "9:21"];
 const GEM_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 /** Map whatever the model asked for to the nearest ratio the provider really accepts (a bad value was failing every image). */
-export function normalizeAspect(ratio: string | undefined, provider: "stability" | "gemini"): string {
+export function normalizeAspect(ratio: string | undefined, provider: "stability" | "gemini" | "fal" | "svg"): string {
   const list = provider === "stability" ? STAB_RATIOS : GEM_RATIOS;
   const r = String(ratio || "1:1").replace(/\s+/g, "").replace(/[xX\/]/, ":");
   if (list.includes(r)) return r;
@@ -61,6 +62,14 @@ async function stabilityError(res: Response): Promise<Error> {
 }
 
 /** One Stability call (handles the async services by polling /results/{id}). */
+/** Route to the right provider given the service definition. */
+export async function runImageService(svc: ImageService, input: ImgInput): Promise<ImgOut> {
+  if (svc.provider === "fal") return runFal(svc.model, input);
+  if (svc.provider === "gemini") return runNanoBanana(svc, input);
+  if (svc.provider === "stability") return runStability(svc, input);
+  throw new Error(`Unknown image provider: ${svc.provider}`);
+}
+
 export async function runStability(svc: ImageService, input: ImgInput): Promise<ImgOut> {
   const key = cleanKey(process.env.STABILITY_API_KEY); // read on every call; cleaned of quotes/spaces/"Bearer "
   if (!key) throw new Error("Image generation is not configured (STABILITY_API_KEY is missing).");
@@ -189,6 +198,10 @@ export async function imageGate(userId: string, svc: ImageService, count: number
 }
 export async function chargeImages(userId: string, unit: number, n: number) { if (n > 0 && unit > 0) await deductCredits(userId, unit * n); }
 
+export async function falKeyPresent(): Promise<boolean> {
+  return !!(process.env.FAL_KEY || process.env.FAL_API_KEY);
+}
+
 export async function stabilityBalance(): Promise<{ ok: boolean; credits?: number; error?: string; keyPresent?: boolean }> {
   const key = process.env.STABILITY_API_KEY;
   if (!key) return { ok: false, keyPresent: false, error: "STABILITY_API_KEY is not set on Render. Add it under Environment, then restart the service." };
@@ -218,6 +231,17 @@ export async function stabilityBalance(): Promise<{ ok: boolean; credits?: numbe
 /** Real end-to-end check of the image providers with the keys on this server (admin button). */
 export async function imageSelfTest(): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
+  // --- fal.ai (primary for Ultra and Fast)
+  const falKey = process.env.FAL_KEY || process.env.FAL_API_KEY;
+  out.falKeyPresent = !!falKey;
+  if (falKey) {
+    try {
+      const svc = getService("flux_fast")!;
+      const img = await runImageService(svc, { prompt: "a small blue circle on a white background" });
+      out.falGenerate = `ok (${img.buffer.length} bytes)`;
+    } catch (e: any) { out.falGenerate = `FAILED: ${e?.message}`; }
+  }
+  // --- Stability (fallback)
   const key = cleanKey(process.env.STABILITY_API_KEY);
   out.stabilityKeyPresent = !!key;
   out.stabilityKeyShape = keyShape(process.env.STABILITY_API_KEY);
@@ -227,20 +251,15 @@ export async function imageSelfTest(): Promise<Record<string, any>> {
       out.stabilityAccount = a.ok ? "ok" : `HTTP ${a.status}: ${(await a.text()).slice(0, 200)}`;
     } catch (e: any) { out.stabilityAccount = e?.message; }
     out.stabilityBalance = await stabilityBalance();
-    // one real, cheap generation (SD 3.5 Flash) so the exact provider error, if any, is shown
-    try {
-      const svc = getService("sd35_flash")!;
-      const img = await runStability(svc, { prompt: "a small blue circle on a white background", aspectRatio: "1:1" });
-      out.stabilityGenerate = `ok (${img.buffer.length} bytes)`;
-    } catch (e: any) { out.stabilityGenerate = `FAILED: ${e?.message}`; }
   }
+  // --- Gemini / Nano Banana (Vision)
   const gk = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   out.geminiKeyPresent = !!gk;
   if (gk) {
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${gk}`, { signal: AbortSignal.timeout(10000) });
       const names: string[] = r.ok ? ((await r.json()) as any).models.map((m: any) => String(m.name).replace(/^models\//, "")) : [];
-      out.geminiImageModelsOffered = names.filter((n) => /image/i.test(n));
+      out.geminiImageModelsOffered = names.filter((n) => /image|banana/i.test(n));
       out.geminiNote = "Image models need a Google AI Studio project with billing enabled. On the free tier their quota is 0.";
     } catch (e: any) { out.geminiImageModelsOffered = e?.message; }
   }

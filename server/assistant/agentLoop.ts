@@ -16,6 +16,7 @@ import {
   toolAddKbNote, toolGenerateFile, toolMemorySave, toolMemoryList,
 } from "./tools/index";
 import { toolDeepResearch, toolReadWebpage } from "./tools/research";
+import { toolGenerateDiagram } from "./tools/svgDiagram";
 import { toolGenerateImage, toolEditImage, toolUpscaleImage, toolControlImage, toolImageTo3D } from "./tools/images";
 import { sandboxConfigured, toolRunCode, toolListProjects, toolCreateProject, toolAddProjectFile, toolAddProjectTask } from "./tools/extra";
 
@@ -52,6 +53,8 @@ const fn = (name: string, description: string, properties: Record<string, any>, 
   type: "function", function: { name, description, parameters: { type: "object", properties, required } },
 });
 
+/** Graphs, charts, tables and flowcharts are drawn as free, exact SVG - never by an image model. */
+const DIAGRAM_INTENT = /\b(graph|graph (sheet|paper)|chart|bar chart|pie chart|histogram|plot|flowchart|diagram|slope)\b/i;
 /** The student is asking for a NEW picture (or to make one again). */
 const IMAGE_INTENT = /\b(generat\w*|creat\w*|make|draw|paint|design|regenerat\w*|re-?do|try)\b[^.?!]{0,60}\b(images?|pictures?|photos?|logos?|illustrations?|posters?|wallpapers?|art|artwork|drawings?)\b|\b(images?|pictures?|photos?)\b[^.?!]{0,40}\b(of|showing)\b|\bshow me (an?|the)? ?(image|picture|photo)\b/i;
 /** The AI saying it made a picture. */
@@ -74,6 +77,9 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
   { cap: "codeExecution", intent: /\b(run|execute|test|output|compile|debug|calculate|code)\b/i,
     schema: fn("run_code", "Run short code in an isolated sandbox and get the real stdout/stderr. Use it to verify calculations or show real program output instead of guessing.", { language: { type: "string", description: "python, javascript, typescript, java, c, cpp, go, ruby, php, bash, sql" }, code: { type: "string" }, stdin: { type: "string" } }, ["language", "code"]),
     run: (c, a) => toolRunCode(c, a) },
+  { cap: "imageGeneration", intent: /\b(graph|chart|plot|diagram|flowchart|slope|histogram|axes|graph (sheet|paper)|pie|bar)\b/i,
+    schema: fn("generate_diagram", "Draw an accurate graph, chart, table or flowchart as a sharp SVG image, instantly and FREE (no credits). ALWAYS use this for maths graphs (e.g. y = 2x + 1 with its slope), charts, tables and flowcharts - never an AI image model. line_graph/scatter: series[{name,points:[[x,y],...]}]. bar_chart: x_categories + series[{name,values}]. pie_chart: x_categories + one series values. table: rows (first row = headers). flowchart: nodes[{id,label}] + edges[{from,to,label}]. For a straight line include at least 5 evenly spaced points so the slope is visible.", { kind: { type: "string", enum: ["line_graph", "scatter", "bar_chart", "pie_chart", "table", "flowchart"] }, title: { type: "string" }, x_label: { type: "string" }, y_label: { type: "string" }, series: { type: "array", items: { type: "object" } }, x_categories: { type: "array", items: { type: "string" } }, rows: { type: "array", items: { type: "array", items: { type: "string" } } }, nodes: { type: "array", items: { type: "object" } }, edges: { type: "array", items: { type: "object" } }, save: { type: "boolean", description: "Also save to the image history as PNG" } }, ["kind"]),
+    run: (c, a) => toolGenerateDiagram(c, a) },
   { cap: "imageGeneration", intent: /\b(image|picture|photo|draw|logo|poster|illustration|diagram|wallpaper|generate|create|make|edit|upscale|3d)\b/i,
     schema: fn("generate_image", "Make NEW pictures from a description. Up to 6 at once on Fast/Ultra, 4 on Vision. The pictures appear in the chat automatically and are saved to the student's image history. Never paste image links or say a picture exists unless this tool succeeded. Pictures can be of anything the student asks for that is allowed (study diagrams, posters, logos, scenes).", { prompt: { type: "string", description: "A detailed visual description in English" }, count: { type: "number", description: "How many (1-6)" }, aspect_ratio: { type: "string", description: "One of 1:1, 16:9, 9:16, 3:2, 2:3, 5:4, 4:5, 21:9. Other values are mapped to the nearest." }, quality: { type: "string", enum: ["fast", "balanced", "best"], description: "best = Stable Image Ultra / Nano Banana Pro; fast = cheapest" } }, ["prompt"]),
     run: (c, a) => toolGenerateImage(c, a) },
@@ -173,8 +179,9 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
     let out: Awaited<ReturnType<typeof chatWithLane>>;
     try {
       // A clear request for a picture MUST go through the image tool: small models otherwise just say "here it is".
-      const forceImage = step === 0 && IMAGE_INTENT.test(lastUser) && schemas.some((t) => t.function.name === "generate_image") && !/\b(edit|upscale|remove|erase|replace|recolor)\b/i.test(lastUser);
-      out = await chatWithLane(messages as any, schemas, lane, heavy, forceImage ? "generate_image" : undefined);
+      const forceDiagram = step === 0 && DIAGRAM_INTENT.test(lastUser) && schemas.some((t) => t.function.name === "generate_diagram");
+      const forceImage = !forceDiagram && step === 0 && IMAGE_INTENT.test(lastUser) && schemas.some((t) => t.function.name === "generate_image") && !/\b(edit|upscale|remove|erase|replace|recolor)\b/i.test(lastUser);
+      out = await chatWithLane(messages as any, schemas, lane, heavy, forceDiagram ? "generate_diagram" : forceImage ? "generate_image" : undefined);
     } catch (laneErr: any) {
       // If we already produced images/files earlier in this run, do not wipe them with a lane error.
       if (images.length || artifacts.length) {

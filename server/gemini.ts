@@ -787,7 +787,7 @@ async function generateImageWithNanoBanana(prompt: string, referenceImageBase64?
   // gemini-3.1-flash-image-preview ("Nano Banana 2") — try that first, and
   // fall back to the old model only if the new one errors (still an option
   // during this migration window, not after Oct 2).
-  const MODELS = ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"];
+  const MODELS = ["gemini-nano-banana-2.1"];
   let lastError: any = null;
   for (const model of MODELS) {
     try {
