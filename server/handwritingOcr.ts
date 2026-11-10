@@ -25,31 +25,25 @@ export interface OcrProvider {
   extractPage(page: OcrPageInput): Promise<OcrPageResult>;
 }
 
-const HANDWRITING_PROMPT = `You are a handwriting and document transcription engine for student lecture notes.
+const HANDWRITING_PROMPT = `You are a strict handwriting OCR engine for student lecture notes.
 
-Task: Transcribe ALL readable text from this page EXACTLY as written.
-Rules:
-- Do NOT summarize, shorten, rewrite, or improve the lecturer's wording.
-- Preserve headings, subheadings, paragraphs, numbering, bullet points, definitions, examples.
-- Keep mathematical expressions as close as possible (use Unicode or plain text math).
-- Maintain reading order (top to bottom, left to right).
-- If a word is illegible, write [[unclear]] instead of guessing.
-- If the page is blank or has no readable text, reply with exactly: NO_TEXT_FOUND
-- Output only the transcribed notes text, no commentary.`;
+Task: Copy ONLY the text that is visibly written on this page. Character-accurate transcription.
+
+ABSOLUTE RULES:
+- Transcribe EXACTLY what is on the page. Do not add headings, titles, conclusions, or explanations that are not written.
+- Do NOT summarize, paraphrase, correct grammar, expand abbreviations, or "improve" the notes.
+- Do NOT invent missing words, complete unfinished sentences, or fill gaps with guessed content.
+- Preserve original structure: headings, numbering, bullets, indentation, line breaks, examples.
+- Math: copy symbols as written (Unicode or plain text). Do not reformat into LaTeX unless the page shows LaTeX.
+- Illegible word → write [[unclear]] — never guess.
+- Blank / no text → reply with exactly: NO_TEXT_FOUND
+- Output ONLY the transcribed text. No preamble, no "Here is the transcription", no commentary.`;
 
 async function geminiExtract(buffer: Buffer, mimeType: string): Promise<string> {
   const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
   if (!key) throw new Error("Gemini API key not configured (GOOGLE_API_KEY or GEMINI_API_KEY)");
 
-  // Prefer existing helpers when available
-  try {
-    const { extractTextFromImage } = await import("./gemini");
-    const b64 = buffer.toString("base64");
-    // extractTextFromImage uses a generic OCR prompt; for handwriting we call Vision API directly below if empty
-    const quick = await extractTextFromImage(b64, mimeType);
-    if (quick && quick !== "NO_TEXT_FOUND" && quick.length > 20) return quick;
-  } catch {}
-
+  // Always use the strict handwriting prompt (do not use generic extractTextFromImage — it may invent structure)
   const { GoogleGenAI } = await import("@google/genai");
   const ai = new GoogleGenAI({ apiKey: key });
   const model =

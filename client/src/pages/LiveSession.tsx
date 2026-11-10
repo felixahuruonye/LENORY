@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   Mic, Square, Pause, Play, ArrowLeft, Loader2, BookOpen, X, Trash2, Search,
-  Upload, Plus, Folder, Share2, Camera, Pencil, Save, FileText, MessageSquare,
+  Upload, Plus, Folder, Share2, Camera, Pencil, Save, FileText, MessageSquare, Eye,
   ChevronRight, HardDrive, Link2, Globe, Lock, AlertTriangle, Image as ImageIcon,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -221,6 +221,9 @@ export default function LiveSession() {
   const [videoUrlInput, setVideoUrlInput] = useState("");
   const [showVideoUrl, setShowVideoUrl] = useState(false);
   const [showDigitize, setShowDigitize] = useState(false);
+  const [noteEditing, setNoteEditing] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [showScanPhotos, setShowScanPhotos] = useState(false);
 
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isFormatting, setIsFormatting] = useState(false);
@@ -995,16 +998,153 @@ export default function LiveSession() {
 
   if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
-  const handleDigitizeComplete = (result: DigitizeResult) => {
-    if (result.document) setFormattedNotes(result.document);
-    if (result.photoDataUrls?.length) {
-      setPhotos((prev) => [...prev, ...result.photoDataUrls]);
+  const handleDigitizeComplete = async (result: DigitizeResult) => {
+    if (!selectedNotebook || !selectedTopic) {
+      toast({ title: "Open a topic first", variant: "destructive" });
+      return;
     }
-    setTopicTab("note");
-    toast({
-      title: "Digital notes ready",
-      description: "Review on the Note tab, then Save to store this page in the topic.",
-    });
+    // Save as a NEW page only (never overwrite previous pages).
+    // Scan pages carry digital notes + photos only — no lecture recording/transcript.
+    setIsSaving(true);
+    try {
+      const permanentPhotos: string[] = [];
+      for (let i = 0; i < (result.photoDataUrls || []).length; i++) {
+        const ph = result.photoDataUrls[i];
+        if (!ph) continue;
+        if (ph.startsWith("http://") || ph.startsWith("https://")) {
+          permanentPhotos.push(ph);
+          continue;
+        }
+        const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+          dataUrl: ph,
+          name: `scan-${selectedTopic.id}-${Date.now()}-${i + 1}.jpg`,
+          topicId: selectedTopic.id,
+          role: "scanned_note",
+        });
+        if (uploaded?.url) permanentPhotos.push(uploaded.url);
+        else if (ph.startsWith("data:")) permanentPhotos.push(ph);
+      }
+
+      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+      let pages = getTopicPages(existingDoc);
+      if (topicPages.length > pages.length) pages = [...topicPages];
+
+      const nextNum = pages.length + 1;
+      const newPage: TopicPage = {
+        id: `page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        pageNumber: nextNum,
+        title: `Scanned notes · Page ${nextNum}`,
+        createdAt: new Date().toISOString(),
+        transcript: "",
+        formattedNotes: (result.document || "").slice(0, 180_000),
+        segments: [],
+        duration: 0,
+        photos: permanentPhotos,
+        photoCount: permanentPhotos.length,
+        hasRecording: false,
+        language: undefined,
+        uploadedFiles: permanentPhotos.map((url, i) => ({
+          name: `Scanned page ${i + 1}`,
+          type: "image",
+          url,
+        })),
+      };
+
+      pages = [...pages, newPage];
+      const doc: TopicPayload = { version: 2, pages };
+      const content = JSON.stringify(doc);
+      const size = new Blob([content]).size;
+      if (size > TOPIC_STORAGE_LIMIT) {
+        throw new Error(`This topic would exceed 50 MB (${formatBytes(size)}). Delete older pages or upgrade.`);
+      }
+
+      const body = JSON.stringify({ name: selectedTopic.name, content });
+      let res = await authFetch(
+        `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body }
+      );
+      if (!res.ok) {
+        res = await authFetch(`/api/kb/folders/${selectedNotebook.id}/files/text`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || err.error || `Save failed (${res.status})`);
+      }
+      const saved = await res.json().catch(() => ({}));
+      const updatedTopic = {
+        ...selectedTopic,
+        ...saved,
+        extracted_text: saved.extracted_text || content,
+        size_bytes: size,
+      };
+      setSelectedTopic(updatedTopic);
+      setTopicPages(pages);
+      setSelectedPageIndex(pages.length - 1);
+      // Load only the new scan page into the editor (do not merge prior page state)
+      setTranscript("");
+      setSegments([]);
+      setAudioUrl(null);
+      setAudioBlobs([]);
+      setRecordingDuration(0);
+      setFormattedNotes(newPage.formattedNotes || "");
+      setPhotos(permanentPhotos);
+      setTopicTab("note");
+      setNoteEditing(false);
+      setShowScanPhotos(false);
+      refetchTopics();
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
+      toast({
+        title: `Saved as Page ${nextNum}`,
+        description: "Scanned notes added as a new page. Previous pages are unchanged.",
+      });
+    } catch (e: any) {
+      toast({ title: "Could not save scan page", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const saveNoteEdits = async () => {
+    if (!selectedNotebook || !selectedTopic) return;
+    const text = noteDraft;
+    setFormattedNotes(text);
+    setNoteEditing(false);
+    // Update the current page in place (edit only — does not create a new page)
+    try {
+      setIsSaving(true);
+      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+      let pages = getTopicPages(existingDoc);
+      if (topicPages.length >= pages.length) pages = [...topicPages];
+      const idx = selectedPageIndex;
+      if (idx < 0 || idx >= pages.length) {
+        // Fall back to append via normal save
+        setFormattedNotes(text);
+        await saveToTopic();
+        return;
+      }
+      pages = pages.map((pg, i) =>
+        i === idx ? { ...pg, formattedNotes: text.slice(0, 180_000) } : pg
+      );
+      const doc: TopicPayload = { version: 2, pages };
+      const content = JSON.stringify(doc);
+      const body = JSON.stringify({ name: selectedTopic.name, content });
+      const res = await authFetch(
+        `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body }
+      );
+      if (!res.ok) throw new Error("Save failed");
+      setTopicPages(pages);
+      setSelectedTopic({ ...selectedTopic, extracted_text: content });
+      toast({ title: "Note saved" });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e?.message, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (!user) return (
@@ -1337,13 +1477,80 @@ export default function LiveSession() {
                 )}
 
                 {topicTab === "note" && (
-                  <div className="rounded-xl border bg-card p-4 prose prose-sm dark:prose-invert max-w-none">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide not-prose mb-2">
-                      Note · Page {topicPages[selectedPageIndex]?.pageNumber || 1}
-                    </p>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {formattedNotes || "No formatted notes on this page yet. Use Format Note after transcription, then Save."}
-                    </ReactMarkdown>
+                  <div className="rounded-xl border bg-card p-4 space-y-3">
+                    <div className="flex items-center gap-2 not-prose">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex-1">
+                        Note · Page {topicPages[selectedPageIndex]?.pageNumber || selectedPageIndex + 1 || 1}
+                      </p>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant={noteEditing ? "default" : "outline"}
+                        className="h-8 w-8"
+                        title="Edit note"
+                        onClick={() => {
+                          if (!noteEditing) {
+                            setNoteDraft(formattedNotes || "");
+                            setNoteEditing(true);
+                          } else {
+                            setNoteEditing(false);
+                          }
+                        }}
+                        data-testid="button-edit-note"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      {(photos.length > 0 || (topicPages[selectedPageIndex]?.photos?.length ?? 0) > 0) && (
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant={showScanPhotos ? "default" : "outline"}
+                          className="h-8 w-8"
+                          title="View original scanned images"
+                          onClick={() => setShowScanPhotos((v) => !v)}
+                          data-testid="button-view-scan-photos"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    {showScanPhotos && (photos.length > 0 || (topicPages[selectedPageIndex]?.photos?.length ?? 0) > 0) && (
+                      <div className="not-prose space-y-2">
+                        <p className="text-[10px] text-muted-foreground uppercase font-semibold">Original scanned images</p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                          {(photos.length ? photos : (topicPages[selectedPageIndex]?.photos || [])).map((src, i) => (
+                            <a key={i} href={src} target="_blank" rel="noreferrer" className="shrink-0">
+                              <img src={src} alt={`Scan ${i + 1}`} className="h-28 w-28 object-cover rounded-lg border" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {noteEditing ? (
+                      <div className="not-prose space-y-2">
+                        <textarea
+                          className="w-full min-h-[220px] rounded-lg border bg-background p-3 text-sm font-sans leading-relaxed"
+                          value={noteDraft}
+                          onChange={(e) => setNoteDraft(e.target.value)}
+                          placeholder="Edit your digital notes…"
+                        />
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" onClick={() => setNoteEditing(false)}>Cancel</Button>
+                          <Button size="sm" className="gap-1.5" onClick={() => saveNoteEdits()} disabled={isSaving}>
+                            {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            Save changes
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {formattedNotes || "No notes on this page yet. Scan notes or format a transcription, then save."}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 )}
               </>
