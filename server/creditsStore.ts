@@ -448,7 +448,12 @@ export const DEFAULT_FEATURE_COSTS: Record<string, number> = {
   "kb_quiz": 3,
   "kb_flashcards": 2,
   "video_summarize": 5,
+  // Write My Note → Scan notes (OCR + clean). Editable in Admin → Credit Usage.
+  "scan_notes_per_page": 1,   // per image/page OCR'd
+  "scan_notes_clean": 2,      // one clean pass per Save
+  "scan_notes_min": 2,        // minimum charge per scan job
 };
+
 
 let featureCostCache: Record<string, number> | null = null;
 let featureCostCacheAt = 0;

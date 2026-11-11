@@ -53,6 +53,91 @@ async function extractPlainDoc(buffer: Buffer, mime: string, name: string): Prom
 }
 
 export function registerDigitizeRoutes(app: Express) {
+
+  /** Format OCR text for readability without inventing content. */
+  app.post("/api/notes/digitize/clean", supabaseAuth, async (req: any, res: Response) => {
+    try {
+      const raw = String(req.body?.text || req.body?.document || "").trim();
+      if (!raw) return res.status(400).json({ message: "No text to clean" });
+      if (raw.length > 200_000) return res.status(413).json({ message: "Text too long to clean" });
+
+      const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
+      if (!key) {
+        // Pass-through if Gemini not configured
+        return res.json({ success: true, document: raw, cleaned: false, message: "Cleaner unavailable — original text kept" });
+      }
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: key });
+      const models = [
+        process.env.GEMINI_OCR_MODEL,
+        process.env.GEMINI_VISION_MODEL,
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+      ].filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
+
+      const CLEAN_PROMPT = `You clean student lecture notes that were OCR'd from handwritten pages (math, physics, chemistry OK).
+
+GOAL: Make the note easy to read. Do NOT change the meaning or invent content.
+
+ALLOWED:
+- Fix broken line wraps so sentences/equations read naturally
+- Keep page markers like "--- Page N ---"
+- Structure with clear headings ONLY when the source already has a title/subject/date/topic (promote those lines visually with markdown ## or **bold**)
+- Use markdown sparingly: **bold** for existing headings, bullet/numbered lists when the source already uses lists or a/b/i/ii
+- Keep every number, variable, and math expression that appears in the source
+- Separate paragraphs for readability
+
+FORBIDDEN:
+- Do NOT add letters, digits, or math symbols that are not in the source
+- Do NOT invent solution steps, answers, or explanations
+- Do NOT correct math to what you think is "right" if it differs from the source
+- Do NOT remove page content; if something is messy, keep it and only reformat spacing
+- Do NOT add a title the source does not have
+
+SOURCE TEXT:
+${raw.slice(0, 180_000)}
+
+Output ONLY the cleaned note. No preamble.`;
+
+      let cleaned = "";
+      let lastErr = "";
+      for (const model of models) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: CLEAN_PROMPT }] }] as any,
+            config: { thinkingConfig: { thinkingBudget: 0 } } as any,
+          });
+          cleaned = String((response as any).text || "").trim();
+          if (cleaned && !/"error"\s*:|NOT_FOUND|UNAVAILABLE/i.test(cleaned)) break;
+          lastErr = cleaned.slice(0, 120);
+          cleaned = "";
+        } catch (e: any) {
+          lastErr = String(e?.message || e).slice(0, 160);
+          continue;
+        }
+      }
+
+      if (!cleaned) {
+        return res.json({
+          success: true,
+          document: raw,
+          cleaned: false,
+          message: lastErr ? `Cleaner busy — kept original (${lastErr.slice(0, 80)})` : "Cleaner busy — kept original",
+        });
+      }
+
+      return res.json({ success: true, document: cleaned, cleaned: true });
+    } catch (e: any) {
+      console.error("[digitize/clean]", e);
+      const raw = String(req.body?.text || req.body?.document || "");
+      res.json({ success: true, document: raw, cleaned: false, message: e?.message || "Clean failed — original kept" });
+    }
+  });
+
   app.get("/api/notes/digitize/status", supabaseAuth, async (_req: any, res: Response) => {
     try {
       const provider = getOcrProvider();

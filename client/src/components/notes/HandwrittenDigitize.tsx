@@ -123,6 +123,8 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanElapsed, setCleanElapsed] = useState(0);
 
   useEffect(() => {
     if (!busy) {
@@ -318,17 +320,46 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
 
   const save = async () => {
     if (!result) return;
+    const rawText = (editedDoc ?? result.document ?? "").trim();
+    if (!rawText) {
+      toast({ title: "Nothing to save", variant: "destructive" });
+      return;
+    }
     setSaving(true);
+    setCleaning(true);
+    setCleanElapsed(0);
+    const tick = window.setInterval(() => setCleanElapsed((s) => s + 1), 1000);
     try {
+      let finalText = rawText;
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch("/api/notes/digitize/clean", {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ text: rawText }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.document && String(data.document).trim()) {
+          finalText = String(data.document).trim();
+          setEditedDoc(finalText);
+          if (data.cleaned) {
+            toast({ title: "Note cleaned", description: "Formatting improved — content unchanged." });
+          }
+        }
+      } catch {
+        // keep rawText
+      }
       await onComplete({
         ...result,
-        document: editedDoc ?? result.document,
+        document: finalText,
       });
-      // Parent closes / navigates; if still open, close
       onClose();
     } catch (e: any) {
       toast({ title: "Save failed", description: e?.message || "Try again", variant: "destructive" });
     } finally {
+      window.clearInterval(tick);
+      setCleaning(false);
       setSaving(false);
     }
   };
@@ -553,8 +584,8 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
             </>
           ) : (
             <>
-              <Button variant="outline" className="flex-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={saving}>Back</Button>
-              <Button className="flex-1 gap-1.5" onClick={save} disabled={saving || !(editedDoc || result.document)?.trim()}>
+              <Button variant="outline" className="flex-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={saving || cleaning}>Back</Button>
+              <Button className="flex-1 gap-1.5" onClick={save} disabled={saving || cleaning || !(editedDoc || result.document)?.trim()}>
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 Save to Note tab
               </Button>
@@ -562,6 +593,19 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
           )}
         </div>
       </div>
+
+      {cleaning && (
+        <div className="fixed inset-0 z-[75] bg-black/60 flex items-center justify-center p-6">
+          <div className="w-full max-w-sm rounded-2xl bg-background border shadow-xl p-6 text-center space-y-3">
+            <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto" />
+            <h3 className="font-bold text-lg">Cleaning your note</h3>
+            <p className="text-sm text-muted-foreground">
+              Making pages easy to read — same words, clearer layout. Original images stay attached.
+            </p>
+            <p className="font-mono text-sm tabular-nums text-primary">{formatHMS(cleanElapsed)}</p>
+          </div>
+        </div>
+      )}
 
       {lightboxUrl && (
         <div
