@@ -1016,103 +1016,160 @@ export default function LiveSession() {
       toast({ title: "Open a topic first", variant: "destructive" });
       return;
     }
-    // Save as a NEW page only (never overwrite previous pages).
-    // Scan pages carry digital notes + photos only — no lecture recording/transcript.
+
+    const noteText = (result.document || "").slice(0, 180_000);
+    if (!noteText.trim()) {
+      toast({ title: "Nothing to save", description: "No text was extracted.", variant: "destructive" });
+      return;
+    }
+
+    const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+    let pages = getTopicPages(existingDoc);
+    if (topicPages.length > pages.length) pages = [...topicPages];
+
+    const nextNum = pages.length + 1;
+    const pageId = `page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const localPhotos = (result.photoDataUrls || []).filter(Boolean);
+
+    const newPage: TopicPage = {
+      id: pageId,
+      pageNumber: nextNum,
+      title: `Scanned notes · Page ${nextNum}`,
+      createdAt: new Date().toISOString(),
+      transcript: "",
+      formattedNotes: noteText,
+      segments: [],
+      duration: 0,
+      photos: localPhotos,
+      photoCount: localPhotos.length,
+      hasRecording: false,
+      language: undefined,
+      uploadedFiles: localPhotos.map((url, i) => ({
+        name: `Scanned page ${i + 1}`,
+        type: "image",
+        url,
+      })),
+    };
+
+    const pagesOptimistic = [...pages, newPage];
+
+    // INSTANT UI before network
+    setTopicPages(pagesOptimistic);
+    setSelectedPageIndex(pagesOptimistic.length - 1);
+    setTranscript("");
+    setSegments([]);
+    setAudioUrl(null);
+    setAudioBlobs([]);
+    setRecordingDuration(0);
+    setFormattedNotes(noteText);
+    setPhotos(localPhotos);
+    setTopicTab("note");
+    setNoteEditing(false);
+    setShowScanPhotos(localPhotos.length > 0);
+    setShowDigitize(false);
+    setView("topic");
+    toast({
+      title: `Page ${nextNum} ready`,
+      description: "Showing on Note tab now. Syncing to your account…",
+    });
+
     setIsSaving(true);
     try {
+      // Upload images — never put data: URLs into topic JSON (broke multi-page saves)
       const permanentPhotos: string[] = [];
-      for (let i = 0; i < (result.photoDataUrls || []).length; i++) {
-        const ph = result.photoDataUrls[i];
-        if (!ph) continue;
+      for (let i = 0; i < localPhotos.length; i++) {
+        const ph = localPhotos[i];
         if (ph.startsWith("http://") || ph.startsWith("https://")) {
           permanentPhotos.push(ph);
           continue;
         }
-        const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
-          dataUrl: ph,
-          name: `scan-${selectedTopic.id}-${Date.now()}-${i + 1}.jpg`,
-          topicId: selectedTopic.id,
-          role: "scanned_note",
-        });
-        if (uploaded?.url) permanentPhotos.push(uploaded.url);
-        else if (ph.startsWith("data:")) permanentPhotos.push(ph);
+        try {
+          let uploaded: { url: string } | null = null;
+          if (ph.startsWith("data:")) {
+            uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+              dataUrl: ph,
+              name: `scan-p${nextNum}-${i + 1}.jpg`,
+              mimeType: "image/jpeg",
+              topicId: selectedTopic.id,
+              role: "scanned_note",
+            });
+          } else if (ph.startsWith("blob:")) {
+            const blob = await fetch(ph).then((r) => r.blob());
+            uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+              file: blob,
+              name: `scan-p${nextNum}-${i + 1}.jpg`,
+              mimeType: blob.type || "image/jpeg",
+              topicId: selectedTopic.id,
+              role: "scanned_note",
+            });
+          }
+          if (uploaded?.url) permanentPhotos.push(uploaded.url);
+        } catch (upErr) {
+          console.warn("scan photo upload failed", upErr);
+        }
       }
 
-      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
-      let pages = getTopicPages(existingDoc);
-      if (topicPages.length > pages.length) pages = [...topicPages];
-
-      const nextNum = pages.length + 1;
-      const newPage: TopicPage = {
-        id: `page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        pageNumber: nextNum,
-        title: `Scanned notes · Page ${nextNum}`,
-        createdAt: new Date().toISOString(),
-        transcript: "",
-        formattedNotes: (result.document || "").slice(0, 180_000),
-        segments: [],
-        duration: 0,
-        photos: permanentPhotos,
-        photoCount: permanentPhotos.length,
-        hasRecording: false,
-        language: undefined,
-        uploadedFiles: permanentPhotos.map((url, i) => ({
+      const photosForStore = permanentPhotos;
+      const syncedPage: TopicPage = {
+        ...newPage,
+        photos: photosForStore,
+        photoCount: photosForStore.length,
+        uploadedFiles: photosForStore.map((url, i) => ({
           name: `Scanned page ${i + 1}`,
           type: "image",
           url,
         })),
       };
+      const pagesFinal = [...pages, syncedPage];
+      let doc: TopicPayload = { version: 2, pages: pagesFinal };
+      let content = JSON.stringify(doc);
+      let size = new Blob([content]).size;
 
-      pages = [...pages, newPage];
-      const doc: TopicPayload = { version: 2, pages };
-      const content = JSON.stringify(doc);
-      const size = new Blob([content]).size;
       if (size > TOPIC_STORAGE_LIMIT) {
-        throw new Error(`This topic would exceed 50 MB (${formatBytes(size)}). Delete older pages or upgrade.`);
+        const textOnly: TopicPage = { ...syncedPage, photos: [], photoCount: 0, uploadedFiles: [] };
+        doc = { version: 2, pages: [...pages, textOnly] };
+        content = JSON.stringify(doc);
+        size = new Blob([content]).size;
       }
 
-      const body = JSON.stringify({ name: selectedTopic.name, content });
-      // Always UPDATE the open topic — never POST /files/text (that created extra empty topics)
       const res = await authFetch(
         `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
-        { method: "PUT", headers: { "Content-Type": "application/json" }, body }
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: selectedTopic.name, content }),
+        }
       );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || err.error || `Save failed (${res.status})`);
       }
-      const saved = await res.json().catch(() => ({}));
-      const updatedTopic: TopicFile = {
+
+      setTopicPages(doc.pages || pagesFinal);
+      setSelectedTopic({
         ...selectedTopic,
-        ...saved,
-        id: selectedTopic.id,
-        name: selectedTopic.name,
         extracted_text: content,
         extractedText: content,
         size_bytes: size,
         sizeBytes: size,
-      };
-      setSelectedTopic(updatedTopic);
-      setTopicPages(pages);
-      setSelectedPageIndex(pages.length - 1);
-      setTranscript("");
-      setSegments([]);
-      setAudioUrl(null);
-      setAudioBlobs([]);
-      setRecordingDuration(0);
-      setFormattedNotes(newPage.formattedNotes || "");
-      setPhotos(permanentPhotos);
+      });
+      setPhotos(photosForStore.length ? photosForStore : localPhotos);
+      setFormattedNotes(noteText);
+      setSelectedPageIndex((doc.pages || pagesFinal).length - 1);
       setTopicTab("note");
-      setNoteEditing(false);
-      setShowScanPhotos(true); // show eye gallery for the new scan page
+      setShowScanPhotos(true);
       refetchTopics();
       queryClient.invalidateQueries({ queryKey: ["/api/kb/folders"] });
       toast({
-        title: `Saved as Page ${nextNum}`,
-        description: "Text is on the Note tab. Tap the eye icon to see original photos.",
+        title: `Page ${nextNum} saved`,
+        description: "Note tab has your text. Eye icon shows original images.",
       });
     } catch (e: any) {
-      toast({ title: "Could not save scan page", description: e?.message || "Try again", variant: "destructive" });
+      toast({
+        title: "Note is on screen — cloud sync failed",
+        description: e?.message || "Stay on this topic; text is already visible on Note tab.",
+        variant: "destructive",
+      });
     } finally {
       setIsSaving(false);
     }

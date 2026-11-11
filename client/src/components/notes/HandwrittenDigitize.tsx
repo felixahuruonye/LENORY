@@ -1,8 +1,8 @@
 /**
  * Isolated handwritten / document digitization UI for Write My Note.
- * Does not modify Live Session recording, audio upload, or video flows.
+ * Processes pages one-by-one with live status + timer; save is handled by parent.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -11,13 +11,6 @@ import {
 } from "lucide-react";
 import { getAuthHeaders } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-
-export type DigitizePagePreview = {
-  id: string;
-  file: File;
-  previewUrl: string;
-  kind: "image" | "document";
-};
 
 export type DigitizeResult = {
   document: string;
@@ -30,6 +23,13 @@ export type DigitizeResult = {
     isBlank: boolean;
   }[];
   photoDataUrls: string[];
+};
+
+type DigitizePagePreview = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  kind: "image" | "document";
 };
 
 const ACCEPT =
@@ -53,6 +53,37 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+/** Shrink large photos so uploads + OCR stay reliable on mobile. */
+async function compressImageFile(file: File, maxEdge = 1600, quality = 0.72): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type.includes("heic")) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    if (!blob) return file;
+    return new File([blob], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
+function formatHMS(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -62,19 +93,9 @@ function downloadBlob(filename: string, blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-/** Minimal DOCX (Word will open plain OOXML with one paragraph body). */
-function textToDocxBlob(text: string): Blob {
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const paras = text.split(/\n/).map((line) =>
-    `<w:p><w:r><w:t xml:space="preserve">${esc(line)}</w:t></w:r></w:p>`
-  ).join("");
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>${paras}<w:sectPr/></w:body>
-</w:document>`;
-  // Without zip, many editors reject — use HTML disguised as .doc for mobile compatibility
-  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"></head><body>${
+function textToDocBlob(text: string): Blob {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = `<html><head><meta charset="utf-8"></head><body>${
     text.split("\n").map((l) => `<p>${esc(l) || "&nbsp;"}</p>`).join("")
   }</body></html>`;
   return new Blob(["\ufeff", html], { type: "application/msword" });
@@ -83,21 +104,40 @@ function textToDocxBlob(text: string): Blob {
 type Props = {
   open: boolean;
   onClose: () => void;
-  onComplete: (result: DigitizeResult) => void;
+  onComplete: (result: DigitizeResult) => void | Promise<void>;
 };
 
 export default function HandwrittenDigitize({ open, onClose, onComplete }: Props) {
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const dragFrom = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
   const [pages, setPages] = useState<DigitizePagePreview[]>([]);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState("");
+  const [elapsed, setElapsed] = useState(0);
   const [editedDoc, setEditedDoc] = useState<string | null>(null);
   const [result, setResult] = useState<DigitizeResult | null>(null);
   const [viewMode, setViewMode] = useState<"text" | "original" | "side">("text");
   const [previewIndex, setPreviewIndex] = useState(0);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!busy) {
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
+    setElapsed(0);
+    timerRef.current = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => {
+      if (timerRef.current) window.clearInterval(timerRef.current);
+    };
+  }, [busy]);
 
   const addFiles = useCallback((list: FileList | File[]) => {
     const next: DigitizePagePreview[] = [];
@@ -156,62 +196,99 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
       return;
     }
     setBusy(true);
-    setPhase("Uploading pages…");
+    setPhase("Preparing pages…");
     try {
-      const form = new FormData();
-      pages.forEach((p) => form.append("pages", p.file, p.file.name || "page"));
-      form.append("order", pages.map((_, i) => i).join(","));
-
-      setPhase("Recognizing handwriting (exact text only)…");
       const headers = await getAuthHeaders();
       const h: Record<string, string> = { ...headers };
       delete (h as any)["Content-Type"];
       delete (h as any)["content-type"];
 
-      const res = await fetch("/api/notes/digitize", {
-        method: "POST",
-        headers: h,
-        credentials: "include",
-        body: form,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Digitization failed");
-
-      setPhase("Preparing editable document…");
+      const pageResults: DigitizeResult["pages"] = [];
       const photoDataUrls: string[] = [];
-      for (const p of pages) {
+      const textParts: string[] = [];
+
+      for (let i = 0; i < pages.length; i++) {
+        const p = pages[i];
+        setPhase(`Writing page ${i + 1} of ${pages.length}…`);
+        setPreviewIndex(i);
+
+        let fileToSend = p.file;
         if (p.kind === "image") {
+          fileToSend = await compressImageFile(p.file);
           try {
-            photoDataUrls.push(await fileToDataUrl(p.file));
+            photoDataUrls.push(await fileToDataUrl(fileToSend));
           } catch {
             if (p.previewUrl) photoDataUrls.push(p.previewUrl);
           }
         }
+
+        const form = new FormData();
+        form.append("pages", fileToSend, fileToSend.name || `page_${i + 1}`);
+        form.append("order", "0");
+
+        let pageText = "";
+        let confidence = "none";
+        let warnings: string[] = [];
+        let isBlank = true;
+
+        try {
+          const res = await fetch("/api/notes/digitize", {
+            method: "POST",
+            headers: h,
+            credentials: "include",
+            body: form,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.message || data.modelError || "OCR failed");
+          const pr = (data.pages && data.pages[0]) || null;
+          if (pr) {
+            pageText = pr.text || "";
+            confidence = pr.confidence || "none";
+            warnings = pr.warnings || [];
+            isBlank = !!pr.isBlank || !pageText.trim();
+          } else if (data.document) {
+            pageText = String(data.document).replace(/^--- Page \d+[^\n]*---\n*/m, "").trim();
+            isBlank = !pageText;
+            confidence = isBlank ? "none" : "medium";
+          }
+        } catch (e: any) {
+          warnings = [e?.message || "OCR failed for this page"];
+          isBlank = true;
+        }
+
+        pageResults.push({
+          index: i,
+          fileName: p.file.name,
+          text: pageText,
+          confidence,
+          warnings,
+          isBlank,
+        });
+        if (!isBlank && pageText.trim()) {
+          textParts.push(`\n\n--- Page ${i + 1} ---\n\n${pageText.trim()}`);
+        } else {
+          textParts.push(`\n\n--- Page ${i + 1} (no readable text) ---\n`);
+        }
       }
 
-      const out: DigitizeResult = {
-        document: data.document || "",
-        pages: data.pages || [],
-        photoDataUrls,
-      };
+      const document = textParts.join("").trim();
+      const out: DigitizeResult = { document, pages: pageResults, photoDataUrls };
       setResult(out);
-      setEditedDoc(out.document);
+      setEditedDoc(document);
       setViewMode("side");
-      const blank = (out.pages || []).filter((x: any) => x.isBlank).length;
-      const total = (out.pages || []).length || 1;
+
+      const blank = pageResults.filter((x) => x.isBlank).length;
+      const total = pageResults.length;
       if (blank === total) {
         toast({
           title: "OCR busy — try again",
-          description: data.modelError || data.message || "The vision model was overloaded. Tap Convert again in a few seconds.",
+          description: "No text extracted. Wait a few seconds and tap Convert again.",
           variant: "destructive",
         });
       } else if (blank > 0) {
-        toast({
-          title: `Got ${total - blank} of ${total} pages`,
-          description: "Some pages failed (provider busy). You can Convert again or edit the text.",
-        });
+        toast({ title: `Got ${total - blank} of ${total} pages`, description: "Some pages need a retry or manual edit." });
       } else {
-        toast({ title: "Digital notes ready", description: data.message || "Review, export, or save as a new page." });
+        toast({ title: "Digital notes ready", description: `Done in ${formatHMS(elapsed)}. Review, then Save to Note tab.` });
       }
     } catch (e: any) {
       toast({ title: "Digitize failed", description: e?.message || "Try again", variant: "destructive" });
@@ -222,69 +299,38 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
   };
 
   const exportTxt = () => {
-    const text = editedDoc ?? result?.document ?? "";
-    downloadBlob("lenory-digital-notes.txt", new Blob([text], { type: "text/plain;charset=utf-8" }));
+    downloadBlob("lenory-digital-notes.txt", new Blob([editedDoc ?? result?.document ?? ""], { type: "text/plain;charset=utf-8" }));
   };
-
   const exportDoc = () => {
-    const text = editedDoc ?? result?.document ?? "";
-    downloadBlob("lenory-digital-notes.doc", textToDocxBlob(text));
+    downloadBlob("lenory-digital-notes.doc", textToDocBlob(editedDoc ?? result?.document ?? ""));
   };
-
-  const exportPdf = async () => {
+  const exportPdf = () => {
     const text = editedDoc ?? result?.document ?? "";
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch("/api/assistant/generate-file", {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          format: "pdf",
-          title: "Digital notes",
-          content: text,
-        }),
-      });
-      if (res.ok) {
-        const ct = res.headers.get("content-type") || "";
-        if (ct.includes("application/json")) {
-          const j = await res.json();
-          if (j.url) {
-            window.open(j.url, "_blank");
-            return;
-          }
-          if (j.downloadUrl) {
-            window.open(j.downloadUrl, "_blank");
-            return;
-          }
-        } else {
-          const blob = await res.blob();
-          downloadBlob("lenory-digital-notes.pdf", blob);
-          return;
-        }
-      }
-    } catch {}
-    // Fallback: print-friendly HTML → user can Save as PDF
     const w = window.open("", "_blank");
     if (w) {
       w.document.write(`<html><head><title>Digital notes</title><style>body{font-family:system-ui;padding:24px;white-space:pre-wrap;line-height:1.5}</style></head><body>${
-        (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       }</body></html>`);
       w.document.close();
-      w.focus();
       setTimeout(() => w.print(), 400);
-    } else {
-      toast({ title: "Allow pop-ups to export PDF", variant: "destructive" });
     }
   };
 
-  const save = () => {
+  const save = async () => {
     if (!result) return;
-    onComplete({
-      ...result,
-      document: editedDoc ?? result.document,
-    });
-    onClose();
+    setSaving(true);
+    try {
+      await onComplete({
+        ...result,
+        document: editedDoc ?? result.document,
+      });
+      // Parent closes / navigates; if still open, close
+      onClose();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!open) return null;
@@ -295,9 +341,11 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
         <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
           <div>
             <h2 className="font-bold text-base">Scan handwritten notes</h2>
-            <p className="text-xs text-muted-foreground">Creates a <strong>new page</strong> in this topic · exact text only</p>
+            <p className="text-xs text-muted-foreground">
+              Creates a <strong>new page</strong> · exact text · timer while writing
+            </p>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} disabled={busy}><X className="w-5 h-5" /></Button>
+          <Button variant="ghost" size="icon" onClick={onClose} disabled={busy || saving}><X className="w-5 h-5" /></Button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -305,16 +353,16 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
             <>
               <div
                 className="rounded-xl border border-dashed p-6 text-center space-y-2 cursor-pointer hover:bg-muted/40"
-                onClick={() => inputRef.current?.click()}
-                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onClick={() => !busy && inputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); }}
                 onDrop={(e) => {
                   e.preventDefault();
-                  if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
+                  if (!busy && e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
                 }}
               >
                 <Upload className="w-8 h-8 mx-auto text-primary" />
                 <p className="text-sm font-medium">Select or drop photos / documents</p>
-                <p className="text-xs text-muted-foreground">JPG, PNG, WEBP, HEIC, PDF, DOCX, TXT. No audio/video.</p>
+                <p className="text-xs text-muted-foreground">Tap a photo card to preview full size before reordering.</p>
                 <input
                   ref={inputRef}
                   type="file"
@@ -331,12 +379,12 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
               {pages.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    {pages.length} page{pages.length === 1 ? "" : "s"} · drag to reorder
+                    {pages.length} page{pages.length === 1 ? "" : "s"} · drag or arrows to reorder · tap image to enlarge
                   </p>
                   {pages.map((p, i) => (
                     <div
                       key={p.id}
-                      draggable
+                      draggable={!busy}
                       onDragStart={() => { dragFrom.current = i; }}
                       onDragOver={(e) => { e.preventDefault(); setDragOverIdx(i); }}
                       onDragLeave={() => setDragOverIdx(null)}
@@ -347,14 +395,21 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                         if (from != null) reorder(from, i);
                         dragFrom.current = null;
                       }}
-                      className={`flex items-center gap-2 rounded-lg border p-2 cursor-grab active:cursor-grabbing ${
+                      className={`flex items-center gap-2 rounded-lg border p-2 ${
                         dragOverIdx === i ? "border-primary bg-primary/5" : ""
-                      }`}
+                      } ${busy && previewIndex === i ? "ring-2 ring-primary" : ""}`}
                     >
                       {p.kind === "image" && p.previewUrl ? (
-                        <img src={p.previewUrl} alt="" className="w-12 h-12 object-cover rounded-md shrink-0 pointer-events-none" />
+                        <button
+                          type="button"
+                          className="shrink-0"
+                          onClick={() => setLightboxUrl(p.previewUrl)}
+                          title="Preview full image"
+                        >
+                          <img src={p.previewUrl} alt="" className="w-14 h-14 object-cover rounded-md" />
+                        </button>
                       ) : (
-                        <div className="w-12 h-12 rounded-md bg-muted flex items-center justify-center shrink-0">
+                        <div className="w-14 h-14 rounded-md bg-muted flex items-center justify-center shrink-0">
                           <FileText className="w-5 h-5 text-muted-foreground" />
                         </div>
                       )}
@@ -363,19 +418,33 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                         <p className="text-[10px] text-muted-foreground">Page {i + 1} · {(p.file.size / 1024).toFixed(0)} KB</p>
                       </div>
                       <div className="flex flex-col gap-0.5">
-                        <button type="button" className="p-1 rounded hover:bg-muted" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp className="w-4 h-4" /></button>
-                        <button type="button" className="p-1 rounded hover:bg-muted" onClick={() => move(i, 1)} disabled={i === pages.length - 1}><ChevronDown className="w-4 h-4" /></button>
+                        <button type="button" className="p-1 rounded hover:bg-muted" onClick={() => move(i, -1)} disabled={busy || i === 0}><ChevronUp className="w-4 h-4" /></button>
+                        <button type="button" className="p-1 rounded hover:bg-muted" onClick={() => move(i, 1)} disabled={busy || i === pages.length - 1}><ChevronDown className="w-4 h-4" /></button>
                       </div>
-                      <button type="button" className="p-1.5 rounded text-destructive hover:bg-destructive/10" onClick={() => remove(p.id)}><Trash2 className="w-4 h-4" /></button>
+                      <button type="button" className="p-1.5 rounded text-destructive hover:bg-destructive/10" onClick={() => remove(p.id)} disabled={busy}><Trash2 className="w-4 h-4" /></button>
                     </div>
                   ))}
                 </div>
               )}
 
               {busy && (
-                <div className="flex items-center gap-2 text-sm text-primary">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {phase || "Working…"}
+                <div className="rounded-xl border bg-primary/5 p-4 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {phase || "Working…"}
+                    </div>
+                    <span className="font-mono text-sm tabular-nums font-semibold">{formatHMS(elapsed)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-500"
+                      style={{ width: `${Math.min(100, ((previewIndex + 1) / Math.max(pages.length, 1)) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Page {Math.min(previewIndex + 1, pages.length)} of {pages.length} · keep this screen open
+                  </p>
                 </div>
               )}
             </>
@@ -412,7 +481,9 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                     ))}
                   </div>
                   {pages[previewIndex]?.previewUrl ? (
-                    <img src={pages[previewIndex].previewUrl} alt="" className="w-full rounded-lg border max-h-72 object-contain bg-muted" />
+                    <button type="button" className="w-full" onClick={() => setLightboxUrl(pages[previewIndex].previewUrl)}>
+                      <img src={pages[previewIndex].previewUrl} alt="" className="w-full rounded-lg border max-h-72 object-contain bg-muted" />
+                    </button>
                   ) : (
                     <p className="text-sm text-muted-foreground p-4 border rounded-lg">Document — image preview N/A</p>
                   )}
@@ -431,21 +502,20 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                       ))}
                     </div>
                     {pages[previewIndex]?.previewUrl ? (
-                      <img src={pages[previewIndex].previewUrl} alt="" className="w-full rounded-lg border max-h-56 object-contain bg-muted" />
+                      <button type="button" className="w-full" onClick={() => setLightboxUrl(pages[previewIndex].previewUrl!)}>
+                        <img src={pages[previewIndex].previewUrl} alt="" className="w-full rounded-lg border max-h-56 object-contain bg-muted" />
+                      </button>
                     ) : (
                       <div className="h-40 rounded-lg border bg-muted flex items-center justify-center text-xs text-muted-foreground">No image</div>
                     )}
                   </div>
                   <div className="space-y-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase">Extracted text (page {previewIndex + 1})</p>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase">Extracted (page {previewIndex + 1})</p>
                     <div className="rounded-lg border bg-card p-2 text-xs max-h-56 overflow-y-auto whitespace-pre-wrap font-sans">
                       {result.pages[previewIndex]?.isBlank
-                      ? (result.pages[previewIndex]?.warnings?.[0] || "No text on this page — try Convert again")
-                      : (result.pages[previewIndex]?.text || "—")}
+                        ? (result.pages[previewIndex]?.warnings?.[0] || "No text on this page")
+                        : (result.pages[previewIndex]?.text || "—")}
                     </div>
-                    {result.pages[previewIndex]?.warnings?.length ? (
-                      <div className="text-[10px] text-amber-600 flex gap-1"><AlertTriangle className="w-3 h-3" />{result.pages[previewIndex].warnings.join(" · ")}</div>
-                    ) : null}
                   </div>
                 </div>
               )}
@@ -455,7 +525,7 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
                 <Button size="sm" variant="outline" className="gap-1" onClick={exportDoc}><Download className="w-3.5 h-3.5" />DOC</Button>
                 <Button size="sm" variant="outline" className="gap-1" onClick={exportPdf}><Download className="w-3.5 h-3.5" />PDF</Button>
                 {(result.pages || []).some((x) => x.isBlank) && (
-                  <Button size="sm" variant="secondary" className="gap-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={busy}>
+                  <Button size="sm" variant="secondary" onClick={() => { setResult(null); setEditedDoc(null); }}>
                     Retry convert
                   </Button>
                 )}
@@ -478,19 +548,32 @@ export default function HandwrittenDigitize({ open, onClose, onComplete }: Props
               <Button variant="outline" className="flex-1" onClick={onClose} disabled={busy}>Cancel</Button>
               <Button className="flex-1 gap-1.5" onClick={process} disabled={busy || !pages.length}>
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                Convert to digital notes
+                {busy ? formatHMS(elapsed) : "Convert to digital notes"}
               </Button>
             </>
           ) : (
             <>
-              <Button variant="outline" className="flex-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={busy}>Back</Button>
-              <Button className="flex-1 gap-1.5" onClick={save}>
-                <Check className="w-4 h-4" /> Save as new page
+              <Button variant="outline" className="flex-1" onClick={() => { setResult(null); setEditedDoc(null); }} disabled={saving}>Back</Button>
+              <Button className="flex-1 gap-1.5" onClick={save} disabled={saving || !(editedDoc || result.document)?.trim()}>
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Save to Note tab
               </Button>
             </>
           )}
         </div>
       </div>
+
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button type="button" className="absolute top-4 right-4 text-white p-2" onClick={() => setLightboxUrl(null)}>
+            <X className="w-6 h-6" />
+          </button>
+          <img src={lightboxUrl} alt="Preview" className="max-w-full max-h-full object-contain" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </div>
   );
 }
