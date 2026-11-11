@@ -457,6 +457,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await saveLane(req.userId, lane as any);
     res.json({ success: true, profile: await getLaneProfile(req.userId) });
   });
+  // Delete confirmation: the ONLY way anything the AI proposed gets deleted. One-time token, same student only.
+  app.post("/api/assistant/confirm-delete", supabaseAuth, async (req: any, res: Response) => {
+    const { executeConfirmedDelete } = await import("./assistant/tools/deleteFlow");
+    const out = await executeConfirmedDelete(req.userId, String(req.body?.token || ""), req.body?.confirm !== false);
+    res.status(out.ok ? 200 : 400).json(out);
+  });
   app.get("/api/images/history", supabaseAuth, async (req: any, res: Response) => {
     try { const imgs = await storage.getGeneratedImagesByUser(req.userId); res.json({ images: imgs || [] }); }
     catch (e: any) { res.status(500).json({ message: "Could not load image history" }); }
@@ -913,11 +919,12 @@ Please try again. Your selected mode is still available unless Admin → Provide
 
       let attachments: any = null;
           const agentImages = (agentRes && agentRes.images) ? agentRes.images : [];
+          const agentConfirmations = (agentRes && (agentRes as any).confirmations) ? (agentRes as any).confirmations : [];
           if (agentImages.length) {
             if (wantsStream && !clientGone) res.write(`data: ${JSON.stringify({ type: "images", images: agentImages })}\n\n`);
           }
-      if (agentArtifacts.length || searchSources.length || agentImages.length) {
-        attachments = { ...(attachments || {}), ...(agentImages.length ? { images: [...(attachments?.images || []), ...agentImages] } : {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
+      if (agentArtifacts.length || searchSources.length || agentImages.length || agentConfirmations.length) {
+        attachments = { ...(attachments || {}), ...(agentConfirmations.length ? { confirmations: agentConfirmations } : {}), ...(agentImages.length ? { images: [...(attachments?.images || []), ...agentImages] } : {}), ...(agentArtifacts.length ? { artifacts: agentArtifacts } : {}), ...(searchSources.length ? { sources: searchSources.map((x: any) => ({ title: x.title, link: x.link, snippet: x.snippet })) } : {}) };
       }
 
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "assistant", content: aiResponse, attachments });

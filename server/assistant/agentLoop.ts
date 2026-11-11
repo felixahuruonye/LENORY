@@ -16,6 +16,8 @@ import {
   toolAddKbNote, toolGenerateFile, toolMemorySave, toolMemoryList,
 } from "./tools/index";
 import { toolDeepResearch, toolReadWebpage } from "./tools/research";
+import { toolSearchPastChats, toolSearchKnowledge } from "./tools/search";
+import { toolRequestDelete } from "./tools/deleteFlow";
 import { toolGenerateDiagram } from "./tools/svgDiagram";
 import { toolGenerateImage, toolEditImage, toolUpscaleImage, toolControlImage, toolImageTo3D } from "./tools/images";
 import { sandboxConfigured, toolRunCode, toolListProjects, toolCreateProject, toolAddProjectFile, toolAddProjectTask } from "./tools/extra";
@@ -46,6 +48,7 @@ export interface AgentResult {
   cancelled?: boolean;
   steps?: number;
   images?: { url: string; title: string; id?: string }[];
+  confirmations?: { token: string; kind: string; name: string; warning: string }[];
 }
 
 type Def = { schema: ToolSchema; cap: keyof UserCapabilities; intent: RegExp; run: (ctx: ToolContext, a: any) => Promise<ToolResult> };
@@ -77,6 +80,15 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
   { cap: "codeExecution", intent: /\b(run|execute|test|output|compile|debug|calculate|code)\b/i,
     schema: fn("run_code", "Run short code in an isolated sandbox and get the real stdout/stderr. Use it to verify calculations or show real program output instead of guessing.", { language: { type: "string", description: "python, javascript, typescript, java, c, cpp, go, ruby, php, bash, sql" }, code: { type: "string" }, stdin: { type: "string" } }, ["language", "code"]),
     run: (c, a) => toolRunCode(c, a) },
+  { cap: "memory", intent: /\b(earlier|before|previous|last time|yesterday|last week|we (talked|discussed|spoke)|you (said|told|mentioned)|i (asked|told|said|mentioned)|remind me|conversation|chat history|our chat|past chat)\b/i,
+    schema: fn("search_past_chats", "Search the student's EARLIER chats (not this one) to find or quote what was said before. Use whenever they refer to a past conversation or ask 'what did we/you/I say about X'. Returns matching messages with links that open that chat.", { query: { type: "string", description: "What to look for, in plain words" } }, ["query"]),
+    run: (c, a) => toolSearchPastChats(c, a) },
+  { cap: "knowledgeBase", intent: /\b(my notes?|notes|notebook|knowledge base|course|lecture|material|document|file|folder|summar|according to|in my|from my|find|search|look up)\b/i,
+    schema: fn("search_knowledge_base", "Search ALL the student's own notes, Knowledge Base files, topic pages and project files for a topic and get the best matching passages with file names and links. Use before answering questions about their course material.", { query: { type: "string" } }, ["query"]),
+    run: (c, a) => toolSearchKnowledge(c, a) },
+  { cap: "kbWrite", intent: /\b(delete|remove|erase|clear|get rid of|trash|wipe)\b/i,
+    schema: fn("request_delete", "Ask to delete one of the student's items. This NEVER deletes by itself: it shows a confirmation card warning that deletion is permanent. kinds: kb_file, kb_folder, project, project_file, project_task, memory_fact, image. Find the exact id first with the list/search tools.", { kind: { type: "string", enum: ["kb_file", "kb_folder", "project", "project_file", "project_task", "memory_fact", "image"] }, id: { type: "string" } }, ["kind", "id"]),
+    run: (c, a) => toolRequestDelete(c, a) },
   { cap: "imageGeneration", intent: /\b(graph|chart|plot|diagram|flowchart|slope|histogram|axes|graph (sheet|paper)|pie|bar)\b/i,
     schema: fn("generate_diagram", "Draw an accurate graph, chart, table or flowchart as a sharp SVG image, instantly and FREE (no credits). ALWAYS use this for maths graphs (e.g. y = 2x + 1 with its slope), charts, tables and flowcharts - never an AI image model. line_graph/scatter: series[{name,points:[[x,y],...]}]. bar_chart: x_categories + series[{name,values}]. pie_chart: x_categories + one series values. table: rows (first row = headers). flowchart: nodes[{id,label}] + edges[{from,to,label}]. For a straight line include at least 5 evenly spaced points so the slope is visible.", { kind: { type: "string", enum: ["line_graph", "scatter", "bar_chart", "pie_chart", "table", "flowchart"] }, title: { type: "string" }, x_label: { type: "string" }, y_label: { type: "string" }, series: { type: "array", items: { type: "object" } }, x_categories: { type: "array", items: { type: "string" } }, rows: { type: "array", items: { type: "array", items: { type: "string" } } }, nodes: { type: "array", items: { type: "object" } }, edges: { type: "array", items: { type: "object" } }, save: { type: "boolean", description: "Also save to the image history as PNG" } }, ["kind"]),
     run: (c, a) => toolGenerateDiagram(c, a) },
@@ -156,6 +168,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
 
   const artifacts: ArtifactRef[] = [];
   const images: { url: string; title: string; id?: string }[] = [];
+  const confirmations: { token: string; kind: string; name: string; warning: string }[] = [];
   const citations: Citation[] = [];
   const toolsUsed: string[] = [];
   const failedTools: { tool: string; error: string }[] = [];
@@ -251,6 +264,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
       if (result.success) {
         if (result.artifacts) artifacts.push(...result.artifacts);
         if (result.images) images.push(...result.images);
+        if (result.confirmations) confirmations.push(...result.confirmations);
         if (result.citations) citations.push(...result.citations);
         if (call.name === "kb_create_folder" && result.data?.id) folders.push({ id: result.data.id, name: result.data.name });
       } else {
@@ -284,7 +298,7 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   if (lastImageFail && !images.length && !answer.includes(lastImageFail.slice(0, 40))) {
     answer = `${answer.trim()}\n\n**Why the image failed:** ${lastImageFail}`.trim();
   }
-  return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders, steps: stepsRun, images };
+  return { answer, artifacts, citations, toolsUsed, failedTools, modelUsed, folders, steps: stepsRun, images, confirmations };
 }
 
 export const __defsForTest = () => DEFS;

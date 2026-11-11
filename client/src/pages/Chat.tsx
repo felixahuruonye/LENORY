@@ -110,6 +110,34 @@ const ACTION_LABELS: Record<string, { label: string; icon: any }> = {
   failed: { label: "Something went wrong...", icon: Brain },
 };
 
+
+function DeleteConfirmCard({ c }: { c: { token: string; kind: string; name: string; warning: string } }) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const [msg, setMsg] = useState("");
+  const act = async (confirm: boolean) => {
+    setState("busy");
+    try {
+      const r = await apiRequest("POST", "/api/assistant/confirm-delete", { token: c.token, confirm });
+      const d = await r.json().catch(() => ({}));
+      setMsg(d.message || (r.ok ? "Done" : "Failed")); setState(r.ok ? "done" : "error");
+    } catch { setMsg("Could not reach the server."); setState("error"); }
+  };
+  return (
+    <div className="mt-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 max-w-sm" data-testid="delete-confirm-card">
+      <div className="text-sm font-semibold">Delete {c.name}?</div>
+      <div className="text-xs text-muted-foreground mt-1">{c.warning}</div>
+      {state === "done" || state === "error" ? (
+        <div className={`text-sm mt-2 ${state === "error" ? "text-destructive" : ""}`}>{msg}</div>
+      ) : (
+        <div className="flex gap-2 mt-3">
+          <button disabled={state === "busy"} onClick={() => act(true)} className="px-3 py-1.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-medium disabled:opacity-60" data-testid="delete-confirm">{state === "busy" ? "Working..." : "Delete"}</button>
+          <button disabled={state === "busy"} onClick={() => act(false)} className="px-3 py-1.5 rounded-lg border text-sm disabled:opacity-60" data-testid="delete-cancel">Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ElapsedTimer({ since }: { since: number }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
@@ -1640,6 +1668,7 @@ export default function Chat() {
                     <div className={`group relative ${msg.role === "user" ? "max-w-xl" : "flex-1 min-w-0"}`} data-testid={`card-message-${msg.id}`}>
                       {msg.role === "user" ? (
                         <div className="rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-3 text-sm">
+                          {(msg.attachments?.confirmations || []).map((c: any) => <DeleteConfirmCard key={c.token} c={c} />)}
                           {(msg.attachments?.images || msg.images || []).map((img: any, idx: number) => (
                             <div key={idx} className="mb-3 rounded-lg overflow-hidden">
                               <img src={img.url} alt={img.title || "Image"} className="w-full h-auto max-h-48 object-cover rounded-lg" loading="lazy" />

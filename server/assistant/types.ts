@@ -86,6 +86,8 @@ export interface ToolResult {
   artifacts?: ArtifactRef[];
   /** Pictures to show inside the chat (generated or edited) */
   images?: { url: string; title: string; id?: string }[];
+  /** Delete confirmation cards (nothing is deleted until the student presses Delete) */
+  confirmations?: { token: string; kind: string; name: string; warning: string }[];
 }
 
 export interface OrchestratorInput {
