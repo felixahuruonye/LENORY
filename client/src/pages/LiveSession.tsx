@@ -585,14 +585,35 @@ export default function LiveSession() {
       e.target.value = ""; return;
     }
     const blob = file.slice(0, file.size, file.type || "audio/webm");
-    setAudioBlobs([blob]); setAudioUrl(URL.createObjectURL(blob));
+    const localUrl = URL.createObjectURL(blob);
+    setAudioBlobs([blob]);
+    setAudioUrl(localUrl);
     setTranscript(""); setSegments([]); setFormattedNotes("");
-    const audio = new Audio(); audio.preload = "metadata"; audio.src = URL.createObjectURL(blob);
+    const audio = new Audio(); audio.preload = "metadata"; audio.src = localUrl;
     audio.onloadedmetadata = () => { if (Number.isFinite(audio.duration) && audio.duration > 0) setRecordingDuration(Math.round(audio.duration)); };
     setView("transcript");
-    toast({ title: isVideo ? "Video uploaded" : "Recording uploaded", description: "Tap Generate My Notes to transcribe." });
+    setTopicTab("live");
+    toast({ title: isVideo ? "Video uploaded" : "Recording uploaded", description: "Storing on this topic…" });
+    if (selectedNotebook?.id && navigator.onLine) {
+      try {
+        const ext = isVideo ? (file.name.split(".").pop() || "mp4") : ((file.type || "").includes("mpeg") || /\.mp3$/i.test(file.name) ? "mp3" : "webm");
+        const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+          file: blob,
+          name: `lecture-${selectedTopic?.id || "topic"}-${Date.now()}.${ext}`,
+          mimeType: file.type || (isVideo ? "video/mp4" : "audio/webm"),
+          topicId: selectedTopic?.id,
+          role: "lecture_recording",
+        });
+        if (uploaded?.url) {
+          setAudioUrl(uploaded.url);
+          toast({ title: "Audio saved permanently", description: "Generate My Notes, then tap transcript lines to play." });
+        }
+      } catch (err) {
+        console.warn(err);
+      }
+    }
     e.target.value = "";
-  }, [toast]);
+  }, [toast, selectedNotebook?.id, selectedTopic?.id]);
 
   // Keep chunks under Groq's ~25 MB limit after conversion; 12 MB is safer on mobile.
   const splitBlob = (blob: Blob, maxBytes = 12 * 1024 * 1024): Blob[] => {
@@ -708,34 +729,60 @@ export default function LiveSession() {
         setRecordingDuration(Math.round(Number(data.duration)));
       }
 
-      // Persist audio immediately so segment taps work after refresh (not only after Save)
-      if (fullText && selectedNotebook?.id && audioBlobs[0] && navigator.onLine) {
+      // Persist audio immediately so segment taps work (permanent Supabase URL)
+      let permanentAudio = audioUrl && audioUrl.startsWith("http") ? audioUrl : "";
+      if (fullText && selectedNotebook?.id && audioBlobs[0] && navigator.onLine && !permanentAudio) {
         try {
           const blob = audioBlobs[0];
           const mime = blob.type || "audio/webm";
+          const ext = mime.includes("mp4") ? "mp4" : mime.includes("mpeg") || mime.includes("mp3") ? "mp3" : "webm";
           const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
             file: blob,
-            name: `lecture-${selectedTopic?.id || "page"}-${Date.now()}.webm`,
+            name: `lecture-${selectedTopic?.id || "page"}-${Date.now()}.${ext}`,
             mimeType: mime,
             topicId: selectedTopic?.id,
             role: "lecture_recording",
           });
           if (uploaded?.url) {
+            permanentAudio = uploaded.url;
             setAudioUrl(uploaded.url);
-            toast({
-              title: "Transcription complete",
-              description: "Recording stored — tap a line to play from that time. Save Transcription to keep text on this page.",
-            });
-          } else if (fullText) {
-            toast({ title: "Transcription complete", description: "Save Transcription to store audio permanently on this page." });
           }
-        } catch {
-          if (fullText) toast({ title: "Transcription complete", description: "Save Transcription to keep this on the page." });
+        } catch (e) {
+          console.warn("post-transcribe audio upload failed", e);
         }
-      } else if (fullText) {
-        toast({ title: "Transcription complete", description: "Tap a line to play · Save Transcription to keep it." });
-      } else {
+      }
+
+      if (!fullText) {
         toast({ title: "No speech detected", variant: "destructive" });
+      } else if (permanentAudio) {
+        toast({
+          title: "Transcription complete",
+          description: "Audio saved permanently. Tap any line to play from that timestamp.",
+        });
+        // Auto-lock transcript + recordingUrl on the topic page so refresh still plays
+        if (selectedNotebook?.id && selectedTopic?.id) {
+          try {
+            await persistTranscriptionPage({
+              transcriptText: fullText,
+              segs,
+              recordingUrl: permanentAudio,
+              durationSec: data.duration ? Math.round(Number(data.duration)) : recordingDuration,
+              language: data.language || "",
+            });
+          } catch (e) {
+            console.warn("auto-save after transcribe failed", e);
+            toast({
+              title: "Tap Save Transcription",
+              description: "Audio is online but text still needs Save on this page.",
+              variant: "destructive",
+            });
+          }
+        }
+      } else {
+        toast({
+          title: "Transcription complete",
+          description: "Tap Save Transcription so audio is stored permanently and line playback works after refresh.",
+        });
       }
     } catch (err: any) {
       const msg = err?.message || "Could not transcribe";
@@ -905,6 +952,92 @@ export default function LiveSession() {
     }
     playSegmentAt(index, start);
   }, [playingSegIndex, isSegPlaying, playSegmentAt]);
+
+
+  /** Write transcript + permanent recordingUrl onto a new topic page. */
+  const persistTranscriptionPage = async (opts: {
+    transcriptText: string;
+    segs: TranscriptSegment[];
+    recordingUrl?: string;
+    durationSec?: number;
+    language?: string;
+  }) => {
+    if (!selectedNotebook || !selectedTopic) throw new Error("Open a topic first");
+    let recordingUrl = opts.recordingUrl || "";
+    if (!recordingUrl && audioUrl && audioUrl.startsWith("http")) recordingUrl = audioUrl;
+    if (!recordingUrl && audioBlobs[0] && navigator.onLine) {
+      const blob = audioBlobs[0];
+      const mime = blob.type || "audio/webm";
+      const ext = mime.includes("mp4") ? "mp4" : mime.includes("mp3") || mime.includes("mpeg") ? "mp3" : "webm";
+      const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+        file: blob,
+        name: `lecture-${selectedTopic.id}-${Date.now()}.${ext}`,
+        mimeType: mime,
+        topicId: selectedTopic.id,
+        role: "lecture_recording",
+      });
+      if (uploaded?.url) {
+        recordingUrl = uploaded.url;
+        setAudioUrl(uploaded.url);
+      }
+    }
+    if (!recordingUrl) throw new Error("Could not store audio permanently");
+
+    const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+    let pages = getTopicPages(existingDoc);
+    if (topicPages.length > pages.length) pages = [...topicPages];
+
+    const nextNum = pages.length + 1;
+    const newPage: TopicPage = {
+      id: `page_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      pageNumber: nextNum,
+      title: `Page ${nextNum}`,
+      createdAt: new Date().toISOString(),
+      transcript: (opts.transcriptText || "").slice(0, 180_000),
+      formattedNotes: (opts.transcriptText || "").slice(0, 180_000),
+      segments: (opts.segs || []).slice(0, 500),
+      duration: opts.durationSec || recordingDuration || 0,
+      photos: [],
+      photoCount: 0,
+      hasRecording: true,
+      recordingUrl,
+      language: opts.language || detectedLanguage || undefined,
+      uploadedFiles: [{ name: "Lecture recording", type: "audio", url: recordingUrl }],
+    };
+    pages = [...pages, newPage];
+    const doc: TopicPayload = { version: 2, pages };
+    const content = JSON.stringify(doc);
+    const res = await authFetch(
+      `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: selectedTopic.name, content }),
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Save failed (${res.status})`);
+    }
+    setSelectedTopic({
+      ...selectedTopic,
+      extracted_text: content,
+      extractedText: content,
+      size_bytes: content.length,
+    });
+    setTopicPages(pages);
+    setSelectedPageIndex(pages.length - 1);
+    setTranscript(opts.transcriptText);
+    setSegments(opts.segs || []);
+    setAudioUrl(recordingUrl);
+    setFormattedNotes(opts.transcriptText);
+    setTopicTab("live");
+    refetchTopics();
+    toast({
+      title: `Saved Page ${nextNum}`,
+      description: "Recording + transcript locked. Tap any line to proofread with audio.",
+    });
+  };
 
   const saveToTopic = useCallback(async () => {
     if (!selectedNotebook || !selectedTopic) {
