@@ -158,13 +158,21 @@ function loadPageIntoState(page: TopicPage | null | undefined) {
       language: "",
     };
   }
+  // Prefer explicit recordingUrl; else first audio entry in uploadedFiles (older saves)
+  let recordingUrl = page.recordingUrl || undefined;
+  if (!recordingUrl && Array.isArray(page.uploadedFiles)) {
+    const audioFile = page.uploadedFiles.find(
+      (f) => f?.url && (f.type === "audio" || f.type === "video" || /\.(mp3|wav|webm|m4a|ogg|mp4)$/i.test(f.name || ""))
+    );
+    if (audioFile?.url) recordingUrl = audioFile.url;
+  }
   return {
     transcript: page.transcript || "",
     formattedNotes: page.formattedNotes || "",
     segments: page.segments || [],
     duration: page.duration || 0,
     photos: page.photos || [],
-    recordingUrl: page.recordingUrl,
+    recordingUrl,
     language: page.language || "",
   };
 }
@@ -687,11 +695,48 @@ export default function LiveSession() {
       }
 
       const fullText = (data.text || "").trim();
+      const segs = (data.segments || []).map((s: any) => ({
+        text: s.text || "",
+        start: typeof s.start === "number" ? s.start : Number(s.start) || 0,
+        end: typeof s.end === "number" ? s.end : Number(s.end) || 0,
+        speaker: s.speaker,
+      }));
       setTranscript(fullText);
-      setSegments(data.segments || []);
+      setSegments(segs);
       setDetectedLanguage(data.language || "");
-      if (fullText) toast({ title: "Transcription complete" });
-      else toast({ title: "No speech detected", variant: "destructive" });
+      if (data.duration && Number(data.duration) > 0) {
+        setRecordingDuration(Math.round(Number(data.duration)));
+      }
+
+      // Persist audio immediately so segment taps work after refresh (not only after Save)
+      if (fullText && selectedNotebook?.id && audioBlobs[0] && navigator.onLine) {
+        try {
+          const blob = audioBlobs[0];
+          const mime = blob.type || "audio/webm";
+          const uploaded = await uploadPermanentMedia(selectedNotebook.id, {
+            file: blob,
+            name: `lecture-${selectedTopic?.id || "page"}-${Date.now()}.webm`,
+            mimeType: mime,
+            topicId: selectedTopic?.id,
+            role: "lecture_recording",
+          });
+          if (uploaded?.url) {
+            setAudioUrl(uploaded.url);
+            toast({
+              title: "Transcription complete",
+              description: "Recording stored — tap a line to play from that time. Save Transcription to keep text on this page.",
+            });
+          } else if (fullText) {
+            toast({ title: "Transcription complete", description: "Save Transcription to store audio permanently on this page." });
+          }
+        } catch {
+          if (fullText) toast({ title: "Transcription complete", description: "Save Transcription to keep this on the page." });
+        }
+      } else if (fullText) {
+        toast({ title: "Transcription complete", description: "Tap a line to play · Save Transcription to keep it." });
+      } else {
+        toast({ title: "No speech detected", variant: "destructive" });
+      }
     } catch (err: any) {
       const msg = err?.message || "Could not transcribe";
       toast({
@@ -704,7 +749,7 @@ export default function LiveSession() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [audioBlobs, toast]);
+  }, [audioBlobs, toast, selectedNotebook?.id, selectedTopic?.id]);
 
   const formatNotes = useCallback(async () => {
     if (!transcript) return;
@@ -759,40 +804,90 @@ export default function LiveSession() {
     setPlayingSegIndex(null);
   }, []);
 
+  const resolveRecordingSrc = useCallback((): string | null => {
+    if (audioUrl && (audioUrl.startsWith("http") || audioUrl.startsWith("blob:") || audioUrl.startsWith("data:"))) {
+      return audioUrl;
+    }
+    const page = topicPages[selectedPageIndex];
+    if (page?.recordingUrl) return page.recordingUrl;
+    if (page?.uploadedFiles) {
+      const f = page.uploadedFiles.find(
+        (x) => x?.url && (x.type === "audio" || x.type === "video" || /lecture|recording/i.test(x.name || ""))
+      );
+      if (f?.url) return f.url;
+    }
+    return null;
+  }, [audioUrl, topicPages, selectedPageIndex]);
+
   const playSegmentAt = useCallback((index: number, start: number) => {
-    const src = audioUrl;
+    const src = resolveRecordingSrc();
     if (!src) {
-      toast({ title: "No recording", description: "This page has no audio to play.", variant: "destructive" });
+      toast({
+        title: "No recording on this page",
+        description: "Upload or record audio, then Save Transcription so playback is stored permanently.",
+        variant: "destructive",
+      });
       return;
     }
-    // Stop previous
+    // Keep state in sync if we recovered URL from the page
+    if (src !== audioUrl) setAudioUrl(src);
+
     try {
       if (segAudioRef.current && segAudioRef.current !== audioElRef.current) {
         segAudioRef.current.pause();
       }
     } catch {}
+
     let audio = audioElRef.current;
     if (!audio) {
-      audio = new Audio(src);
-      segAudioRef.current = audio;
-    } else {
-      if (audio.src !== src && !audio.src.endsWith(src) && audio.src !== src) {
-        audio.src = src;
+      audio = new Audio();
+      audioElRef.current = audio;
+    }
+    segAudioRef.current = audio;
+
+    const seekAndPlay = () => {
+      try {
+        const t0 = Math.max(0, Number(start) || 0);
+        if (Number.isFinite(audio!.duration) && audio!.duration > 0) {
+          audio!.currentTime = Math.min(t0, Math.max(0, audio!.duration - 0.05));
+        } else {
+          audio!.currentTime = t0;
+        }
+        const p = audio!.play();
+        if (p && typeof p.then === "function") {
+          p.then(() => {
+            setPlayingSegIndex(index);
+            setIsSegPlaying(true);
+          }).catch(() => {
+            toast({ title: "Could not play audio", description: "Check network or re-save the recording.", variant: "destructive" });
+          });
+        } else {
+          setPlayingSegIndex(index);
+          setIsSegPlaying(true);
+        }
+      } catch {
+        toast({ title: "Could not play", variant: "destructive" });
       }
-      segAudioRef.current = audio;
+    };
+
+    audio.onended = () => { setIsSegPlaying(false); setPlayingSegIndex(null); };
+    // Reload source when URL changes so permanent https files work after refresh
+    const abs = src;
+    const needsLoad = !audio.src || (!audio.src.includes(abs) && audio.src !== abs);
+    if (needsLoad) {
+      audio.src = abs;
+      audio.load();
+      const onReady = () => {
+        audio!.removeEventListener("loadedmetadata", onReady);
+        seekAndPlay();
+      };
+      audio.addEventListener("loadedmetadata", onReady);
+      // Fallback if metadata already cached
+      if (audio.readyState >= 1) seekAndPlay();
+    } else {
+      seekAndPlay();
     }
-    const onEnded = () => { setIsSegPlaying(false); setPlayingSegIndex(null); };
-    audio.onended = onEnded;
-    try {
-      audio.currentTime = Math.max(0, start || 0);
-      const p = audio.play();
-      if (p && typeof p.then === "function") p.catch(() => {});
-      setPlayingSegIndex(index);
-      setIsSegPlaying(true);
-    } catch {
-      toast({ title: "Could not play", variant: "destructive" });
-    }
-  }, [audioUrl, toast]);
+  }, [resolveRecordingSrc, audioUrl, toast]);
 
   const toggleSegmentPlay = useCallback((index: number, start: number) => {
     if (playingSegIndex === index && isSegPlaying) {
@@ -1507,7 +1602,7 @@ export default function LiveSession() {
                         </>
                       ) : (
                         <p className="text-sm text-muted-foreground">
-                          No recording on this page yet. Record or upload, then save to keep it permanently on this page.
+                          No recording on this page yet. Record or upload, generate notes, then Save Transcription — audio is stored so taps on transcript lines can play.
                         </p>
                       )}
                     </div>
