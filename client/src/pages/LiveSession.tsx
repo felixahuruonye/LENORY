@@ -855,12 +855,95 @@ export default function LiveSession() {
   const rebuildTranscriptFromSegments = (segs: TranscriptSegment[]) =>
     segs.map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join(" ").replace(/\s+/g, " ").trim();
 
+  /** Persist Live Class edits (segments + transcript + note) on the CURRENT page — not a new page. */
+  const persistLiveClassPage = async (opts: {
+    segs: TranscriptSegment[];
+    text: string;
+    noteText?: string;
+  }) => {
+    if (!selectedNotebook || !selectedTopic) return;
+    if (!navigator.onLine) {
+      toast({ title: "Offline", description: "Changes are on screen only until you are online.", variant: "destructive" });
+      return;
+    }
+    try {
+      const existingDoc = parseTopicPayload(selectedTopic.extracted_text || selectedTopic.extractedText);
+      let pages = getTopicPages(existingDoc);
+      if (topicPages.length >= pages.length) pages = [...topicPages];
+      const idx = Math.min(Math.max(0, selectedPageIndex), Math.max(0, pages.length - 1));
+      if (!pages.length) {
+        // No page yet — use full save path
+        return;
+      }
+      const rec =
+        (audioUrl && audioUrl.startsWith("http") ? audioUrl : null) ||
+        pages[idx]?.recordingUrl ||
+        resolveRecordingSrc() ||
+        undefined;
+      const noteText = opts.noteText != null ? opts.noteText : opts.text;
+      const updated: TopicPage = {
+        ...pages[idx],
+        transcript: opts.text.slice(0, 180_000),
+        formattedNotes: noteText.slice(0, 180_000),
+        segments: opts.segs.slice(0, 800),
+        duration: recordingDuration || pages[idx].duration,
+        hasRecording: !!(rec || pages[idx].hasRecording),
+        recordingUrl: typeof rec === "string" && rec.startsWith("http") ? rec : pages[idx].recordingUrl,
+        language: detectedLanguage || pages[idx].language,
+        uploadedFiles: pages[idx].uploadedFiles?.length
+          ? pages[idx].uploadedFiles
+          : rec && String(rec).startsWith("http")
+            ? [{ name: "Lecture recording", type: "audio", url: String(rec) }]
+            : pages[idx].uploadedFiles,
+      };
+      pages = pages.map((pg, i) => (i === idx ? updated : pg));
+      const doc: TopicPayload = { version: 2, pages };
+      const content = JSON.stringify(doc);
+      const res = await authFetch(
+        `/api/kb/folders/${selectedNotebook.id}/files/${selectedTopic.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: selectedTopic.name, content }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `Save failed (${res.status})`);
+      }
+      setTopicPages(pages);
+      setSelectedTopic({
+        ...selectedTopic,
+        extracted_text: content,
+        extractedText: content,
+        size_bytes: content.length,
+      });
+    } catch (e: any) {
+      console.warn("persistLiveClassPage", e);
+      toast({
+        title: "Could not save to cloud",
+        description: e?.message || "Try Save Transcription again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const liveSaveTimer = (globalThis as any).__lenoryLiveSaveTimer as { id?: any } | undefined;
+  if (!(globalThis as any).__lenoryLiveSaveTimer) (globalThis as any).__lenoryLiveSaveTimer = { id: null };
+
   const commitSegments = (segs: TranscriptSegment[], syncNote = true) => {
     const sorted = [...segs].sort((a, b) => (a.start || 0) - (b.start || 0));
     setSegments(sorted);
     const text = rebuildTranscriptFromSegments(sorted);
     setTranscript(text);
-    if (syncNote) setFormattedNotes((prev) => (prev && prev.length > text.length * 1.2 ? prev : text));
+    // Always sync Note tab with Live Class when user edits segments
+    if (syncNote) setFormattedNotes(text);
+    // Debounced cloud save so refresh keeps edits
+    const bucket = (globalThis as any).__lenoryLiveSaveTimer as { id?: any };
+    if (bucket.id) clearTimeout(bucket.id);
+    bucket.id = setTimeout(() => {
+      void persistLiveClassPage({ segs: sorted, text, noteText: syncNote ? text : undefined });
+    }, 600);
   };
 
   const stopSegmentAudio = useCallback(() => {
@@ -1072,7 +1155,7 @@ export default function LiveSession() {
     commitSegments(next, true);
     setEditingSegIndex(null);
     setEditSegDraft("");
-    toast({ title: "Line updated", description: "Synced toward Note tab — tap Save Transcription to lock." });
+    toast({ title: "Line updated", description: "Saved to this page and Note tab." });
   };
 
   const addManualSegment = () => {
@@ -1089,7 +1172,7 @@ export default function LiveSession() {
       commitSegments(next, true);
       setShowAddSeg(false);
       setAddSegSpeaker("");
-      toast({ title: "Speaker added to line" });
+      toast({ title: "Speaker saved on this line" });
       return;
     }
 
