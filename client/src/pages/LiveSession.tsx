@@ -1037,13 +1037,13 @@ export default function LiveSession() {
         newSegs.push({ text: String(data.text).trim(), start: startSec, end: undefined });
       }
       if (!newSegs.length) {
-        toast({ title: "No more speech found", description: "Groq heard nothing after the last line." });
+        toast({ title: "No more speech found", description: "Nothing clear after the last line." });
         return;
       }
       commitSegments([...segments, ...newSegs], true);
       toast({ title: `Added ${newSegs.length} lines`, description: "From the gap after your last timestamp." });
     } catch (e: any) {
-      toast({ title: "Gap fill failed", description: e?.message || "Try again", variant: "destructive" });
+      toast({ title: "Could not fill gap", description: e?.message || "Try again", variant: "destructive" });
     } finally {
       setIsGapTranscribing(false);
     }
@@ -1061,27 +1061,49 @@ export default function LiveSession() {
   };
 
   const addManualSegment = () => {
+    const speaker = addSegSpeaker.trim() || undefined;
+    if (speaker && !speakers.includes(speaker) && speakers.length < 20) {
+      setSpeakers((sp) => [...sp, speaker]);
+    }
+
+    // Selected line + speaker name only → label that timestamp
+    if (selectedSegIndex != null && speaker && !addSegText.trim()) {
+      const next = segments.map((s, i) =>
+        i === selectedSegIndex ? { ...s, speaker } : s
+      );
+      commitSegments(next, true);
+      setShowAddSeg(false);
+      setAddSegSpeaker("");
+      toast({ title: "Speaker added to line" });
+      return;
+    }
+
     const text = addSegText.trim();
     if (!text) {
-      toast({ title: "Type the words you heard", variant: "destructive" });
+      toast({
+        title: "Add words or a speaker",
+        description: "Select a line and type a speaker name, or type missing words for a new line.",
+        variant: "destructive",
+      });
       return;
     }
     let start = parseFloat(addSegStart);
     if (!Number.isFinite(start)) {
-      const last = segments[segments.length - 1];
-      start = last ? (last.end ?? last.start ?? 0) + 1 : 0;
-    }
-    const speaker = addSegSpeaker.trim() || undefined;
-    if (speaker && !speakers.includes(speaker) && speakers.length < 20) {
-      setSpeakers((sp) => [...sp, speaker]);
+      if (selectedSegIndex != null) {
+        start = segments[selectedSegIndex]?.start ?? 0;
+      } else {
+        const last = segments[segments.length - 1];
+        start = last ? (last.end ?? last.start ?? 0) + 1 : 0;
+      }
     }
     commitSegments([
       ...segments,
       { text, start, end: start + 3, speaker },
     ], true);
     setAddSegText("");
+    setAddSegSpeaker("");
     setShowAddSeg(false);
-    toast({ title: "Segment added" });
+    toast({ title: "Line added" });
   };
 
   const persistTranscriptionPage = async (opts: {
@@ -1895,10 +1917,18 @@ export default function LiveSession() {
                             className="h-8 w-8"
                             title="Add segment or missing text"
                             onClick={() => {
-                              const last = segments[segments.length - 1];
-                              const a = audioElRef.current || segAudioRef.current;
-                              const t0 = a && Number.isFinite(a.currentTime) ? a.currentTime : (last ? (last.end ?? last.start ?? 0) + 1 : 0);
-                              setAddSegStart(String(Math.floor(t0)));
+                              if (selectedSegIndex != null && segments[selectedSegIndex]) {
+                                setAddSegStart(String(Math.floor(segments[selectedSegIndex].start || 0)));
+                                setAddSegSpeaker(segments[selectedSegIndex].speaker || "");
+                                setAddSegText("");
+                              } else {
+                                const last = segments[segments.length - 1];
+                                const a = audioElRef.current || segAudioRef.current;
+                                const t0 = a && Number.isFinite(a.currentTime) ? a.currentTime : (last ? (last.end ?? last.start ?? 0) + 1 : 0);
+                                setAddSegStart(String(Math.floor(t0)));
+                                setAddSegSpeaker("");
+                                setAddSegText("");
+                              }
                               setShowAddSeg(true);
                             }}
                           >
@@ -1907,15 +1937,22 @@ export default function LiveSession() {
                         </div>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        Play audio — the active line highlights. Select a line for the pen to edit. Use + if Groq missed words.
+                        Play audio — the active line highlights. Select a line, then use the pen to edit or + to add a speaker / missing words.
                       </p>
                       {showAddSeg && (
                         <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-                          <p className="text-xs font-medium">Add missing text / speaker</p>
+                          <p className="text-xs font-medium">
+                            {selectedSegIndex != null
+                              ? `Line at ${formatDuration(segments[selectedSegIndex]?.start || 0)} — add speaker or extra words`
+                              : "Add a missing line"}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            The number is the start time in seconds (e.g. 90 = 1:30). Select a transcript line first to attach a speaker to that moment.
+                          </p>
                           <div className="flex gap-2">
                             <input
                               className="w-24 rounded-md border bg-background px-2 py-1.5 text-xs font-mono"
-                              placeholder="Start sec"
+                              placeholder="Time (sec)"
                               value={addSegStart}
                               onChange={(e) => setAddSegStart(e.target.value)}
                             />
@@ -1940,7 +1977,7 @@ export default function LiveSession() {
                             <Button size="sm" onClick={addManualSegment}>Add line</Button>
                             <Button size="sm" variant="secondary" disabled={isGapTranscribing || !resolveRecordingSrc()?.startsWith("http")} onClick={transcribeGapFromLast}>
                               {isGapTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                              Auto-fill gap with Groq
+                              Fill missing from audio
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => setShowAddSeg(false)}>Cancel</Button>
                           </div>
