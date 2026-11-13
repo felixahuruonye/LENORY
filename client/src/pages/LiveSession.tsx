@@ -2007,7 +2007,8 @@ export default function LiveSession() {
                       )}
                     </div>
 
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
+                    <div className="rounded-xl border bg-card p-4 space-y-3">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
                       {photos.length === 0 && !audioUrl ? (
                         <p className="text-sm text-muted-foreground">No files on this page yet.</p>
                       ) : (
