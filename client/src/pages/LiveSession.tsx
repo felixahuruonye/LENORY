@@ -2147,12 +2147,14 @@ export default function LiveSession() {
                     {noteEditing ? (
                       <div className="not-prose space-y-2">
                         <textarea
-                          className="w-full min-h-[220px] rounded-lg border bg-background p-3 text-sm font-sans leading-relaxed"
+                          className="w-full min-h-[40vh] max-h-[65vh] overflow-y-auto overscroll-contain rounded-lg border bg-background p-3 text-sm font-sans leading-relaxed resize-y touch-pan-y"
                           value={noteDraft}
                           onChange={(e) => setNoteDraft(e.target.value)}
                           placeholder="Edit your digital notes…"
+                          rows={16}
+                          onTouchMove={(e) => e.stopPropagation()}
                         />
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 sticky bottom-0 bg-card/95 py-1">
                           <Button size="sm" variant="outline" onClick={() => setNoteEditing(false)}>Cancel</Button>
                           <Button size="sm" className="gap-1.5" onClick={() => saveNoteEdits()} disabled={isSaving}>
                             {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
