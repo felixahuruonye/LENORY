@@ -996,18 +996,30 @@ export default function LiveSession() {
 
   /** Write transcript + permanent recordingUrl onto a new topic page. */
 
+  /** Start filling from playhead, selected line end, or last line — user never types seconds. */
+  const resolveGapStartSec = () => {
+    const a = audioElRef.current || segAudioRef.current;
+    if (a && Number.isFinite(a.currentTime) && a.currentTime > 0.25) {
+      return Math.max(0, a.currentTime);
+    }
+    if (selectedSegIndex != null && segments[selectedSegIndex]) {
+      const s = segments[selectedSegIndex];
+      return Math.max(0, (s.end != null ? s.end : s.start) || 0);
+    }
+    if (segments.length) {
+      const last = segments[segments.length - 1];
+      return Math.max(0, (last.end != null ? last.end : last.start) || 0);
+    }
+    return 0;
+  };
+
   const transcribeGapFromLast = async () => {
     const src = resolveRecordingSrc();
     if (!src || !src.startsWith("http")) {
       toast({ title: "Need permanent audio", description: "Save the recording first.", variant: "destructive" });
       return;
     }
-    if (!segments.length) {
-      toast({ title: "No segments yet", variant: "destructive" });
-      return;
-    }
-    const last = segments[segments.length - 1];
-    const startSec = Math.max(0, (last.end != null ? last.end : last.start) || 0);
+    const startSec = resolveGapStartSec();
     setIsGapTranscribing(true);
     try {
       const audioRes = await fetch(src);
@@ -1037,11 +1049,14 @@ export default function LiveSession() {
         newSegs.push({ text: String(data.text).trim(), start: startSec, end: undefined });
       }
       if (!newSegs.length) {
-        toast({ title: "No more speech found", description: "Nothing clear after the last line." });
+        toast({ title: "No more speech found", description: `Nothing clear after ${formatDuration(startSec)}.` });
         return;
       }
       commitSegments([...segments, ...newSegs], true);
-      toast({ title: `Added ${newSegs.length} lines`, description: "From the gap after your last timestamp." });
+      toast({
+        title: `Added ${newSegs.length} line${newSegs.length === 1 ? "" : "s"}`,
+        description: `Filled from ${formatDuration(startSec)} onward using the audio.`,
+      });
     } catch (e: any) {
       toast({ title: "Could not fill gap", description: e?.message || "Try again", variant: "destructive" });
     } finally {
@@ -1943,41 +1958,41 @@ export default function LiveSession() {
                         <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
                           <p className="text-xs font-medium">
                             {selectedSegIndex != null
-                              ? `Line at ${formatDuration(segments[selectedSegIndex]?.start || 0)} — add speaker or extra words`
-                              : "Add a missing line"}
+                              ? `Selected line · ${formatDuration(segments[selectedSegIndex]?.start || 0)}`
+                              : "Add speaker or missing words"}
                           </p>
-                          <p className="text-[10px] text-muted-foreground">
-                            The number is the start time in seconds (e.g. 90 = 1:30). Select a transcript line first to attach a speaker to that moment.
+                          <p className="text-[10px] text-muted-foreground leading-relaxed">
+                            Play the audio to the place that is missing, then tap <strong>Fill missing from audio</strong> —
+                            new timestamps and text are created automatically. You do not need to type seconds.
                           </p>
-                          <div className="flex gap-2">
-                            <input
-                              className="w-24 rounded-md border bg-background px-2 py-1.5 text-xs font-mono"
-                              placeholder="Time (sec)"
-                              value={addSegStart}
-                              onChange={(e) => setAddSegStart(e.target.value)}
-                            />
-                            <input
-                              className="flex-1 rounded-md border bg-background px-2 py-1.5 text-xs"
-                              placeholder="Speaker (optional)"
-                              value={addSegSpeaker}
-                              onChange={(e) => setAddSegSpeaker(e.target.value)}
-                              list="live-speakers"
-                            />
-                            <datalist id="live-speakers">
-                              {speakers.map((sp) => <option key={sp} value={sp} />)}
-                            </datalist>
-                          </div>
+                          <input
+                            className="w-full rounded-md border bg-background px-2 py-1.5 text-xs"
+                            placeholder="Speaker name (optional) — select a line first, then type a name"
+                            value={addSegSpeaker}
+                            onChange={(e) => setAddSegSpeaker(e.target.value)}
+                            list="live-speakers"
+                          />
+                          <datalist id="live-speakers">
+                            {speakers.map((sp) => <option key={sp} value={sp} />)}
+                          </datalist>
                           <textarea
-                            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm min-h-[64px]"
-                            placeholder="Type the words you hear at this time…"
+                            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm min-h-[56px]"
+                            placeholder="Optional: type words yourself if you already know them"
                             value={addSegText}
                             onChange={(e) => setAddSegText(e.target.value)}
                           />
                           <div className="flex flex-wrap gap-2">
-                            <Button size="sm" onClick={addManualSegment}>Add line</Button>
-                            <Button size="sm" variant="secondary" disabled={isGapTranscribing || !resolveRecordingSrc()?.startsWith("http")} onClick={transcribeGapFromLast}>
+                            <Button
+                              size="sm"
+                              className="gap-1"
+                              disabled={isGapTranscribing || !resolveRecordingSrc()?.startsWith("http")}
+                              onClick={transcribeGapFromLast}
+                            >
                               {isGapTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                               Fill missing from audio
+                            </Button>
+                            <Button size="sm" variant="secondary" onClick={addManualSegment}>
+                              Save speaker / typed line
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => setShowAddSeg(false)}>Cancel</Button>
                           </div>
