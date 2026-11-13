@@ -210,6 +210,15 @@ export default function LiveSession() {
   const [topicPages, setTopicPages] = useState<TopicPage[]>([]);
   const [selectedPageIndex, setSelectedPageIndex] = useState(0);
   const [playingSegIndex, setPlayingSegIndex] = useState<number | null>(null);
+  const [editingSegIndex, setEditingSegIndex] = useState<number | null>(null);
+  const [editSegDraft, setEditSegDraft] = useState("");
+  const [selectedSegIndex, setSelectedSegIndex] = useState<number | null>(null);
+  const [showAddSeg, setShowAddSeg] = useState(false);
+  const [addSegText, setAddSegText] = useState("");
+  const [addSegStart, setAddSegStart] = useState("");
+  const [addSegSpeaker, setAddSegSpeaker] = useState("");
+  const [speakers, setSpeakers] = useState<string[]>([]);
+  const [isGapTranscribing, setIsGapTranscribing] = useState(false);
   const [isSegPlaying, setIsSegPlaying] = useState(false);
   const segAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -842,6 +851,18 @@ export default function LiveSession() {
     setIsSegPlaying(false);
   }, []);
 
+
+  const rebuildTranscriptFromSegments = (segs: TranscriptSegment[]) =>
+    segs.map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join(" ").replace(/\s+/g, " ").trim();
+
+  const commitSegments = (segs: TranscriptSegment[], syncNote = true) => {
+    const sorted = [...segs].sort((a, b) => (a.start || 0) - (b.start || 0));
+    setSegments(sorted);
+    const text = rebuildTranscriptFromSegments(sorted);
+    setTranscript(text);
+    if (syncNote) setFormattedNotes((prev) => (prev && prev.length > text.length * 1.2 ? prev : text));
+  };
+
   const stopSegmentAudio = useCallback(() => {
     try {
       const a = segAudioRef.current || audioElRef.current;
@@ -876,7 +897,6 @@ export default function LiveSession() {
       });
       return;
     }
-    // Keep state in sync if we recovered URL from the page
     if (src !== audioUrl) setAudioUrl(src);
 
     try {
@@ -905,12 +925,14 @@ export default function LiveSession() {
           p.then(() => {
             setPlayingSegIndex(index);
             setIsSegPlaying(true);
+            setSelectedSegIndex(index);
           }).catch(() => {
             toast({ title: "Could not play audio", description: "Check network or re-save the recording.", variant: "destructive" });
           });
         } else {
           setPlayingSegIndex(index);
           setIsSegPlaying(true);
+          setSelectedSegIndex(index);
         }
       } catch {
         toast({ title: "Could not play", variant: "destructive" });
@@ -918,7 +940,26 @@ export default function LiveSession() {
     };
 
     audio.onended = () => { setIsSegPlaying(false); setPlayingSegIndex(null); };
-    // Reload source when URL changes so permanent https files work after refresh
+    audio.ontimeupdate = () => {
+      const tcur = audio!.currentTime || 0;
+      // Highlight whichever segment contains current playback time
+      setSegments((segs) => {
+        if (!segs.length) return segs;
+        let best = 0;
+        for (let i = 0; i < segs.length; i++) {
+          const a = segs[i].start || 0;
+          const b = segs[i].end != null ? segs[i].end : (segs[i + 1]?.start ?? a + 5);
+          if (tcur >= a && tcur < b) {
+            best = i;
+            break;
+          }
+          if (tcur >= a) best = i;
+        }
+        setPlayingSegIndex(best);
+        return segs;
+      });
+    };
+
     const abs = src;
     const needsLoad = !audio.src || (!audio.src.includes(abs) && audio.src !== abs);
     if (needsLoad) {
@@ -929,7 +970,6 @@ export default function LiveSession() {
         seekAndPlay();
       };
       audio.addEventListener("loadedmetadata", onReady);
-      // Fallback if metadata already cached
       if (audio.readyState >= 1) seekAndPlay();
     } else {
       seekAndPlay();
@@ -955,6 +995,95 @@ export default function LiveSession() {
 
 
   /** Write transcript + permanent recordingUrl onto a new topic page. */
+
+  const transcribeGapFromLast = async () => {
+    const src = resolveRecordingSrc();
+    if (!src || !src.startsWith("http")) {
+      toast({ title: "Need permanent audio", description: "Save the recording first.", variant: "destructive" });
+      return;
+    }
+    if (!segments.length) {
+      toast({ title: "No segments yet", variant: "destructive" });
+      return;
+    }
+    const last = segments[segments.length - 1];
+    const startSec = Math.max(0, (last.end != null ? last.end : last.start) || 0);
+    setIsGapTranscribing(true);
+    try {
+      const audioRes = await fetch(src);
+      if (!audioRes.ok) throw new Error("Could not download recording");
+      const blob = await audioRes.blob();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token || "";
+      const form = new FormData();
+      form.append("audio", blob, "lecture.webm");
+      form.append("startSec", String(startSec));
+      if (detectedLanguage) form.append("language", detectedLanguage);
+      const res = await fetch("/api/groq/transcribe-range", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Gap transcription failed");
+      const newSegs: TranscriptSegment[] = (data.segments || []).map((s: any) => ({
+        text: String(s.text || "").trim(),
+        start: Number(s.start) || startSec,
+        end: Number(s.end) || undefined,
+        speaker: s.speaker,
+      })).filter((s: TranscriptSegment) => s.text);
+      if (!newSegs.length && data.text) {
+        newSegs.push({ text: String(data.text).trim(), start: startSec, end: undefined });
+      }
+      if (!newSegs.length) {
+        toast({ title: "No more speech found", description: "Groq heard nothing after the last line." });
+        return;
+      }
+      commitSegments([...segments, ...newSegs], true);
+      toast({ title: `Added ${newSegs.length} lines`, description: "From the gap after your last timestamp." });
+    } catch (e: any) {
+      toast({ title: "Gap fill failed", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setIsGapTranscribing(false);
+    }
+  };
+
+  const saveSegEdit = () => {
+    if (editingSegIndex == null) return;
+    const next = segments.map((s, i) =>
+      i === editingSegIndex ? { ...s, text: editSegDraft } : s
+    );
+    commitSegments(next, true);
+    setEditingSegIndex(null);
+    setEditSegDraft("");
+    toast({ title: "Line updated", description: "Synced toward Note tab — tap Save Transcription to lock." });
+  };
+
+  const addManualSegment = () => {
+    const text = addSegText.trim();
+    if (!text) {
+      toast({ title: "Type the words you heard", variant: "destructive" });
+      return;
+    }
+    let start = parseFloat(addSegStart);
+    if (!Number.isFinite(start)) {
+      const last = segments[segments.length - 1];
+      start = last ? (last.end ?? last.start ?? 0) + 1 : 0;
+    }
+    const speaker = addSegSpeaker.trim() || undefined;
+    if (speaker && !speakers.includes(speaker) && speakers.length < 20) {
+      setSpeakers((sp) => [...sp, speaker]);
+    }
+    commitSegments([
+      ...segments,
+      { text, start, end: start + 3, speaker },
+    ], true);
+    setAddSegText("");
+    setShowAddSeg(false);
+    toast({ title: "Segment added" });
+  };
+
   const persistTranscriptionPage = async (opts: {
     transcriptText: string;
     segs: TranscriptSegment[];
@@ -1740,23 +1869,103 @@ export default function LiveSession() {
                       )}
                     </div>
 
-                    <div className="rounded-xl border bg-card p-4 space-y-2">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transcript</p>
+                                        <div className="rounded-xl border bg-card p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transcript</p>
+                        <div className="flex items-center gap-1">
+                          {selectedSegIndex != null && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              title="Edit highlighted line"
+                              onClick={() => {
+                                const s = segments[selectedSegIndex!];
+                                if (!s) return;
+                                setEditingSegIndex(selectedSegIndex);
+                                setEditSegDraft(s.text || "");
+                              }}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                          )}
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8"
+                            title="Add segment or missing text"
+                            onClick={() => {
+                              const last = segments[segments.length - 1];
+                              const a = audioElRef.current || segAudioRef.current;
+                              const t0 = a && Number.isFinite(a.currentTime) ? a.currentTime : (last ? (last.end ?? last.start ?? 0) + 1 : 0);
+                              setAddSegStart(String(Math.floor(t0)));
+                              setShowAddSeg(true);
+                            }}
+                          >
+                            <Plus className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Play audio — the active line highlights. Select a line for the pen to edit. Use + if Groq missed words.
+                      </p>
+                      {showAddSeg && (
+                        <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                          <p className="text-xs font-medium">Add missing text / speaker</p>
+                          <div className="flex gap-2">
+                            <input
+                              className="w-24 rounded-md border bg-background px-2 py-1.5 text-xs font-mono"
+                              placeholder="Start sec"
+                              value={addSegStart}
+                              onChange={(e) => setAddSegStart(e.target.value)}
+                            />
+                            <input
+                              className="flex-1 rounded-md border bg-background px-2 py-1.5 text-xs"
+                              placeholder="Speaker (optional)"
+                              value={addSegSpeaker}
+                              onChange={(e) => setAddSegSpeaker(e.target.value)}
+                              list="live-speakers"
+                            />
+                            <datalist id="live-speakers">
+                              {speakers.map((sp) => <option key={sp} value={sp} />)}
+                            </datalist>
+                          </div>
+                          <textarea
+                            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm min-h-[64px]"
+                            placeholder="Type the words you hear at this time…"
+                            value={addSegText}
+                            onChange={(e) => setAddSegText(e.target.value)}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" onClick={addManualSegment}>Add line</Button>
+                            <Button size="sm" variant="secondary" disabled={isGapTranscribing || !resolveRecordingSrc()?.startsWith("http")} onClick={transcribeGapFromLast}>
+                              {isGapTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                              Auto-fill gap with Groq
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setShowAddSeg(false)}>Cancel</Button>
+                          </div>
+                        </div>
+                      )}
                       {transcript ? (
                         segments.length > 0 ? (
-                          <div className="space-y-1 max-h-80 overflow-y-auto">
-                            {segments.slice(0, 120).map((s, i) => {
+                          <div className="space-y-1 max-h-96 overflow-y-auto">
+                            {segments.map((s, i) => {
                               const active = playingSegIndex === i;
+                              const selected = selectedSegIndex === i;
+                              const editing = editingSegIndex === i;
                               return (
                                 <div
                                   key={i}
-                                  className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-sm ${active ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-muted/50"}`}
+                                  className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-sm transition ${
+                                    active ? "bg-primary/15 ring-1 ring-primary" : selected ? "bg-muted ring-1 ring-border" : "hover:bg-muted/50"
+                                  }`}
+                                  onClick={() => setSelectedSegIndex(i)}
                                 >
                                   <button
                                     type="button"
                                     className="mt-0.5 shrink-0 w-7 h-7 rounded-full border flex items-center justify-center bg-background"
                                     title={active && isSegPlaying ? "Pause" : "Play from here"}
-                                    onClick={() => toggleSegmentPlay(i, s.start || 0)}
+                                    onClick={(e) => { e.stopPropagation(); toggleSegmentPlay(i, s.start || 0); }}
                                   >
                                     {active && isSegPlaying ? (
                                       <Pause className="w-3.5 h-3.5" />
@@ -1764,24 +1973,28 @@ export default function LiveSession() {
                                       <Play className="w-3.5 h-3.5" />
                                     )}
                                   </button>
-                                  {active && (
-                                    <button
-                                      type="button"
-                                      className="mt-0.5 shrink-0 w-7 h-7 rounded-full border flex items-center justify-center bg-background text-destructive"
-                                      title="Stop"
-                                      onClick={stopSegmentAudio}
-                                    >
-                                      <Square className="w-3 h-3 fill-current" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="flex-1 text-left min-w-0"
-                                    onClick={() => toggleSegmentPlay(i, s.start || 0)}
-                                  >
-                                    <span className="text-xs font-mono text-primary mr-2">{formatDuration(s.start || 0)}</span>
-                                    {s.text}
-                                  </button>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                      <span className="text-xs font-mono text-primary">{formatDuration(s.start || 0)}</span>
+                                      {s.speaker && <span className="text-[10px] font-semibold text-muted-foreground">{s.speaker}</span>}
+                                    </div>
+                                    {editing ? (
+                                      <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
+                                        <textarea
+                                          className="w-full rounded-md border bg-background px-2 py-1 text-sm min-h-[56px]"
+                                          value={editSegDraft}
+                                          onChange={(e) => setEditSegDraft(e.target.value)}
+                                          autoFocus
+                                        />
+                                        <div className="flex gap-2">
+                                          <Button size="sm" onClick={saveSegEdit}>Apply</Button>
+                                          <Button size="sm" variant="ghost" onClick={() => setEditingSegIndex(null)}>Cancel</Button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <p className="text-left leading-snug">{s.text}</p>
+                                    )}
+                                  </div>
                                 </div>
                               );
                             })}
@@ -1794,8 +2007,7 @@ export default function LiveSession() {
                       )}
                     </div>
 
-                    <div className="rounded-xl border bg-card p-4 space-y-3">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Files</p>
                       {photos.length === 0 && !audioUrl ? (
                         <p className="text-sm text-muted-foreground">No files on this page yet.</p>
                       ) : (

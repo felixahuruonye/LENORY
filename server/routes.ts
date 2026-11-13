@@ -4855,21 +4855,33 @@ ${EXAM_BOOKLET_MODE_PROMPT}
   async function transcribeFileWithGroq(filePath: string, apiKey: string, language: string) {
     const { default: OpenAI } = await import("openai");
     const groqClient = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
-    const opts: any = {
-      file: fs.createReadStream(filePath) as any,
-      model: "whisper-large-v3-turbo",
-      response_format: "verbose_json",
-    };
-    if (language && language !== "auto") opts.language = language;
-    try {
-      return await groqClient.audio.transcriptions.create(opts);
-    } catch (e) {
-      // Retry without language
-      return await groqClient.audio.transcriptions.create({
+    // Prefer full whisper-large-v3 for fewer dropped words; turbo as fallback (faster/cheaper)
+    const primary = process.env.GROQ_WHISPER_MODEL || "whisper-large-v3";
+    const fallback = primary === "whisper-large-v3-turbo" ? "whisper-large-v3" : "whisper-large-v3-turbo";
+    const tryModel = async (model: string, withLang: boolean) => {
+      const opts: any = {
         file: fs.createReadStream(filePath) as any,
-        model: "whisper-large-v3-turbo",
+        model,
         response_format: "verbose_json",
-      } as any);
+        temperature: 0,
+      };
+      if (withLang && language && language !== "auto") opts.language = language;
+      // Discourage pure hallucination of silence; still may omit quiet speech
+      opts.prompt = "Transcribe every spoken word completely. Include repeated words if spoken. Do not summarize.";
+      return groqClient.audio.transcriptions.create(opts);
+    };
+    try {
+      return await tryModel(primary, true);
+    } catch (e1) {
+      try {
+        return await tryModel(primary, false);
+      } catch (e2) {
+        try {
+          return await tryModel(fallback, false);
+        } catch (e3) {
+          throw e3;
+        }
+      }
     }
   }
 
@@ -4958,6 +4970,54 @@ ${EXAM_BOOKLET_MODE_PROMPT}
     const { bufferBase64, originalname, language, tier, email } = job.payload;
     const buffer = Buffer.from(bufferBase64, "base64");
     return processTranscriptionBuffer(buffer, originalname, language || "auto", job.userId, email, tier || "free");
+  });
+
+  /** Transcribe only a time range of an already-uploaded lecture (fill gaps). */
+  app.post("/api/groq/transcribe-range", supabaseAuth, groqUpload.single("audio"), async (req: any, res: Response) => {
+    try {
+      if (!req.file?.buffer) return res.status(400).json({ message: "Audio file required" });
+      const startSec = Math.max(0, Number(req.body?.startSec) || 0);
+      const endSec = req.body?.endSec != null ? Math.max(startSec, Number(req.body.endSec)) : undefined;
+      const language = String(req.body?.language || "auto");
+      const apiKey = process.env.GROQ_API_KEY;
+      if (!apiKey) return res.status(503).json({ message: "Speech-to-text unavailable" });
+
+      const tmpIn = path.join(os.tmpdir(), `range_in_${Date.now()}_${(req.file.originalname || "a").replace(/[^\\w.-]+/g, "_")}`);
+      fs.writeFileSync(tmpIn, req.file.buffer);
+      const tmpClip = path.join(os.tmpdir(), `range_clip_${Date.now()}.mp3`);
+      try {
+        const { execFile } = await import("child_process");
+        const { promisify } = await import("util");
+        const execFileAsync = promisify(execFile);
+        const args = ["-y", "-i", tmpIn, "-ss", String(startSec)];
+        if (endSec != null && Number.isFinite(endSec)) {
+          args.push("-to", String(endSec));
+        }
+        args.push("-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", tmpClip);
+        await execFileAsync("ffmpeg", args, { timeout: 120000 });
+        const data: any = await transcribeFileWithGroq(tmpClip, apiKey, language);
+        const segs = (data.segments || []).map((s: any) => ({
+          text: String(s.text || "").trim(),
+          start: (Number(s.start) || 0) + startSec,
+          end: (Number(s.end) || 0) + startSec,
+          speaker: s.speaker || undefined,
+        }));
+        res.json({
+          text: String(data.text || "").trim(),
+          segments: segs,
+          language: data.language,
+          duration: data.duration,
+          rangeStart: startSec,
+          rangeEnd: endSec,
+        });
+      } finally {
+        try { fs.unlinkSync(tmpIn); } catch {}
+        try { fs.unlinkSync(tmpClip); } catch {}
+      }
+    } catch (e: any) {
+      console.error("[transcribe-range]", e);
+      res.status(500).json({ message: e?.message || "Range transcription failed" });
+    }
   });
 
   app.post("/api/groq/transcribe", supabaseAuth, groqUpload.single("audio"), async (req: any, res: Response) => {
