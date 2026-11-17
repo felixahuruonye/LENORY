@@ -1025,19 +1025,24 @@ export async function analyzeFileWithGeminiVision(buffer: Buffer, mimeType: stri
       setTimeout(() => reject(new Error("GEMINI_TIMEOUT: Vision analysis took too long — try a smaller file")), 25000)
     );
 
+    // Use the same contents shape as the working video/OCR paths:
+    // [{ parts: [inlineData, text] }] — the previous flat array of objects
+    // was rejected by the @google/genai SDK and caused Vision to fail silently.
     const analysisPromise = ai.models.generateContent({
       model: await geminiModelId(),
-      contents: [
-        {
-          inlineData: {
-            mimeType: mimeType || "application/octet-stream",
-            data: base64Data
+      contents: [{
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType || "application/octet-stream",
+              data: base64Data
+            }
+          },
+          {
+            text: "Extract and return all text content from this file. If it's an image, describe the content in detail. If it's a PDF or document, extract the full text. If it's a video, summarize what happens and extract any spoken or on-screen text. Be thorough."
           }
-        },
-        {
-          text: "Extract and return all text content from this file. If it's an image, describe the content in detail. If it's a PDF or document, extract the full text. Be thorough."
-        }
-      ] as any,
+        ]
+      }] as any,
       config: { thinkingConfig: { thinkingBudget: 0 } } as any,
     });
 
@@ -1366,17 +1371,19 @@ export async function transcribeAudio(audioFilePath: string): Promise<{ text: st
 
     const response = await ai.models.generateContent({
       model: await geminiModelId(),
-      contents: [
-        {
-          inlineData: {
-            mimeType: mimeType,
-            data: base64Audio
+      contents: [{
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Audio
+            }
+          },
+          {
+            text: "Please transcribe all the spoken words in this audio file accurately. Return only the transcription text, nothing else."
           }
-        },
-        {
-          text: "Please transcribe all the spoken words in this audio file accurately. Return only the transcription text, nothing else."
-        }
-      ] as any
+        ]
+      }] as any
     });
 
     return {

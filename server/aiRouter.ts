@@ -47,7 +47,7 @@ const GLM = M("openrouter", "z-ai/glm-5.2", "GLM 5.2");
 const DSEEK = M("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash");
 // Groq: keep OSS models; Qwen id must match console.groq.com (404s were taking Fast offline)
 const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
-const QWEN = M("groq", "qwen/qwen3-32b", "Qwen3 32B");
+const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen3.8 27B"); // updated from qwen3-32b which 404'd
 const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
 // Gemini chat models (Vision lane). Prefer widely available ids; 404s go on short cooldown.
 const G35 = M("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
