@@ -607,3 +607,23 @@ export async function validateLaneModels(): Promise<ModelCheck[]> {
 }
 setTimeout(() => { validateLaneModels().then((r) => { const bad = r.filter((x) => x.status !== "ok"); console.log(`[models] self-check: ${r.length - bad.length}/${r.length} lane models confirmed${bad.length ? "; problems: " + bad.map((b) => `${b.label} ${b.status}`).join(", ") : ""}`); }).catch(() => {}); }, 8000).unref?.();
 setInterval(() => { validateLaneModels().catch(() => {}); }, 6 * 3600_000).unref?.();
+
+/** Fire a tiny request against the preferred model of each lane so the first
+ *  real user message after deploy / long idle doesn't pay cold-start latency.
+ *  Safe to call multiple times; failures are ignored. */
+export async function warmPreferredModels(): Promise<void> {
+  const tiny = [{ role: "user", content: "ping" }];
+  const jobs: Promise<unknown>[] = [];
+  // Prefer the cheapest/simple model per lane so we don't burn expensive quota.
+  for (const lane of ["fast", "ultra", "vision"] as ChatLane[]) {
+    const chain = laneChain(lane, false);
+    const spec = chain.find((s) => !isOnCooldown(s) && laneKeyOk(s)) || chain[0];
+    if (!spec || !laneKeyOk(spec)) continue;
+    jobs.push(
+      callModel(spec, tiny as ChatMsg[])
+        .then(() => console.log(`[warm] ${spec.label} ready`))
+        .catch((e) => console.warn(`[warm] ${spec.label} skipped:`, String(e?.message || e).slice(0, 80)))
+    );
+  }
+  await Promise.allSettled(jobs);
+}

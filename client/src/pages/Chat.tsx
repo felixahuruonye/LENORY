@@ -1127,6 +1127,15 @@ export default function Chat() {
     // credited AI flow instead of a separate free, untracked search-only path.
 
     // Normal AI chat
+    // Show thinking UI immediately (before session creation) so brand-new chats
+    // don't feel like a blank pause while the first /api/chat/sessions round-trip runs.
+    setIsLoading(true);
+    setLatestSources(null); setLatestArtifacts(null);
+    setChatAction("thinking");
+    setChatSteps([{ status: "thinking" }]);
+    setWorkStartedAt(Date.now());
+    setStreamImages([]);
+
     let sessionId = currentSessionId;
     if (!sessionId) {
       try {
@@ -1136,18 +1145,15 @@ export default function Chat() {
         switchToSession(session.id);
         queryClient.invalidateQueries({ queryKey: ["/api/chat/sessions"] });
       } catch {
+        setIsLoading(false);
+        setChatAction(null);
+        setChatSteps([]);
         toast({ title: "Error", description: "Failed to create chat session", variant: "destructive" });
         return;
       }
     }
 
     try {
-      setIsLoading(true);
-      setLatestSources(null); setLatestArtifacts(null);
-      setChatAction(null);
-      setChatSteps([]);
-      setWorkStartedAt(Date.now());
-      setStreamImages([]);
       const combinedContent = pastedFile
         ? `${message.trim() ? message.trim() + "\n\n" : ""}[Attached file: ${pastedFile.name}]\n\n${pastedFile.content}`
         : message.trim();

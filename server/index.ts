@@ -152,5 +152,14 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    // Warm preferred models a few seconds after boot so the first real chat
+    // after deploy doesn't pay cold-start latency. Re-warm every 45 min so
+    // long-idle instances stay responsive.
+    setTimeout(() => {
+      import("./aiRouter").then(({ warmPreferredModels }) => {
+        warmPreferredModels().catch(() => {});
+        setInterval(() => { warmPreferredModels().catch(() => {}); }, 45 * 60 * 1000).unref?.();
+      }).catch(() => {});
+    }, 12_000).unref?.();
   });
 })();

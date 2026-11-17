@@ -553,21 +553,22 @@ app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
       // If the user asked for a real downloadable file, generate it here and
       // return immediately. Never let the general LLM say "I cannot create PDFs".
 
-      const user = await storage.getUser(userId);
+      // Parallelize independent early reads (user + session) to cut first-message latency.
+      const [user, existingSession] = await Promise.all([
+        storage.getUser(userId),
+        sessionId ? storage.getChatSession(sessionId) : Promise.resolve(null),
+      ]);
       const userName = user?.firstName || "Friend";
       // Credit check moved below (see "Tier-aware credit check" further down) —
       // it now runs AFTER we know whether this message qualifies for Ultra mode
       // and whether a Knowledge Base folder is linked, so the real cost of the
       // message can actually be charged instead of a flat 1 credit regardless
       // of which model answers it.
-      let currentSession: any = null;
-      if (sessionId) {
-        currentSession = await storage.getChatSession(sessionId);
-        if (!currentSession) {
-          const newSession = await storage.createChatSession({ userId, title: "New Chat", mode: "chat", summary: "" });
-          sessionId = newSession.id;
-          currentSession = newSession;
-        }
+      let currentSession: any = existingSession;
+      if (sessionId && !currentSession) {
+        const newSession = await storage.createChatSession({ userId, title: "New Chat", mode: "chat", summary: "" });
+        sessionId = newSession.id;
+        currentSession = newSession;
       }
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "user", content, attachments: null });
       const currentSessionMessages = sessionId ? await storage.getChatMessagesBySession(sessionId) : [];
@@ -1105,7 +1106,11 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
         res.write(`data: ${JSON.stringify(data)}\n\n`);
       };
       sendEvent({ type: 'status', status: 'thinking', estimatedTimeRemaining: 5 });
-      const user = await storage.getUser(userId);
+      // Parallelize independent early reads (user + session) for lower first-message latency.
+      const [user, existingSession] = await Promise.all([
+        storage.getUser(userId),
+        sessionId ? storage.getChatSession(sessionId) : Promise.resolve(null),
+      ]);
       const userName = user?.firstName || "Friend";
       const isAdminUser = user?.email === REAL_ADMIN_EMAIL;
       const streamTier = (user as any)?.subscriptionTier || 'free';
@@ -1129,14 +1134,11 @@ app.post("/api/assistant/run", supabaseAuth, async (req: any, res: Response) => 
         }
         await deductCredits(userId, totalCost);
       }
-      let currentSession: any = null;
-      if (sessionId) {
-        currentSession = await storage.getChatSession(sessionId);
-        if (!currentSession) {
-          const newSession = await storage.createChatSession({ userId, title: "New Chat", mode: "chat", summary: "" });
-          sessionId = newSession.id;
-          currentSession = newSession;
-        }
+      let currentSession: any = existingSession;
+      if (sessionId && !currentSession) {
+        const newSession = await storage.createChatSession({ userId, title: "New Chat", mode: "chat", summary: "" });
+        sessionId = newSession.id;
+        currentSession = newSession;
       }
       await storage.createChatMessage({ userId, sessionId: sessionId || null, role: "user", content, attachments: null });
       const currentSessionMessages = sessionId ? await storage.getChatMessagesBySession(sessionId) : [];
