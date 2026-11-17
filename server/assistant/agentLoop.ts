@@ -21,6 +21,7 @@ import { toolRequestDelete } from "./tools/deleteFlow";
 import { toolGenerateDiagram } from "./tools/svgDiagram";
 import { toolGenerateImage, toolEditImage, toolUpscaleImage, toolControlImage, toolImageTo3D } from "./tools/images";
 import { sandboxConfigured, toolRunCode, toolListProjects, toolCreateProject, toolAddProjectFile, toolAddProjectTask } from "./tools/extra";
+import { toolBrowserOpenAndRead, toolBrowserScreenshot, toolBrowserGetTaskStatus } from "./tools/browser";
 
 export interface AgentInput {
   userId: string;
@@ -131,6 +132,16 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
     run: (c, a) => toolMemorySave(c, a) },
   { cap: "memory", intent: /\b(remember|memory|what do you know about me)\b/i,
     schema: fn("memory_list", "List what is currently saved in the student's memory.", {}, []), run: (c) => toolMemoryList(c) },
+  // LENORY ACTIONS — browser tools (gated by browserAutomation; master flag checked inside tools)
+  { cap: "browserAutomation", intent: /\b(open|visit|browse|browser|website|web page|screenshot|navigate|go to)\b/i,
+    schema: fn("browser_open_and_read", "Open a public http(s) website with the remote LENORY browser, read the page text, and optionally capture a screenshot. Use when the student asks to open a site, read a page, or take a screenshot. Only public websites — never localhost or private IPs. Returns title, text, task id, screenshots.", { url: { type: "string", description: "Full public URL including https://" }, screenshot: { type: "boolean", description: "Capture screenshot (default true)" }, description: { type: "string", description: "Short task label" } }, ["url"]),
+    run: (c, a) => toolBrowserOpenAndRead(c, a) },
+  { cap: "browserAutomation", intent: /\b(screenshot|capture|snap)\b/i,
+    schema: fn("browser_screenshot", "Open a public URL in the remote browser and capture a screenshot.", { url: { type: "string" } }, ["url"]),
+    run: (c, a) => toolBrowserScreenshot(c, a) },
+  { cap: "browserAutomation", intent: /\b(task status|browser task|action task)\b/i,
+    schema: fn("browser_get_task_status", "Get status, events, and screenshots for a LENORY ACTIONS browser task by id.", { taskId: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserGetTaskStatus(c, a) },
 ];
 
 const MAX_STEPS = 6;
@@ -155,7 +166,12 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   const lastUser = [...input.history].reverse().find((m) => m.role === "user")?.content || "";
 
   let lane = input.lane || 'fast';
-  let defs = DEFS.filter((d) => caps[d.cap] && (d.schema.function.name !== "run_code" || sandboxConfigured()));
+  let defs = DEFS.filter((d) => {
+    if (d.schema.function.name === "run_code" && !sandboxConfigured()) return false;
+    if (!caps[d.cap]) return false;
+    if (d.cap === "browserAutomation" && !caps.lenoryActions) return false;
+    return true;
+  });
   if (caps.toolAccess === "on_demand") defs = defs.filter((d) => d.intent.test(lastUser));
   const byName = new Map(defs.map((d) => [d.schema.function.name, d]));
   if (byName.size !== defs.length) console.error(`[agent] duplicate tool names removed: ${defs.map((d) => d.schema.function.name).filter((n, i, a) => a.indexOf(n) !== i).join(", ")}`);

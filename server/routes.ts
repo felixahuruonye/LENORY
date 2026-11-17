@@ -527,6 +527,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── LENORY ACTIONS ───────────────────────────────────────────────────────
+  app.get("/api/actions/tasks", supabaseAuth, async (req: any, res) => {
+    try {
+      const { listUserTasks } = await import("./actions/taskService");
+      const tasks = await listUserTasks(req.userId, 40);
+      res.json({ success: true, tasks });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message || "Failed to list tasks" });
+    }
+  });
+  app.get("/api/actions/tasks/:id", supabaseAuth, async (req: any, res) => {
+    try {
+      const { getActionTask, listEvents, listArtifacts } = await import("./actions/taskService");
+      const task = await getActionTask(req.params.id, req.userId);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+      const events = await listEvents(task.id, req.userId);
+      const artifacts = await listArtifacts(task.id, req.userId);
+      res.json({ success: true, task, events, artifacts });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message });
+    }
+  });
+  app.post("/api/actions/tasks/:id/cancel", supabaseAuth, async (req: any, res) => {
+    try {
+      const { getActionTask, updateTaskStatus } = await import("./actions/taskService");
+      const task = await getActionTask(req.params.id, req.userId);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+      if (["completed", "failed", "cancelled", "timed_out"].includes(task.status)) {
+        return res.json({ success: true, task });
+      }
+      await updateTaskStatus(task.id, req.userId, "cancelled", { error: "Cancelled by user" });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message });
+    }
+  });
+
 app.post('/api/chat/send', supabaseAuth, async (req: any, res: Response) => {
     const wantsStream = req.body?.stream === true;
     let clientGone = false;

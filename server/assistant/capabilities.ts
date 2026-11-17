@@ -1,7 +1,10 @@
 /**
  * Claude-style capability switches for LENORY, persisted per user in the
  * existing memory_entries table (type = "capabilities") so they survive
- * Render restarts. No new table / migration required.
+ * Render restarts. No new table / migration required for the flags themselves.
+ *
+ * LENORY ACTIONS adds: lenoryActions (master), browserAutomation, requireApprovalForSensitive.
+ * Backend enforces these — the model never sees action tools when the master flag is off.
  */
 import { storage } from "../storage";
 
@@ -22,6 +25,15 @@ export interface UserCapabilities {
   projects: boolean;
   /** Make and edit pictures in chat (Stability on Ultra/Fast, Nano Banana on Vision) */
   imageGeneration: boolean;
+  /**
+   * Master switch for LENORY ACTIONS (browser automation + connected tools).
+   * Backend-enforced: when false, no action/browser tools are exposed to the model.
+   */
+  lenoryActions: boolean;
+  /** Sub-toggle: allow remote browser automation when Actions is on */
+  browserAutomation: boolean;
+  /** Sensitive actions (submit forms, publish, send) require explicit user approval */
+  requireApprovalForSensitive: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: UserCapabilities = {
@@ -35,9 +47,25 @@ export const DEFAULT_CAPABILITIES: UserCapabilities = {
   codeExecution: false,
   projects: true,
   imageGeneration: true,
+  lenoryActions: false,
+  browserAutomation: false,
+  requireApprovalForSensitive: true,
 };
 
-const BOOL_KEYS = ["webSearch", "fileCreation", "artifacts", "memory", "knowledgeBase", "kbWrite", "codeExecution", "projects", "imageGeneration"] as const;
+const BOOL_KEYS = [
+  "webSearch",
+  "fileCreation",
+  "artifacts",
+  "memory",
+  "knowledgeBase",
+  "kbWrite",
+  "codeExecution",
+  "projects",
+  "imageGeneration",
+  "lenoryActions",
+  "browserAutomation",
+  "requireApprovalForSensitive",
+] as const;
 
 /** Accept only known keys with the right types (never trust raw client JSON). */
 export function sanitizeCapabilities(input: any): Partial<UserCapabilities> {
@@ -74,6 +102,8 @@ export async function loadUserCapabilities(userId: string): Promise<UserCapabili
 
 export async function saveUserCapabilities(userId: string, next: any): Promise<UserCapabilities> {
   const merged = { ...(await loadUserCapabilities(userId)), ...sanitizeCapabilities(next) };
+  // If master Actions is off, force browser off so UI/backend stay consistent
+  if (!merged.lenoryActions) merged.browserAutomation = false;
   await storage.createMemoryEntry({ userId, type: "capabilities", data: merged as any });
   cache.set(userId, { caps: merged, at: Date.now() });
   return merged;
@@ -87,5 +117,8 @@ export function capabilityAvailability() {
     codeExecution: !!process.env.CODE_SANDBOX_URL,
     imageGeneration: !!(process.env.STABILITY_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
     webSearch: !!(process.env.TAVILY_API_KEY || process.env.GEMINI_API_KEY),
+    /** True when Playwright is available in this process (worker or web with browsers installed) */
+    browserAutomation: process.env.ACTIONS_BROWSER_ENABLED === "1" || process.env.PLAYWRIGHT_AVAILABLE === "1",
+    actionsWorker: process.env.ACTIONS_WORKER === "1" || process.env.ACTIONS_WORKER_URL ? true : false,
   };
 }

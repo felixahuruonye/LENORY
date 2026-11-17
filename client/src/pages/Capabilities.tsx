@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { ArrowLeft, Globe, FileText, Brain, FolderOpen, Sparkles, Wrench, Terminal, Briefcase } from "lucide-react";
+import { ArrowLeft, Globe, FileText, Brain, FolderOpen, Sparkles, Wrench, Terminal, Briefcase, Bot, Settings2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -16,6 +16,9 @@ type Caps = {
   kbWrite: boolean;
   codeExecution: boolean;
   projects: boolean;
+  lenoryActions: boolean;
+  browserAutomation: boolean;
+  requireApprovalForSensitive: boolean;
 };
 type Avail = { codeExecution: boolean; imageGeneration: boolean; webSearch: boolean };
 
@@ -29,6 +32,9 @@ const DEFAULTS: Caps = {
   kbWrite: true,
   codeExecution: false,
   projects: true,
+  lenoryActions: false,
+  browserAutomation: false,
+  requireApprovalForSensitive: true,
 };
 
 export default function Capabilities() {
@@ -145,6 +151,43 @@ export default function Capabilities() {
                 on={caps.codeExecution && (avail ? avail.codeExecution : true)}
                 onToggle={() => { if (avail && !avail.codeExecution) { toast({ title: "Sandbox not set up", description: "An admin must set CODE_SANDBOX_URL first." }); return; } toggle("codeExecution"); }}
               />
+            </CardContent>
+          </Card>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+            <Bot className="w-4 h-4" /> LENORY ACTIONS
+          </h2>
+          <Card>
+            <CardContent className="p-0 divide-y">
+              <div className="flex items-start gap-3 px-4 py-3">
+                <div className="mt-0.5 text-muted-foreground"><Bot className="w-5 h-5" /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">LENORY ACTIONS</div>
+                  <div className="text-sm text-muted-foreground">
+                    Give LENORY the ability to use connected tools, interact with supported websites, automate permitted workflows, and complete tasks on your behalf.
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 items-center">
+                    <Link href="/capabilities/actions">
+                      <button type="button" className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border bg-background hover:bg-muted">
+                        <Settings2 className="w-3.5 h-3.5" /> Configure
+                      </button>
+                    </Link>
+                    <span className="text-xs text-muted-foreground">
+                      {caps.lenoryActions ? (caps.browserAutomation ? "Browser on" : "Enabled · browser off") : "Disabled"}
+                    </span>
+                  </div>
+                </div>
+                <Switch
+                  checked={!!caps.lenoryActions}
+                  onCheckedChange={() => {
+                    const next = { ...caps, lenoryActions: !caps.lenoryActions } as Caps;
+                    if (!next.lenoryActions) next.browserAutomation = false;
+                    save(next);
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
         </section>
