@@ -99,6 +99,16 @@ export async function generateWithPollinations(prompt: string): Promise<ImagePro
 // quota. Unlike NexaAPI, this needs no new key from Felix — OPENROUTER_API_KEY
 // is already configured and used elsewhere (Ultra-tier chat), so this is
 // ready to work immediately.
+// Vision-capable OpenRouter models tried in order. If one returns 404 / no
+// access / quota, we move to the next instead of failing the whole analysis.
+const OPENROUTER_VISION_MODELS = [
+  "openai/gpt-4o-mini",
+  "openai/gpt-4o",
+  "google/gemini-2.0-flash-001",
+  "google/gemini-flash-1.5",
+  "anthropic/claude-3.5-sonnet",
+];
+
 export async function analyzeFilesWithOpenRouterVision(
   files: { base64: string; mimeType: string; fileName?: string }[],
   instruction: string
@@ -116,32 +126,44 @@ export async function analyzeFilesWithOpenRouterVision(
     content.push({ type: "image_url", image_url: { url: `data:${f.mimeType};base64,${f.base64}` } });
   }
 
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://lenory.app",
-      "X-Title": "LENORY AI",
-    },
-    body: JSON.stringify({
-      // gpt-4o-mini: reliable, cheap, genuinely vision-capable, broadly
-      // available on OpenRouter — a different provider and quota bucket
-      // entirely from Gemini, which is the whole point of this fallback.
-      model: "openai/gpt-4o-mini",
-      messages: [{ role: "user", content }],
-      max_tokens: 4096,
-    }),
-    signal: AbortSignal.timeout(60000),
-  });
+  const errors: string[] = [];
+  for (const model of OPENROUTER_VISION_MODELS) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://lenory.app",
+          "X-Title": "LENORY AI",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content }],
+          max_tokens: 4096,
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`OpenRouter vision error (${res.status}): ${errText.slice(0, 300)}`);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        errors.push(`${model}: ${res.status} ${errText.slice(0, 120)}`);
+        // 404 / model not found → try next; 401/403 → key problem, still try next
+        // in case only some models are gated; 429 → try next (different bucket)
+        continue;
+      }
+
+      const data: any = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (text) {
+        console.log(`✅ OpenRouter vision via ${model}`);
+        return text;
+      }
+      errors.push(`${model}: empty content`);
+    } catch (e) {
+      errors.push(`${model}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 150));
+    }
   }
 
-  const data: any = await res.json();
-  const text = data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error("OpenRouter vision returned no content");
-  return text;
+  throw new Error(`OpenRouter vision error (all models failed): ${errors.join(" | ").slice(0, 400)}`);
 }

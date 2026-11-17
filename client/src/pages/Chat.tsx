@@ -700,7 +700,12 @@ export default function Chat() {
                 analysis = event.analysis || analysis;
               } else if (event.type === "error") {
                 failed = true;
-                failMsg = event.message || "Analysis failed";
+                // Prefer the detailed provider error when present so we can
+                // see e.g. "gemini: 404 | openrouter: 401" instead of only the
+                // generic "both providers unavailable" banner.
+                failMsg = event.detail
+                  ? `${event.message || "Analysis failed"} (${String(event.detail).slice(0, 180)})`
+                  : (event.message || "Analysis failed");
               }
             }
           }

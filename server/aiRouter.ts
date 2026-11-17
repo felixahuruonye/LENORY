@@ -50,9 +50,10 @@ const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
 const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen3.8 27B"); // updated from qwen3-32b which 404'd
 const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
 // Gemini chat models (Vision lane). Prefer widely available ids; 404s go on short cooldown.
+// Include gemini-2.0-flash as a reliable fallback when 3.x is not enabled on the API key.
 const G35 = M("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
 const G3 = M("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash");
-const GLITE = M("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite");
+const GLITE = M("gemini", "gemini-2.0-flash", "Gemini 2.0 Flash");
 export type ChatLane = "ultra" | "fast" | "vision";
 export const LANE_ORDER: Record<ChatLane, { heavy: ModelSpec[]; simple: ModelSpec[] }> = {
   ultra: { heavy: [SONNET, GLM, DSEEK], simple: [DSEEK, GLM, SONNET] },
