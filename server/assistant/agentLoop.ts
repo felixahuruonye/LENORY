@@ -173,6 +173,13 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
     return true;
   });
   if (caps.toolAccess === "on_demand") defs = defs.filter((d) => d.intent.test(lastUser));
+  // Fast path: short plain questions do not need the full tool catalog (cuts first-message latency).
+  const SIMPLE_CHAT = lastUser.length < 280 && !/\b(pdf|docx|pptx|xlsx|file|download|generate|create|search|research|image|picture|diagram|code|run|execute|folder|notes?|knowledge base|browse|http|www\.)\b/i.test(lastUser);
+  if (SIMPLE_CHAT && caps.toolAccess !== "always") defs = [];
+  else if (SIMPLE_CHAT && caps.toolAccess === "always") {
+    // Still skip heavy tools on tiny greetings / one-liners
+    defs = defs.filter((d) => d.intent.test(lastUser));
+  }
   const byName = new Map(defs.map((d) => [d.schema.function.name, d]));
   if (byName.size !== defs.length) console.error(`[agent] duplicate tool names removed: ${defs.map((d) => d.schema.function.name).filter((n, i, a) => a.indexOf(n) !== i).join(", ")}`);
   const schemas = [...byName.values()].map((d) => d.schema);

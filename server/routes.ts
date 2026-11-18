@@ -2340,26 +2340,32 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("VIDEO_TIMEOUT")), 60000)
       );
-      // Try a few Gemini models so a single missing/quota'd id doesn't kill video analysis.
+      const { geminiModelCandidates } = await import("./aiRouter");
+      const models = geminiModelCandidates(true);
       let summary = "";
-      const videoModels = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
       let lastVideoErr: any = null;
-      for (const model of videoModels) {
+      for (const model of models) {
         try {
           const summaryPromise = ai.models.generateContent({
             model,
             contents: [{
+              role: "user",
               parts: [
-                { inlineData: { mimeType: req.file.mimetype, data: base64 } },
+                { inlineData: { mimeType: req.file.mimetype || "video/mp4", data: base64 } },
                 { text: "Watch this video and provide: 1) A clear summary of what it covers, 2) The key points a student should remember, organized as a short list. Focus on educational content — if it's a lecture or tutorial, structure the summary around the main topics covered in order." },
               ],
             }] as any,
           });
           const response = await Promise.race([summaryPromise, timeoutPromise]);
-          summary = (response as any).text || "";
-          if (summary) break;
+          summary = String((response as any).text || "").trim();
+          if (summary) {
+            console.log(`[video] ok via ${model}`);
+            break;
+          }
+          lastVideoErr = new Error(`${model}: empty`);
         } catch (e) {
           lastVideoErr = e;
+          console.warn(`[video] ${model}:`, String((e as any)?.message || e).slice(0, 120));
         }
       }
       if (!summary) {
@@ -3968,35 +3974,40 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       let analysis = "";
       const failures: string[] = [];
       if (geminiKey) {
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const GEMINI_VISION_MODELS = [
-          "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
-          "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash",
-        ];
-        for (const model of GEMINI_VISION_MODELS) {
-          if (analysis) break;
-          try {
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
-            );
-            const analysisPromise = ai.models.generateContent({
-              model,
-              contents: [{
-                parts: [
-                  { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
-                  { text: textInstruction },
-                ],
-              }] as any,
-            });
-            const response = await Promise.race([analysisPromise, timeoutPromise]);
-            analysis = (response as any).text || "";
-            if (!analysis) throw new Error("Gemini returned no content");
-          } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
-            console.warn(`Gemini vision (${model}) failed:`, reason.slice(0, 200));
-            failures.push(`gemini/${model}: ${reason.slice(0, 120)}`);
+        try {
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 50000)
+          );
+          const { geminiModelCandidates } = await import("./aiRouter");
+          const models = geminiModelCandidates(true);
+          let lastVisionErr = "";
+          for (const model of models) {
+            try {
+              const analysisPromise = ai.models.generateContent({
+                model,
+                contents: [{
+                  role: "user",
+                  parts: [
+                    { inlineData: { mimeType: mimeType || "application/octet-stream", data: base64 } },
+                    { text: textInstruction },
+                  ],
+                }] as any,
+              });
+              const response = await Promise.race([analysisPromise, timeoutPromise]);
+              analysis = String((response as any).text || "").trim();
+              if (analysis) { console.log(`[vision] ok via ${model}`); break; }
+              lastVisionErr = `${model}: empty`;
+            } catch (me: any) {
+              lastVisionErr = `${model}: ${String(me?.message || me).slice(0, 120)}`;
+              console.warn("[vision]", lastVisionErr);
+            }
           }
+          if (!analysis) throw new Error(lastVisionErr || "Gemini returned no content");
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn("Gemini vision analysis failed, trying OpenRouter fallback:", reason.slice(0, 300));
+          failures.push(`gemini: ${reason}`);
         }
       } else {
         failures.push("gemini: GEMINI_API_KEY not configured");
@@ -4108,25 +4119,36 @@ ${EXAM_BOOKLET_MODE_PROMPT}
         "gemini-1.5-flash",
       ];
       if (geminiKey) {
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
-        parts.push({ text: batchInstruction });
-        for (const model of GEMINI_VISION_MODELS) {
-          if (streamedAny) break;
-          try {
-            const streamGen = await ai.models.generateContentStream({
-              model,
-              contents: [{ parts }] as any,
-            });
-            send({ type: "status", status: "writing" });
-            for await (const chunk of streamGen) {
-              const chunkText = (chunk as any).text;
-              if (chunkText) {
-                fullText += chunkText;
-                streamedAny = true;
-                send({ type: "token", token: chunkText });
-              }
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
+          parts.push({ text: batchInstruction });
+          const { geminiModelCandidates } = await import("./aiRouter");
+          const streamModels = geminiModelCandidates(true);
+          let streamGen: any = null;
+          let streamModelUsed = "";
+          for (const model of streamModels) {
+            try {
+              streamGen = await ai.models.generateContentStream({
+                model,
+                contents: [{ role: "user", parts }] as any,
+              });
+              streamModelUsed = model;
+              break;
+            } catch (se: any) {
+              console.warn(`[vision-stream] ${model}:`, String(se?.message || se).slice(0, 120));
+            }
+          }
+          if (!streamGen) throw new Error("No Gemini model accepted this vision stream request");
+          console.log(`[vision-stream] using ${streamModelUsed}`);
+          send({ type: "status", status: "writing" });
+          for await (const chunk of streamGen) {
+            const chunkText = (chunk as any).text;
+            if (chunkText) {
+              fullText += chunkText;
+              streamedAny = true;
+              send({ type: "token", token: chunkText });
             }
             if (streamedAny) {
               console.log(`✅ Gemini vision stream via ${model}`);
@@ -4302,33 +4324,40 @@ ${EXAM_BOOKLET_MODE_PROMPT}
       let usedProvider = "gemini";
       const failures: string[] = [];
       if (geminiKey) {
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
-        parts.push({ text: batchInstruction });
-        const GEMINI_VISION_MODELS = [
-          "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
-          "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash",
-        ];
-        for (const model of GEMINI_VISION_MODELS) {
-          if (analysis) break;
-          try {
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 75000)
-            );
-            const analysisPromise = ai.models.generateContent({
-              model,
-              contents: [{ parts }] as any,
-            });
-            const response = await Promise.race([analysisPromise, timeoutPromise]);
-            analysis = (response as any).text || "";
-            if (!analysis) throw new Error("Gemini returned no content");
-            console.log(`✅ Gemini vision batch via ${model}`);
-          } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
-            console.warn(`Gemini vision (${model}) failed:`, reason.slice(0, 200));
-            failures.push(`gemini/${model}: ${reason.slice(0, 120)}`);
+        try {
+          const ai = new GoogleGenAI({ apiKey: geminiKey });
+          // More content to read than a single-file request, so a bit more
+          // headroom than the 50s single-file timeout — still one round-trip,
+          // not N, so this is still faster overall than the old per-file loop
+          // for anything more than 1 file.
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 75000)
+          );
+          const parts: any[] = files.map(f => ({ inlineData: { mimeType: f.mimeType, data: f.base64 } }));
+          parts.push({ text: batchInstruction });
+          const { geminiModelCandidates } = await import("./aiRouter");
+          const batchModels = geminiModelCandidates(true);
+          let lastBatchErr = "";
+          for (const model of batchModels) {
+            try {
+              const analysisPromise = ai.models.generateContent({
+                model,
+                contents: [{ role: "user", parts }] as any,
+              });
+              const response = await Promise.race([analysisPromise, timeoutPromise]);
+              analysis = String((response as any).text || "").trim();
+              if (analysis) { console.log(`[vision-batch] ok via ${model}`); break; }
+              lastBatchErr = `${model}: empty`;
+            } catch (be: any) {
+              lastBatchErr = `${model}: ${String(be?.message || be).slice(0, 120)}`;
+              console.warn("[vision-batch]", lastBatchErr);
+            }
           }
+          if (!analysis) throw new Error(lastBatchErr || "Gemini returned no content");
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn("Gemini vision analysis failed, trying OpenRouter fallback:", reason.slice(0, 300));
+          failures.push(`gemini: ${reason}`);
         }
       } else {
         failures.push("gemini: GEMINI_API_KEY not configured");

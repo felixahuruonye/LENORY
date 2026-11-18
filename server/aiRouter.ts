@@ -42,24 +42,42 @@ interface ModelSpec {
 // the STRONGEST first. A model that hits its quota hands over to the next one in the
 // same lane; only when all three rest does the lane show a countdown.
 const M = (provider: ModelSpec["provider"], model: string, label: string): ModelSpec => ({ provider, model, label });
-const SONNET = M("openrouter", "anthropic/claude-sonnet-5", "Claude Sonnet 5");
-const GLM = M("openrouter", "z-ai/glm-5.2", "GLM 5.2");
-const DSEEK = M("openrouter", "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash");
-// Groq: keep OSS models; Qwen id must match console.groq.com (404s were taking Fast offline)
+// Model IDs drift — validateLaneModels renames when possible; keep several fall-backs per lane.
+const SONNET = M("openrouter", "anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5");
+const SONNET_ALT = M("openrouter", "anthropic/claude-sonnet-4", "Claude Sonnet 4");
+const GLM = M("openrouter", "z-ai/glm-4.5", "GLM 4.5");
+const DSEEK = M("openrouter", "deepseek/deepseek-chat-v3.1", "DeepSeek Chat");
+const OR_GEM = M("openrouter", "google/gemini-2.5-flash", "Gemini 2.5 Flash (OR)");
+// Groq: production IDs that stay on the free/paid catalog; OSS models when available
 const OSS120 = M("groq", "openai/gpt-oss-120b", "GPT-OSS 120B");
 const QWEN = M("groq", "qwen/qwen3.8-27b", "Qwen3.8 27B"); // updated from qwen3-32b which 404'd
+const LLAMA70 = M("groq", "llama-3.3-70b-versatile", "Llama 3.3 70B");
 const OSS20 = M("groq", "openai/gpt-oss-20b", "GPT-OSS 20B");
-// Gemini chat models (Vision lane). Prefer widely available ids; 404s go on short cooldown.
-// Include gemini-2.0-flash as a reliable fallback when 3.x is not enabled on the API key.
+const LLAMA8 = M("groq", "llama-3.1-8b-instant", "Llama 3.1 8B");
+// Gemini Vision/chat — stable 2.x first, then 3.x if the key has them
+const G25 = M("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash");
+const G20 = M("gemini", "gemini-2.0-flash", "Gemini 2.0 Flash");
 const G35 = M("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
 const G3 = M("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash");
-const GLITE = M("gemini", "gemini-2.0-flash", "Gemini 2.0 Flash");
+const GLITE = M("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite");
 export type ChatLane = "ultra" | "fast" | "vision";
 export const LANE_ORDER: Record<ChatLane, { heavy: ModelSpec[]; simple: ModelSpec[] }> = {
-  ultra: { heavy: [SONNET, GLM, DSEEK], simple: [DSEEK, GLM, SONNET] },
-  fast: { heavy: [OSS120, QWEN, OSS20], simple: [OSS20, OSS120, QWEN] },
-  vision: { heavy: [G3, G35, GLITE], simple: [GLITE, G3, G35] },
+  ultra: { heavy: [SONNET, GLM, DSEEK, SONNET_ALT, OR_GEM], simple: [DSEEK, OR_GEM, GLM, SONNET] },
+  fast: { heavy: [OSS120, QWEN, LLAMA70, OSS20], simple: [LLAMA8, OSS20, QWEN, LLAMA70] },
+  vision: { heavy: [G25, G20, G35, G3, GLITE], simple: [G20, G25, GLITE, G35] },
 };
+
+/** Ordered Gemini model ids for vision/files/video (env override first). */
+export function geminiModelCandidates(heavy = false): string[] {
+  const env = [process.env.GEMINI_VISION_MODEL, process.env.GEMINI_CHAT_MODEL, process.env.GEMINI_MODEL].filter(Boolean) as string[];
+  const chain = laneChain("vision", heavy).map((s) => s.model);
+  const extras = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
+  const out: string[] = [];
+  for (const id of [...env, ...chain, ...extras]) {
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
 export const LANE_NAMES: Record<ChatLane, string> = { ultra: "Ultra", fast: "Fast", vision: "Vision" };
 const laneKeyOk = (spec: ModelSpec) => (spec.provider === "openrouter" ? !!process.env.OPENROUTER_API_KEY : spec.provider === "groq" ? !!process.env.GROQ_API_KEY : !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY));
 export const laneChain = (lane: ChatLane, heavy = true): ModelSpec[] => (heavy ? LANE_ORDER[lane].heavy : LANE_ORDER[lane].simple);
@@ -115,7 +133,7 @@ export function clearAllModelCooldowns(): number {
 // itself is wrong: we mark it dead (skipped, visible in the self-test) instead of pretending it is resting.
 const dead = new Map<string, { until: number; reason: string }>();
 const isDead = (spec: ModelSpec) => { const d = dead.get(cooldownKey(spec)); if (!d) return false; if (Date.now() > d.until) { dead.delete(cooldownKey(spec)); return false; } return true; };
-function markDead(spec: ModelSpec, reason: string) { dead.set(cooldownKey(spec), { until: Date.now() + 30 * 60_000, reason }); console.error(`[models] ${spec.label} (${spec.model}) marked unavailable: ${reason}`); }
+function markDead(spec: ModelSpec, reason: string) { dead.set(cooldownKey(spec), { until: Date.now() + 8 * 60_000, reason }); console.error(`[models] ${spec.label} (${spec.model}) marked unavailable: ${reason}`); }
 function parseTryAgainSeconds(text: string): number | null {
   const m = String(text).match(/try again in (?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i) || String(text).match(/retry(?:Delay)?"?:?\s*"?(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i);
   return m ? Math.ceil((Number(m[1] || 0) * 60) + Number(m[2])) : null;
@@ -268,7 +286,7 @@ const windows = new Map<string, number[]>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Waits a little (max ~6s) to stay under the provider's per-minute budget; throws SOFT_LIMIT:<ms> if the wait would be longer. */
-export async function throttle(provider: string, maxWaitMs = 12000): Promise<void> {
+export async function throttle(provider: string, maxWaitMs = 4000): Promise<void> {
   const limit = RPM[provider] || 20;
   for (let i = 0; i < 3; i++) {
     const now = Date.now();

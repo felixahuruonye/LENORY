@@ -1017,46 +1017,58 @@ export async function analyzeFileWithGeminiVision(buffer: Buffer, mimeType: stri
       throw new Error("Gemini API key not configured");
     }
 
-    const base64Data = buffer.toString('base64');
+    const base64Data = buffer.toString("base64");
     console.log(`📄 Analyzing file with Gemini Vision: ${fileName} (${Math.round(buffer.length / 1024)}KB)`);
 
-    // 25-second hard timeout — prevents the 45s frontend timeout from firing first
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("GEMINI_TIMEOUT: Vision analysis took too long — try a smaller file")), 25000)
-    );
-
-    // Use the same contents shape as the working video/OCR paths:
-    // [{ parts: [inlineData, text] }] — the previous flat array of objects
-    // was rejected by the @google/genai SDK and caused Vision to fail silently.
-    const analysisPromise = ai.models.generateContent({
-      model: await geminiModelId(),
-      contents: [{
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType || "application/octet-stream",
-              data: base64Data
-            }
-          },
-          {
-            text: "Extract and return all text content from this file. If it's an image, describe the content in detail. If it's a PDF or document, extract the full text. If it's a video, summarize what happens and extract any spoken or on-screen text. Be thorough."
-          }
-        ]
-      }] as any,
-      config: { thinkingConfig: { thinkingBudget: 0 } } as any,
-    });
-
-    const response = await Promise.race([analysisPromise, timeoutPromise]);
-    const extractedText = (response as any).text || "";
-    console.log(`✅ Vision extracted ${extractedText.length} characters from ${fileName}`);
-
-    return { extractedText };
+    const { geminiModelCandidates } = await import("./aiRouter");
+    const models = geminiModelCandidates(true);
+    let lastErr = "";
+    for (const model of models) {
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("GEMINI_TIMEOUT: Vision analysis took too long — try a smaller file")), 45000)
+        );
+        const analysisPromise = ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType || "application/octet-stream",
+                    data: base64Data,
+                  },
+                },
+                {
+                  text: "Extract and return all text content from this file. If it's an image, describe the content in detail. If it's a PDF or document, extract the full text. Be thorough.",
+                },
+              ],
+            },
+          ] as any,
+          config: { thinkingConfig: { thinkingBudget: 0 } } as any,
+        });
+        const response = await Promise.race([analysisPromise, timeoutPromise]);
+        const extractedText = String((response as any).text || "").trim();
+        if (extractedText) {
+          console.log(`✅ Vision (${model}) extracted ${extractedText.length} characters from ${fileName}`);
+          return { extractedText };
+        }
+        lastErr = `${model}: empty response`;
+      } catch (e: any) {
+        lastErr = `${model}: ${String(e?.message || e).slice(0, 160)}`;
+        console.warn(`[vision] ${lastErr}`);
+        if (String(e?.message || "").includes("GEMINI_TIMEOUT")) continue;
+        continue;
+      }
+    }
+    console.error("Gemini Vision analysis error:", lastErr);
+    throw new Error(lastErr || "Vision analysis failed on all models");
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error("Gemini Vision analysis error:", msg);
-    // Propagate timeout message so the API route can surface it clearly
     if (msg.includes("GEMINI_TIMEOUT")) throw error;
-    return { extractedText: "" };
+    throw error;
   }
 }
 
