@@ -588,6 +588,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(400).json({ success: false, message: e?.message });
     }
   });
+  // Transfer a screenshot (base64) to the client for IndexedDB local storage — not Supabase blobs
+  app.post("/api/actions/tasks/:id/screenshot", supabaseAuth, async (req: any, res) => {
+    try {
+      const { getActionTask, appendEvent } = await import("./actions/taskService");
+      const task = await getActionTask(req.params.id, req.userId);
+      if (!task) return res.status(404).json({ success: false, message: "Task not found" });
+      const { base64, mimeType, label } = req.body || {};
+      if (!base64 || typeof base64 !== "string") {
+        return res.status(400).json({ success: false, message: "base64 image required" });
+      }
+      // Cap ~2.5MB base64 to protect memory
+      if (base64.length > 3_500_000) {
+        return res.status(413).json({ success: false, message: "Screenshot too large" });
+      }
+      await appendEvent(task.id, req.userId, "screenshot", label || "screenshot captured");
+      // Client stores bytes in IndexedDB; we only return payload for local save
+      res.json({
+        success: true,
+        taskId: task.id,
+        mimeType: mimeType || "image/png",
+        base64,
+        label: label || null,
+        storeLocally: true,
+        note: "Save via actionsScreenshotStore.saveScreenshotFromBase64 — not uploaded to Supabase",
+      });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e?.message });
+    }
+  });
+  app.get("/api/actions/browser/status", supabaseAuth, async (req: any, res) => {
+    try {
+      const { browserbaseRuntime } = await import("./actions/browserbaseRuntime");
+      const available = await browserbaseRuntime.isAvailable();
+      res.json({
+        success: true,
+        browserAvailable: available,
+        runtime: process.env.BROWSER_RUNTIME || "browserbase",
+        message: available
+          ? "Browser sessions available"
+          : "Browser sessions unavailable until BROWSERBASE_API_KEY is configured",
+      });
+    } catch (e: any) {
+      res.json({ success: true, browserAvailable: false, message: e?.message });
+    }
+  });
+
   app.get("/api/actions/usage/limits", supabaseAuth, async (req: any, res) => {
     try {
       const { loadCostLimits, getActiveSessionCounts } = await import("./actions/costControl");

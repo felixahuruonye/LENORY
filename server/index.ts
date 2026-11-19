@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { startSessionCleanupInterval } from "./actions/sessionCleanup";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { runMigrations } from "./db";
@@ -152,6 +153,12 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    try {
+      startSessionCleanupInterval();
+      log("actions session cleanup interval started");
+    } catch (e) {
+      console.warn("[actions-cleanup] failed to start", e);
+    }
     // Warm preferred models a few seconds after boot so the first real chat
     // after deploy doesn't pay cold-start latency. Re-warm every 45 min so
     // long-idle instances stay responsive.

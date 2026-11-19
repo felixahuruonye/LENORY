@@ -29,3 +29,29 @@ alter table public.action_usage enable row level security;
 drop policy if exists action_usage_own on public.action_usage;
 create policy action_usage_own on public.action_usage
   for all using (auth.uid()::text = user_id) with check (auth.uid()::text = user_id);
+
+
+-- Cross-instance concurrent browser slots (quota enforcement)
+create table if not exists public.action_browser_slots (
+  id text primary key,
+  user_id text not null,
+  session_hint text,
+  session_id text,
+  open boolean not null default true,
+  created_at timestamptz not null default now(),
+  closed_at timestamptz
+);
+
+create index if not exists action_browser_slots_open_user
+  on public.action_browser_slots (user_id)
+  where open = true;
+
+create index if not exists action_browser_slots_open
+  on public.action_browser_slots (open)
+  where open = true;
+
+alter table public.action_browser_slots enable row level security;
+
+drop policy if exists action_browser_slots_own on public.action_browser_slots;
+create policy action_browser_slots_own on public.action_browser_slots
+  for all using (auth.uid()::text = user_id) with check (auth.uid()::text = user_id);

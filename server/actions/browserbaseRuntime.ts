@@ -33,7 +33,8 @@ export class BrowserbaseRuntime implements BrowserRuntime {
   readonly provider = "browserbase" as const;
 
   async isAvailable(): Promise<boolean> {
-    return !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_API_KEY.length > 8);
+    const key = process.env.BROWSERBASE_API_KEY || "";
+    return key.length > 8;
   }
 
   async createSession(opts: CreateSessionOptions): Promise<BrowserSessionHandle> {

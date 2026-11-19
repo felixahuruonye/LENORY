@@ -17,12 +17,14 @@ export async function getActiveRuntime() {
   const name = getRuntimeProviderName();
   if (name === "browserbase") {
     if (!(await browserbaseRuntime.isAvailable())) {
-      throw new Error("Browserbase is not configured (set BROWSERBASE_API_KEY)");
+      throw new Error(
+        "Browser sessions unavailable: BROWSERBASE_API_KEY is not configured on this server. The app can start, but open-session is disabled until the key is set."
+      );
     }
     return browserbaseRuntime;
   }
   throw new Error(
-    "Local Playwright runtime is not fully wired in this build. Set BROWSER_RUNTIME=browserbase."
+    "Local Playwright runtime is not fully wired in this build. Set BROWSER_RUNTIME=browserbase and BROWSERBASE_API_KEY."
   );
 }
 
