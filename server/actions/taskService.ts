@@ -13,6 +13,7 @@ export type ActionTaskStatus =
   | "starting"
   | "running"
   | "awaiting_approval"
+  | "awaiting_human"
   | "completed"
   | "failed"
   | "cancelled"
@@ -33,6 +34,10 @@ export interface ActionTask {
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  /** browserbase | local */
+  browserProvider: string | null;
+  browserSessionId: string | null;
+  workflowState: any;
 }
 
 export interface ActionEvent {
@@ -85,6 +90,9 @@ export async function createActionTask(input: {
     createdAt: nowIso(),
     startedAt: null,
     completedAt: null,
+    browserProvider: null,
+    browserSessionId: null,
+    workflowState: null,
   };
 
   if (supabaseDb) {
@@ -379,5 +387,52 @@ function rowToTask(r: any): ActionTask {
     createdAt: r.created_at,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    browserProvider: r.browser_provider ?? null,
+    browserSessionId: r.browser_session_id ?? null,
+    workflowState: r.workflow_state ?? null,
   };
+}
+
+/** Attach browser session metadata to a task (pause/resume support). */
+export async function attachBrowserSession(
+  taskId: string,
+  userId: string,
+  info: { provider: string; browserSessionId: string; workflowState?: any }
+): Promise<void> {
+  if (supabaseDb) {
+    try {
+      await supabaseDb
+        .from("action_tasks")
+        .update({
+          browser_provider: info.provider,
+          browser_session_id: info.browserSessionId,
+          workflow_state: info.workflowState ?? null,
+          updated_at: nowIso(),
+        })
+        .eq("id", taskId)
+        .eq("user_id", userId);
+    } catch (e: any) {
+      console.warn("[actions] attachBrowserSession:", e?.message);
+    }
+  }
+  const t = memTasks.get(taskId);
+  if (t && t.userId === userId) {
+    t.browserProvider = info.provider;
+    t.browserSessionId = info.browserSessionId;
+    if (info.workflowState !== undefined) t.workflowState = info.workflowState;
+  }
+}
+
+export async function setWorkflowState(taskId: string, userId: string, state: any): Promise<void> {
+  if (supabaseDb) {
+    try {
+      await supabaseDb
+        .from("action_tasks")
+        .update({ workflow_state: state, updated_at: nowIso() })
+        .eq("id", taskId)
+        .eq("user_id", userId);
+    } catch {}
+  }
+  const t = memTasks.get(taskId);
+  if (t && t.userId === userId) t.workflowState = state;
 }

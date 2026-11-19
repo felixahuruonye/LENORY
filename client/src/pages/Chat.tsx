@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import BrowserWorkspace from "@/components/BrowserWorkspace";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -389,6 +390,9 @@ export default function Chat() {
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [browserWorkspaceOpen, setBrowserWorkspaceOpen] = useState(false);
+  const [browserTaskId, setBrowserTaskId] = useState<string | null>(null);
+  const [browserLiveViewUrl, setBrowserLiveViewUrl] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
@@ -2151,6 +2155,21 @@ export default function Chat() {
         onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
       <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" data-testid="input-camera-upload"
         onChange={e => { const files = e.target.files; if (files && files.length > 0) addFilesToPending(files); e.target.value = ""; }} />
+
+      <BrowserWorkspace
+        open={browserWorkspaceOpen}
+        taskId={browserTaskId}
+        initialLiveViewUrl={browserLiveViewUrl}
+        onClose={() => setBrowserWorkspaceOpen(false)}
+      />
+      <button
+        type="button"
+        className="fixed bottom-24 right-4 z-30 rounded-full border bg-background shadow px-3 py-2 text-xs font-medium hover:bg-muted"
+        onClick={() => setBrowserWorkspaceOpen(true)}
+        title="Browser Workspace"
+      >
+        Browser
+      </button>
 
       {/* Source mini-page */}
       <Dialog open={!!openSource} onOpenChange={(open) => !open && setOpenSource(null)}>

@@ -549,6 +549,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ success: false, message: e?.message });
     }
   });
+
+  app.get("/api/actions/tasks/:id/live-view", supabaseAuth, async (req: any, res) => {
+    try {
+      const { liveViewForTask } = await import("./actions/sessionManager");
+      const lv = await liveViewForTask(req.params.id, req.userId);
+      res.json({ success: true, ...lv });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e?.message || "Live View unavailable" });
+    }
+  });
+  app.post("/api/actions/tasks/:id/resume", supabaseAuth, async (req: any, res) => {
+    try {
+      const { resumeFromHuman } = await import("./actions/sessionManager");
+      const task = await resumeFromHuman(req.params.id, req.userId);
+      res.json({ success: true, task });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e?.message });
+    }
+  });
+  app.post("/api/actions/tasks/:id/handoff", supabaseAuth, async (req: any, res) => {
+    try {
+      const { pauseForHuman, liveViewForTask } = await import("./actions/sessionManager");
+      await pauseForHuman(req.params.id, req.userId, req.body?.reason);
+      let liveViewUrl: string | undefined;
+      try { liveViewUrl = (await liveViewForTask(req.params.id, req.userId)).liveViewUrl; } catch {}
+      res.json({ success: true, status: "awaiting_human", liveViewUrl });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e?.message });
+    }
+  });
+  app.post("/api/actions/tasks/:id/close-browser", supabaseAuth, async (req: any, res) => {
+    try {
+      const { closeBrowserSessionForTask } = await import("./actions/sessionManager");
+      await closeBrowserSessionForTask(req.params.id, req.userId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e?.message });
+    }
+  });
+  app.get("/api/actions/usage/limits", supabaseAuth, async (req: any, res) => {
+    try {
+      const { loadCostLimits, getActiveSessionCounts } = await import("./actions/costControl");
+      res.json({ success: true, limits: loadCostLimits(), active: getActiveSessionCounts() });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e?.message });
+    }
+  });
+
   app.post("/api/actions/tasks/:id/cancel", supabaseAuth, async (req: any, res) => {
     try {
       const { getActionTask, updateTaskStatus } = await import("./actions/taskService");

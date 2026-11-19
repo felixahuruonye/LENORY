@@ -66,3 +66,32 @@ Optional Dockerfile for Chromium deps: use official Playwright image as base if 
 - Private IPs, localhost, metadata hosts blocked
 - Page content is tool **data**, not instructions
 - Credentials must never be added to prompts
+
+## Phase 3 — Browser Workspace (Browserbase)
+
+### New env vars
+
+| Variable | Purpose | Example default |
+|----------|---------|-----------------|
+| `BROWSERBASE_API_KEY` | Browserbase API key (server only) | — |
+| `BROWSERBASE_PROJECT_ID` | Optional project id | — |
+| `BROWSER_RUNTIME` | `browserbase` (default) or `local` | `browserbase` |
+| `ACTIONS_MAX_SESSION_SEC` | Max session length | `900` |
+| `ACTIONS_IDLE_TIMEOUT_SEC` | Idle timeout | `180` |
+| `ACTIONS_MAX_CONCURRENT_PER_USER` | Per-user concurrency | `1` |
+| `ACTIONS_MAX_CONCURRENT_GLOBAL` | Global concurrency | `10` |
+| `ACTIONS_DAILY_USER_MINUTES` | Paid daily minutes | `30` |
+| `ACTIONS_MONTHLY_USER_MINUTES` | Paid monthly minutes | `120` |
+| `ACTIONS_FREE_DAILY_MINUTES` | Free daily minutes | `10` |
+| `ACTIONS_FREE_MONTHLY_MINUTES` | Free monthly minutes | `30` |
+| `ACTIONS_EST_USD_PER_HOUR` | Accounting estimate only | `0.12` |
+| `ACTIONS_GLOBAL_MONTHLY_SPEND_USD` | Circuit breaker | `50` |
+
+### Migrations
+
+1. `supabase_actions_migration.sql`
+2. `supabase_actions_phase3_migration.sql`
+
+### Feature branch
+
+`feature/actions-phase3-browser-workspace` — do not merge until reviewed.

@@ -22,6 +22,7 @@ import { toolGenerateDiagram } from "./tools/svgDiagram";
 import { toolGenerateImage, toolEditImage, toolUpscaleImage, toolControlImage, toolImageTo3D } from "./tools/images";
 import { sandboxConfigured, toolRunCode, toolListProjects, toolCreateProject, toolAddProjectFile, toolAddProjectTask } from "./tools/extra";
 import { toolBrowserOpenAndRead, toolBrowserScreenshot, toolBrowserGetTaskStatus } from "./tools/browser";
+import { toolBrowserOpenSession, toolBrowserHandoffHuman, toolBrowserResume, toolBrowserCloseSession } from "./tools/browserWorkspace";
 
 export interface AgentInput {
   userId: string;
@@ -142,6 +143,18 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
   { cap: "browserAutomation", intent: /\b(task status|browser task|action task)\b/i,
     schema: fn("browser_get_task_status", "Get status, events, and screenshots for a LENORY ACTIONS browser task by id.", { taskId: { type: "string" } }, ["taskId"]),
     run: (c, a) => toolBrowserGetTaskStatus(c, a) },
+  { cap: "browserAutomation", intent: /\b(open|browser session|workspace|live view)\b/i,
+    schema: fn("browser_open_session", "Open a persistent remote browser session (Browserbase), navigate to a public URL, and return taskId + liveViewUrl for the Browser Workspace. Session stays open for AI or human control.", { url: { type: "string" }, description: { type: "string" } }, ["url"]),
+    run: (c, a) => toolBrowserOpenSession(c, a) },
+  { cap: "browserAutomation", intent: /\b(hand.?off|take over|human|captcha|verify)\b/i,
+    schema: fn("browser_handoff_human", "Pause automation and hand the same browser session to the user in Browser Workspace (CAPTCHA, login, or review).", { taskId: { type: "string" }, reason: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserHandoffHuman(c, a) },
+  { cap: "browserAutomation", intent: /\b(resume|continue automation)\b/i,
+    schema: fn("browser_resume", "Resume AI control after the user finished in Browser Workspace.", { taskId: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserResume(c, a) },
+  { cap: "browserAutomation", intent: /\b(close browser|end session)\b/i,
+    schema: fn("browser_close_session", "Close the remote browser session and settle usage for the task.", { taskId: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserCloseSession(c, a) },
 ];
 
 const MAX_STEPS = 6;
