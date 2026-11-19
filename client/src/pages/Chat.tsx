@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import BrowserWorkspace from "@/components/BrowserWorkspace";
+import { saveScreenshotFromBase64 } from "@/lib/actionsScreenshotStore";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -1231,9 +1232,35 @@ export default function Chat() {
           if (!part.startsWith("data: ")) continue;
           try {
             const evt = JSON.parse(part.slice(6));
-            if (evt.type === "images") { setStreamImages((prev) => [...prev, ...evt.images]); }
+            if (evt.type === "images") {
+              setStreamImages((prev) => [...prev, ...evt.images]);
+              // Local-first: persist Actions screenshots on device (not Supabase)
+              for (const img of evt.images || []) {
+                const b64 = img.base64 || (typeof img.url === "string" && img.url.startsWith("data:") ? img.url : null);
+                const taskId = img.taskId || browserTaskId || "chat";
+                if (b64 && (img.storeLocally || img.taskId)) {
+                  saveScreenshotFromBase64(taskId, b64, img.mimeType || "image/png", img.title).catch(() => {});
+                }
+              }
+            }
             else if (evt.type === "status") { setChatAction(evt.status); setChatSteps((prev) => (prev.length && prev[prev.length - 1].status === evt.status && prev[prev.length - 1].detail === evt.detail ? prev : [...prev, { status: evt.status, detail: evt.detail }].slice(-12))); }
-            else if (evt.type === "done") { finalSources = evt.sources || null; if (evt.artifacts?.length) { setLatestArtifacts(evt.artifacts); (window as any).__lenoryPendingArtifacts = evt.artifacts; } (window as any).__lenoryLastStreamDone = evt; }
+            else if (evt.type === "done") {
+              finalSources = evt.sources || null;
+              if (evt.artifacts?.length) { setLatestArtifacts(evt.artifacts); (window as any).__lenoryPendingArtifacts = evt.artifacts; }
+              (window as any).__lenoryLastStreamDone = evt;
+              try {
+                const tools = evt.toolsUsed || evt.toolResults || [];
+                for (const tr of tools) {
+                  const d = tr?.data || tr;
+                  if (d?.taskId && (d?.liveViewUrl || d?.browserSessionId)) {
+                    setBrowserTaskId(d.taskId);
+                    if (d.liveViewUrl) setBrowserLiveViewUrl(d.liveViewUrl);
+                    setBrowserWorkspaceOpen(true);
+                    break;
+                  }
+                }
+              } catch {}
+            }
             else if (evt.type === "error") {
               streamErrored = true;
               toast({ title: "Message failed", description: evt.message || "Something went wrong.", variant: "destructive" });

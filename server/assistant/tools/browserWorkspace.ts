@@ -14,6 +14,7 @@ import {
   closeBrowserSessionForTask,
   getActiveRuntime,
 } from "../../actions/sessionManager";
+import { runPageActions } from "../../actions/pageActions";
 
 async function ensureActions(userId: string): Promise<string | null> {
   const caps = await loadUserCapabilities(userId);
@@ -155,5 +156,290 @@ export async function toolBrowserCloseSession(
     success: true,
     summary: `Closed browser session for task ${taskId}.`,
     data: { taskId },
+  };
+}
+
+
+function requireTaskId(args: any): string {
+  return String(args?.taskId || "").trim();
+}
+
+export async function toolBrowserNavigate(
+  ctx: ToolContext,
+  args: { taskId: string; url: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_navigate", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const url = String(args.url || "").trim();
+  const block = assertPublicHttpUrl(url);
+  if (block) return { tool: "browser_navigate", success: false, summary: block, error: block };
+  ctx.onStatus?.("using_feature", "Navigating");
+  const r = await runPageActions({ userId: ctx.userId, taskId, actions: [{ op: "navigate", url }] });
+  return {
+    tool: "browser_navigate",
+    success: r.success,
+    summary: r.success ? `Opened ${r.url || url}${r.title ? ` — ${r.title}` : ""}` : r.summary,
+    error: r.error,
+    data: { taskId, url: r.url, title: r.title },
+  };
+}
+
+export async function toolBrowserClick(
+  ctx: ToolContext,
+  args: { taskId: string; selector: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_click", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const selector = String(args.selector || "").trim();
+  if (!selector) return { tool: "browser_click", success: false, summary: "selector required", error: "selector" };
+  ctx.onStatus?.("using_feature", "Clicking");
+  const r = await runPageActions({ userId: ctx.userId, taskId, actions: [{ op: "click", selector }] });
+  return {
+    tool: "browser_click",
+    success: r.success,
+    summary: r.success ? `Clicked ${selector} on ${r.url || "page"}` : r.summary,
+    error: r.error,
+    data: { taskId, url: r.url, title: r.title },
+  };
+}
+
+export async function toolBrowserFill(
+  ctx: ToolContext,
+  args: { taskId: string; selector: string; value: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_fill", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const selector = String(args.selector || "").trim();
+  const value = String(args.value ?? "");
+  if (!selector) return { tool: "browser_fill", success: false, summary: "selector required", error: "selector" };
+  ctx.onStatus?.("using_feature", "Filling field");
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "fill", selector, value }],
+  });
+  return {
+    tool: "browser_fill",
+    success: r.success,
+    summary: r.success ? `Filled ${selector}` : r.summary,
+    error: r.error,
+    data: { taskId, url: r.url },
+  };
+}
+
+export async function toolBrowserSelect(
+  ctx: ToolContext,
+  args: { taskId: string; selector: string; value: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_select", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const selector = String(args.selector || "").trim();
+  const value = String(args.value ?? "");
+  ctx.onStatus?.("using_feature", "Selecting option");
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "select", selector, value }],
+  });
+  return {
+    tool: "browser_select",
+    success: r.success,
+    summary: r.success ? `Selected ${value} on ${selector}` : r.summary,
+    error: r.error,
+    data: { taskId },
+  };
+}
+
+export async function toolBrowserExtract(
+  ctx: ToolContext,
+  args: { taskId: string; selector?: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_extract", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  ctx.onStatus?.("using_feature", "Reading page");
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "extract", selector: args.selector, maxChars: 12000 }],
+  });
+  return {
+    tool: "browser_extract",
+    success: r.success,
+    summary: r.success
+      ? `Read ${r.title || r.url || "page"} (${(r.text || "").length} chars)`
+      : r.summary,
+    error: r.error,
+    data: { taskId, url: r.url, title: r.title, text: r.text },
+  };
+}
+
+export async function toolBrowserScreenshot(
+  ctx: ToolContext,
+  args: { taskId: string; fullPage?: boolean }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_screenshot_session", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  ctx.onStatus?.("using_feature", "Screenshot");
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "screenshot", fullPage: !!args.fullPage }],
+  });
+  const images =
+    r.screenshotBase64
+      ? [
+          {
+            url: `data:image/png;base64,${r.screenshotBase64}`,
+            title: `Screenshot ${r.title || taskId}`,
+            id: `shot_${taskId}_${Date.now()}`,
+            storeLocally: true,
+            taskId,
+            base64: r.screenshotBase64,
+            mimeType: "image/png",
+          },
+        ]
+      : undefined;
+  return {
+    tool: "browser_screenshot_session",
+    success: r.success,
+    summary: r.success ? `Screenshot captured for task ${taskId}` : r.summary,
+    error: r.error,
+    data: {
+      taskId,
+      url: r.url,
+      title: r.title,
+      storeLocally: true,
+      mimeType: "image/png",
+      // base64 for client IndexedDB — prefer not logging this
+      screenshotBase64: r.screenshotBase64,
+    },
+    images,
+  };
+}
+
+export async function toolBrowserScroll(
+  ctx: ToolContext,
+  args: { taskId: string; direction?: "up" | "down"; amount?: number }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_scroll", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "scroll", direction: args.direction || "down", amount: args.amount }],
+  });
+  return {
+    tool: "browser_scroll",
+    success: r.success,
+    summary: r.success ? `Scrolled ${args.direction || "down"}` : r.summary,
+    error: r.error,
+    data: { taskId },
+  };
+}
+
+export async function toolBrowserWait(
+  ctx: ToolContext,
+  args: { taskId: string; ms?: number; selector?: string }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_wait", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const r = await runPageActions({
+    userId: ctx.userId,
+    taskId,
+    actions: [{ op: "wait", ms: args.ms, selector: args.selector }],
+  });
+  return {
+    tool: "browser_wait",
+    success: r.success,
+    summary: r.success ? "Waited" : r.summary,
+    error: r.error,
+    data: { taskId },
+  };
+}
+
+/**
+ * Multi-step helper: navigate → optional extract → optional screenshot in one tool call.
+ * Prefer for "open this site, read it, screenshot".
+ */
+export async function toolBrowserRunSteps(
+  ctx: ToolContext,
+  args: {
+    taskId: string;
+    steps: Array<{
+      op: string;
+      url?: string;
+      selector?: string;
+      value?: string;
+      ms?: number;
+      fullPage?: boolean;
+      direction?: string;
+      amount?: number;
+      key?: string;
+    }>;
+  }
+): Promise<ToolResult> {
+  const denied = await ensureActions(ctx.userId);
+  if (denied) return { tool: "browser_run_steps", success: false, summary: denied, error: denied };
+  const taskId = requireTaskId(args);
+  const steps = Array.isArray(args.steps) ? args.steps : [];
+  if (!steps.length) return { tool: "browser_run_steps", success: false, summary: "steps required", error: "steps" };
+
+  const actions: any[] = [];
+  for (const s of steps.slice(0, 12)) {
+    const op = String(s.op || "").toLowerCase();
+    if (op === "navigate" && s.url) actions.push({ op: "navigate", url: s.url });
+    else if (op === "click" && s.selector) actions.push({ op: "click", selector: s.selector });
+    else if (op === "fill" && s.selector) actions.push({ op: "fill", selector: s.selector, value: s.value ?? "" });
+    else if (op === "select" && s.selector) actions.push({ op: "select", selector: s.selector, value: s.value ?? "" });
+    else if (op === "scroll") actions.push({ op: "scroll", direction: s.direction || "down", amount: s.amount });
+    else if (op === "wait") actions.push({ op: "wait", ms: s.ms, selector: s.selector });
+    else if (op === "extract") actions.push({ op: "extract", selector: s.selector });
+    else if (op === "screenshot") actions.push({ op: "screenshot", fullPage: !!s.fullPage });
+    else if (op === "press" && s.key) actions.push({ op: "press", key: s.key });
+  }
+  if (!actions.length) {
+    return { tool: "browser_run_steps", success: false, summary: "No valid steps", error: "invalid_steps" };
+  }
+
+  ctx.onStatus?.("using_feature", `Browser steps (${actions.length})`);
+  const r = await runPageActions({ userId: ctx.userId, taskId, actions });
+  const images =
+    r.screenshotBase64
+      ? [
+          {
+            url: `data:image/png;base64,${r.screenshotBase64}`,
+            title: `Screenshot ${r.title || taskId}`,
+            storeLocally: true,
+            taskId,
+            base64: r.screenshotBase64,
+            mimeType: "image/png",
+          },
+        ]
+      : undefined;
+
+  return {
+    tool: "browser_run_steps",
+    success: r.success,
+    summary: r.success
+      ? `${r.summary}${r.title ? ` | ${r.title}` : ""}${r.text ? ` | text ${r.text.length} chars` : ""}`
+      : r.summary,
+    error: r.error,
+    data: {
+      taskId,
+      url: r.url,
+      title: r.title,
+      text: r.text,
+      screenshotBase64: r.screenshotBase64,
+      storeLocally: !!r.screenshotBase64,
+    },
+    images,
   };
 }

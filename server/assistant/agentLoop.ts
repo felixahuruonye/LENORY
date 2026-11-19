@@ -22,7 +22,7 @@ import { toolGenerateDiagram } from "./tools/svgDiagram";
 import { toolGenerateImage, toolEditImage, toolUpscaleImage, toolControlImage, toolImageTo3D } from "./tools/images";
 import { sandboxConfigured, toolRunCode, toolListProjects, toolCreateProject, toolAddProjectFile, toolAddProjectTask } from "./tools/extra";
 import { toolBrowserOpenAndRead, toolBrowserScreenshot, toolBrowserGetTaskStatus } from "./tools/browser";
-import { toolBrowserOpenSession, toolBrowserHandoffHuman, toolBrowserResume, toolBrowserCloseSession } from "./tools/browserWorkspace";
+import { toolBrowserOpenSession, toolBrowserHandoffHuman, toolBrowserResume, toolBrowserCloseSession, toolBrowserNavigate, toolBrowserClick, toolBrowserFill, toolBrowserSelect, toolBrowserExtract, toolBrowserScreenshot, toolBrowserScroll, toolBrowserWait, toolBrowserRunSteps } from "./tools/browserWorkspace";
 
 export interface AgentInput {
   userId: string;
@@ -155,6 +155,33 @@ Content rules by format: pdf/docx/rtf/txt/md/html -> clean Markdown (# headings,
   { cap: "browserAutomation", intent: /\b(close browser|end session)\b/i,
     schema: fn("browser_close_session", "Close the remote browser session and settle usage for the task.", { taskId: { type: "string" } }, ["taskId"]),
     run: (c, a) => toolBrowserCloseSession(c, a) },
+  { cap: "browserAutomation", intent: /\b(navigate|go to url|open page)\b/i,
+    schema: fn("browser_navigate", "Navigate the existing browser session to a public URL.", { taskId: { type: "string" }, url: { type: "string" } }, ["taskId", "url"]),
+    run: (c, a) => toolBrowserNavigate(c, a) },
+  { cap: "browserAutomation", intent: /\b(click|press button|tap)\b/i,
+    schema: fn("browser_click", "Click an element in the active browser session using a CSS selector.", { taskId: { type: "string" }, selector: { type: "string", description: "CSS selector e.g. button.submit or #login" } }, ["taskId", "selector"]),
+    run: (c, a) => toolBrowserClick(c, a) },
+  { cap: "browserAutomation", intent: /\b(fill|type|enter text|input)\b/i,
+    schema: fn("browser_fill", "Fill an input/textarea in the active browser session. Use only with user-approved truthful values.", { taskId: { type: "string" }, selector: { type: "string" }, value: { type: "string" } }, ["taskId", "selector", "value"]),
+    run: (c, a) => toolBrowserFill(c, a) },
+  { cap: "browserAutomation", intent: /\b(select option|dropdown)\b/i,
+    schema: fn("browser_select", "Choose an option in a <select> by value.", { taskId: { type: "string" }, selector: { type: "string" }, value: { type: "string" } }, ["taskId", "selector", "value"]),
+    run: (c, a) => toolBrowserSelect(c, a) },
+  { cap: "browserAutomation", intent: /\b(read page|extract|scrape text|what does the page say)\b/i,
+    schema: fn("browser_extract", "Read visible text from the current page or a CSS selector.", { taskId: { type: "string" }, selector: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserExtract(c, a) },
+  { cap: "browserAutomation", intent: /\b(screenshot|capture screen|snap)\b/i,
+    schema: fn("browser_screenshot_session", "Take a PNG screenshot of the active session. Returned for local device storage (IndexedDB), not Supabase.", { taskId: { type: "string" }, fullPage: { type: "boolean" } }, ["taskId"]),
+    run: (c, a) => toolBrowserScreenshot(c, a) },
+  { cap: "browserAutomation", intent: /\b(scroll)\b/i,
+    schema: fn("browser_scroll", "Scroll the page up or down.", { taskId: { type: "string" }, direction: { type: "string" }, amount: { type: "number" } }, ["taskId"]),
+    run: (c, a) => toolBrowserScroll(c, a) },
+  { cap: "browserAutomation", intent: /\b(wait for|wait until)\b/i,
+    schema: fn("browser_wait", "Wait for a selector or a short delay (max 15s).", { taskId: { type: "string" }, ms: { type: "number" }, selector: { type: "string" } }, ["taskId"]),
+    run: (c, a) => toolBrowserWait(c, a) },
+  { cap: "browserAutomation", intent: /\b(run steps|do these steps|fill the form|complete the form)\b/i,
+    schema: fn("browser_run_steps", "Run up to 12 browser steps on an existing session: navigate, click, fill, select, scroll, wait, extract, screenshot, press. Prefer this for multi-step form workflows with user-approved data.", { taskId: { type: "string" }, steps: { type: "array", items: { type: "object" }, description: "Array of {op, url?, selector?, value?, ms?, fullPage?, direction?, key?}" } }, ["taskId", "steps"]),
+    run: (c, a) => toolBrowserRunSteps(c, a) },
 ];
 
 const MAX_STEPS = 6;
