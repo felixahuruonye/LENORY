@@ -1,10 +1,13 @@
 /**
  * LENORY ACTIONS cost-control engine (fail closed).
  *
- * Prices and limits are configurable via env — do not hardcode Browserbase list prices
- * as billing truth; use estimates for reservation and admin reporting.
+ * IMPORTANT — estimated vs actual cost:
+ * - `ACTIONS_EST_USD_PER_HOUR` and `estimated_cost_usd` are INTERNAL ACCOUNTING
+ *   estimates for quotas and circuit breakers only.
+ * - They are NOT Browserbase invoices and must not be shown as "what Browserbase charged".
+ * - Actual provider billing is determined solely by Browserbase (browser hours, proxies, etc.).
  *
- * Quotas apply before any billable session is created.
+ * Quotas apply before any session is created. Fail closed on check errors.
  */
 import { supabaseDb } from "../db";
 
@@ -174,7 +177,20 @@ export async function reserveBrowserUsage(input: {
 }
 
 /** Track an opened session against concurrent quotas (call after session create). */
+/** Release a reservation that was never turned into a settled session (create failed / cancelled). */
+export function releaseReservation(reservationId: string | undefined | null): void {
+  if (!reservationId) return;
+  reservations.delete(reservationId);
+}
+
+/** Force-close concurrent tracking for a session without settling (use settleBrowserUsage for real closes). */
+export function abandonSessionSlot(userId: string, sessionId: string, reservationId?: string) {
+  trackSessionClose(userId, sessionId);
+  releaseReservation(reservationId);
+}
+
 export function trackSessionOpen(userId: string, sessionId: string) {
+
   const set = activeByUser.get(userId) || new Set<string>();
   set.add(sessionId);
   activeByUser.set(userId, set);
@@ -211,7 +227,7 @@ export async function settleBrowserUsage(input: {
       session_id: input.sessionId,
       provider: input.provider,
       duration_sec: durationSec,
-      estimated_cost_usd: estimatedCostUsd,
+      estimated_cost_usd: estimatedCostUsd, // accounting estimate only — not provider invoice
       created_at: new Date().toISOString(),
     });
   } catch (e: any) {

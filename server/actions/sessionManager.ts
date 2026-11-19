@@ -65,6 +65,11 @@ export async function openBrowserSessionForTask(input: {
       reservationId: reserved.reservation.reservationId,
     };
   } catch (e: any) {
+    // Fail closed: release reservation so unused capacity is not held indefinitely
+    try {
+      const { releaseReservation } = await import("./costControl");
+      releaseReservation(reserved.reservation.reservationId);
+    } catch {}
     return { ok: false, reason: e?.message || "Failed to open browser session" };
   }
 }
