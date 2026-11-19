@@ -4150,15 +4150,14 @@ ${EXAM_BOOKLET_MODE_PROMPT}
               streamedAny = true;
               send({ type: "token", token: chunkText });
             }
-            if (streamedAny) {
-              console.log(`✅ Gemini vision stream via ${model}`);
-              break;
-            }
-          } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
-            console.warn(`Gemini vision stream (${model}) failed:`, reason.slice(0, 200));
-            failures.push(`gemini/${model}: ${reason.slice(0, 120)}`);
           }
+          if (streamedAny) {
+            console.log(`✅ Gemini vision stream via ${streamModelUsed}`);
+          }
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn(`Gemini vision stream (${streamModelUsed || "unknown"}) failed:`, reason.slice(0, 200));
+          failures.push(`gemini/${streamModelUsed || "unknown"}: ${reason.slice(0, 120)}`);
         }
       } else {
         failures.push("gemini: GEMINI_API_KEY not configured");
