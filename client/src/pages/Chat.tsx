@@ -401,8 +401,13 @@ export default function Chat() {
   useEffect(() => {
     if (!showBrowserButton) return;
     setBrowserBtnLabel("Browser");
-    const tmr = setTimeout(() => setBrowserBtnLabel("Preview"), 400);
-    return () => clearTimeout(tmr);
+    let on = false;
+    const tick = () => {
+      on = !on;
+      setBrowserBtnLabel(on ? "Preview" : "Browser");
+    };
+    const tmr = setInterval(tick, 1200);
+    return () => clearInterval(tmr);
   }, [showBrowserButton, browserWorkspaceOpen]);
   useEffect(() => {
     const onStorage = () => {
@@ -1993,6 +1998,20 @@ export default function Chat() {
               </div>
             )}
 
+            {showBrowserButton && (
+              <div className="flex justify-center mb-2">
+                <button
+                  type="button"
+                  className="rounded-full border border-primary/40 bg-background shadow px-4 py-1.5 text-sm font-semibold hover:bg-primary/10 transition-colors"
+                  onClick={() => setBrowserWorkspaceOpen((v) => !v)}
+                  title="Browser Preview"
+                  data-testid="button-browser-preview"
+                >
+                  {browserBtnLabel}
+                </button>
+              </div>
+            )}
+
             {/* Main input card — Claude style */}
             <div className={`rounded-2xl border transition-all ${
               isListening ? "border-red-500/60 bg-red-500/5 shadow-red-500/10 shadow-lg" :
@@ -2210,17 +2229,6 @@ export default function Chat() {
         initialLiveViewUrl={browserLiveViewUrl}
         onClose={() => setBrowserWorkspaceOpen(false)}
       />
-      {showBrowserButton && (
-        <button
-          type="button"
-          className="fixed z-30 left-1/2 -translate-x-1/2 bottom-[5.5rem] md:bottom-28 rounded-full border border-primary/40 bg-background/95 backdrop-blur shadow-lg px-4 py-2 text-sm font-semibold hover:bg-primary/10 transition-colors"
-          onClick={() => setBrowserWorkspaceOpen((v) => !v)}
-          title="Browser Preview"
-          data-testid="button-browser-preview"
-        >
-          {browserBtnLabel}
-        </button>
-      )}
 
       {/* Source mini-page */}
       <Dialog open={!!openSource} onOpenChange={(open) => !open && setOpenSource(null)}>

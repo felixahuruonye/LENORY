@@ -148,7 +148,15 @@ async function claimDbConcurrentSlot(userId: string, sessionHint: string): Promi
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId)
       .eq("open", true);
-    if (e1) return { ok: false, reason: `Slot check failed: ${e1.message}` };
+    if (e1) {
+      const msg = String(e1.message || "");
+      // Table not migrated yet — fall back to in-process limits so browsing still works
+      if (/action_browser_slots|schema cache|does not exist|Could not find the table/i.test(msg)) {
+        console.warn("[costControl] action_browser_slots missing — using in-memory concurrent limits only. Run supabase_actions_phase3_migration.sql");
+        return { ok: true };
+      }
+      return { ok: false, reason: `Slot check failed: ${e1.message}` };
+    }
     if ((userCount || 0) >= limits.maxConcurrentPerUser) {
       return { ok: false, reason: `Concurrent browser limit reached (${limits.maxConcurrentPerUser} per user)` };
     }
