@@ -10,7 +10,8 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "test:cost": "tsx server/actions/costControl.test.ts",
-    "staging:verify": "npm run check && npm run test:cost && npm run build"
+    "staging:verify": "npm run check && npm run test:cost && npm run build",
+    "render-build": "npm install --legacy-peer-deps && npm run build"
   },
   "dependencies": {
     "@fal-ai/client": "^1.10.1",
