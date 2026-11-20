@@ -394,6 +394,27 @@ export default function Chat() {
   const [browserWorkspaceOpen, setBrowserWorkspaceOpen] = useState(false);
   const [browserTaskId, setBrowserTaskId] = useState<string | null>(null);
   const [browserLiveViewUrl, setBrowserLiveViewUrl] = useState<string | null>(null);
+  const [browserBtnLabel, setBrowserBtnLabel] = useState("Browser");
+  const [showBrowserButton, setShowBrowserButton] = useState(() => {
+    try { return localStorage.getItem("lenory_show_browser_btn") !== "0"; } catch { return true; }
+  });
+  useEffect(() => {
+    if (!showBrowserButton) return;
+    setBrowserBtnLabel("Browser");
+    const tmr = setTimeout(() => setBrowserBtnLabel("Preview"), 400);
+    return () => clearTimeout(tmr);
+  }, [showBrowserButton, browserWorkspaceOpen]);
+  useEffect(() => {
+    const onStorage = () => {
+      try { setShowBrowserButton(localStorage.getItem("lenory_show_browser_btn") !== "0"); } catch {}
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("lenory-browser-btn-pref", onStorage as any);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("lenory-browser-btn-pref", onStorage as any);
+    };
+  }, []);
   const [isListening, setIsListening] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [videoMode, setVideoMode] = useState(false);
@@ -2189,14 +2210,17 @@ export default function Chat() {
         initialLiveViewUrl={browserLiveViewUrl}
         onClose={() => setBrowserWorkspaceOpen(false)}
       />
-      <button
-        type="button"
-        className="fixed bottom-24 right-4 z-30 rounded-full border bg-background shadow px-3 py-2 text-xs font-medium hover:bg-muted"
-        onClick={() => setBrowserWorkspaceOpen(true)}
-        title="Browser Workspace"
-      >
-        Browser
-      </button>
+      {showBrowserButton && (
+        <button
+          type="button"
+          className="fixed z-30 left-1/2 -translate-x-1/2 bottom-[5.5rem] md:bottom-28 rounded-full border border-primary/40 bg-background/95 backdrop-blur shadow-lg px-4 py-2 text-sm font-semibold hover:bg-primary/10 transition-colors"
+          onClick={() => setBrowserWorkspaceOpen((v) => !v)}
+          title="Browser Preview"
+          data-testid="button-browser-preview"
+        >
+          {browserBtnLabel}
+        </button>
+      )}
 
       {/* Source mini-page */}
       <Dialog open={!!openSource} onOpenChange={(open) => !open && setOpenSource(null)}>

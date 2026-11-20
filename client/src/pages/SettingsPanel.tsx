@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCredits } from "@/hooks/useCredits";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -22,6 +22,10 @@ import { apiRequest } from "@/lib/queryClient";
 type TabId = "profile" | "appearance" | "notifications" | "privacy" | "voice" | "shortcuts" | "credits" | "capabilities";
 
 export default function SettingsPanel() {
+  const [showBrowserBtn, setShowBrowserBtn] = useState(() => {
+    try { return localStorage.getItem("lenory_show_browser_btn") !== "0"; } catch { return true; }
+  });
+
   const [, setLocation] = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const { credits, topup, isTopupPending } = useCredits();
@@ -418,7 +422,31 @@ export default function SettingsPanel() {
             {/* Danger Zone */}
             <Card className="border-red-500/50">
               <CardHeader><CardTitle className="text-red-500">Danger Zone</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
+              
+              <Card className="mb-4">
+                <CardHeader>
+                  <CardTitle>Chat browser preview</CardTitle>
+                  <CardDescription>Show or hide the Browser / Preview button on the chat page.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Show Browser/Preview button on chat</span>
+                  <Button
+                    variant={showBrowserBtn ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      const next = !showBrowserBtn;
+                      setShowBrowserBtn(next);
+                      try {
+                        localStorage.setItem("lenory_show_browser_btn", next ? "1" : "0");
+                        window.dispatchEvent(new Event("lenory-browser-btn-pref"));
+                      } catch {}
+                    }}
+                  >
+                    {showBrowserBtn ? "Visible" : "Hidden"}
+                  </Button>
+                </CardContent>
+              </Card>
+<CardContent className="space-y-3">
                 <Button variant="destructive" onClick={() => { if (confirm("Reset all settings?")) { localStorage.clear(); toast({ title: "Settings reset" }); window.location.reload(); } }} data-testid="button-reset-account">
                   Reset Settings
                 </Button>

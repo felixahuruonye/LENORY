@@ -117,8 +117,11 @@ export function capabilityAvailability() {
     codeExecution: !!process.env.CODE_SANDBOX_URL,
     imageGeneration: !!(process.env.STABILITY_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
     webSearch: !!(process.env.TAVILY_API_KEY || process.env.GEMINI_API_KEY),
-    /** True when Playwright is available in this process (worker or web with browsers installed) */
-    browserAutomation: process.env.ACTIONS_BROWSER_ENABLED === "1" || process.env.PLAYWRIGHT_AVAILABLE === "1",
+    /** True when a browser runtime is configured (Browserbase key or local Playwright flag) */
+    browserAutomation:
+      process.env.ACTIONS_BROWSER_ENABLED === "1" ||
+      process.env.PLAYWRIGHT_AVAILABLE === "1" ||
+      !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_API_KEY.length > 8),
     actionsWorker: process.env.ACTIONS_WORKER === "1" || process.env.ACTIONS_WORKER_URL ? true : false,
   };
 }

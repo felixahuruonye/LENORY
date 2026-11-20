@@ -188,9 +188,11 @@ const MAX_STEPS = 6;
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "\n…[truncated]" : s);
 
 export function toolsPolicyBlock(names: string[]): string {
-  if (!names.length) return "## TOOLS\nNo tools are enabled for this student right now. Answer from your own knowledge. If asked for a file, search, saving or running code, say plainly that the matching capability is switched off (Settings > Capabilities) - never pretend.";
+  if (!names.length) return "## TOOLS\nNo tools are enabled for this student right now. Answer from your own knowledge. If asked for a file, search, saving, browsing or running code, say plainly that the matching capability is switched off (Settings > Capabilities) - never pretend. Never claim browser tools are off if the student just enabled them — if tools are listed below they are ON.";
+  const hasBrowser = names.some((n) => n.startsWith("browser_"));
   return `## TOOLS (real, executed by the server)
 You can call: ${names.join(", ")}.
+${hasBrowser ? "- Browser tools ARE ENABLED for this student. Use browser_open_session for a public URL, then navigate/click/fill/extract/screenshot as needed. Never say browsing is switched off when these tools are listed.\n" : ""}
 - Simple questions: answer directly, no tools.
 - Files: write the COMPLETE real content first, then call generate_file once per file. Never tell the student to make the file themselves, never paste fake links. The download card appears automatically only after the server confirms the file.
 - Current facts, research, references, "latest", reports needing facts: call web_research (not your memory). Write only from the returned sources, cite them as [1], [2], and finish with a Sources list. If sources are missing, outdated or disagree, say so.
@@ -214,11 +216,23 @@ export async function runToolAgent(input: AgentInput): Promise<AgentResult> {
   });
   if (caps.toolAccess === "on_demand") defs = defs.filter((d) => d.intent.test(lastUser));
   // Fast path: short plain questions do not need the full tool catalog (cuts first-message latency).
-  const SIMPLE_CHAT = lastUser.length < 280 && !/\b(pdf|docx|pptx|xlsx|file|download|generate|create|search|research|image|picture|diagram|code|run|execute|folder|notes?|knowledge base|browse|http|www\.)\b/i.test(lastUser);
+  // Never treat browser/actions requests as "simple chat" — otherwise tools are stripped and the model
+  // incorrectly says browsing is switched off.
+  const BROWSER_INTENT = /\b(browser|browse|website|web\s*page|open\s+https?|navigate|screenshot|live\s*view|click|fill\s+the\s+form|session)\b|https?:\/\/|www\./i;
+  const HEAVY_INTENT = /\b(pdf|docx|pptx|xlsx|file|download|generate|create|search|research|image|picture|diagram|code|run|execute|folder|notes?|knowledge base|browse|http|www\.)\b/i;
+  const SIMPLE_CHAT = lastUser.length < 280 && !HEAVY_INTENT.test(lastUser) && !BROWSER_INTENT.test(lastUser);
   if (SIMPLE_CHAT && caps.toolAccess !== "always") defs = [];
   else if (SIMPLE_CHAT && caps.toolAccess === "always") {
-    // Still skip heavy tools on tiny greetings / one-liners
     defs = defs.filter((d) => d.intent.test(lastUser));
+  }
+  // If the user clearly wants the browser and Actions are on, always keep browser tools available
+  // even when toolAccess is on_demand and other tools were filtered.
+  if (caps.lenoryActions && caps.browserAutomation && BROWSER_INTENT.test(lastUser)) {
+    const allBrowser = DEFS.filter((d) => d.cap === "browserAutomation");
+    const names = new Set(defs.map((d) => d.schema.function.name));
+    for (const d of allBrowser) {
+      if (!names.has(d.schema.function.name)) defs.push(d);
+    }
   }
   const byName = new Map(defs.map((d) => [d.schema.function.name, d]));
   if (byName.size !== defs.length) console.error(`[agent] duplicate tool names removed: ${defs.map((d) => d.schema.function.name).filter((n, i, a) => a.indexOf(n) !== i).join(", ")}`);

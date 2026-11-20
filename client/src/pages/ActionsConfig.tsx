@@ -122,8 +122,8 @@ export default function ActionsConfig() {
                 title="Browser automation"
                 desc={
                   avail && avail.browserAutomation === false
-                    ? "Remote browser worker not detected on this deployment yet. Tasks can still be queued; install Playwright on the Actions worker."
-                    : "Open public sites, read pages, capture screenshots. Private/internal URLs are blocked."
+                    ? "Server has not detected Browserbase/Playwright yet. Set BROWSERBASE_API_KEY on Render, enable this toggle, then ask LENORY to open a public URL."
+                    : "Open public sites, click, fill forms, read pages, screenshots. Private/internal URLs are blocked."
                 }
                 on={caps.browserAutomation && caps.lenoryActions}
                 onToggle={() => {
@@ -135,7 +135,7 @@ export default function ActionsConfig() {
                 }}
               />
               <div className="px-4 py-3 text-sm text-muted-foreground space-y-1">
-                <p>Supported now: open URL, read text, screenshot.</p>
+                <p>Supported: open session, navigate, click, fill, select, extract, screenshot, human handoff.</p>
                 <p>Blocked: localhost, private IPs, cloud metadata, non-http(s) schemes.</p>
                 <p>Your phone does not need to stay on — the browser runs on the server worker.</p>
               </div>
